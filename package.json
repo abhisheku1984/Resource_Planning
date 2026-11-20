@@ -1,0 +1,24 @@
+{
+  "name": "resource-planning",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Enterprise resource planning & workforce data platform with project drill-down, dynamic employee tables and an embedded CRM.",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test --test-concurrency=1 tests/api.test.js tests/ui.smoke.mjs",
+    "seed": "node server/seed.js --reset"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.1"
+  }
+}
