@@ -658,8 +658,83 @@ async function renderGroups(host) {
   }
 
   function editMembers(g) {
-    mount(host, h('div'));
-    renderAdmin(document.getElementById('content'), { tab: 'groups' });
+    const selected = new Set(g.members.map((m) => m.id));
+    const search = h('input', { class: 'input', type: 'search', placeholder: 'Search the employee directory…' });
+    const listHost = h('div', { class: 'col', style: { gap: '1px', maxHeight: '340px', overflow: 'auto' } });
+    let directory = [];
+    let loading = true;
+
+    const countChip = h('span', { class: 'badge badge-brand' }, `${selected.size} selected`);
+
+    function paint() {
+      if (loading) {
+        mount(listHost, h('div', { class: 'row', style: { padding: '12px' } }, spinner(), h('span', { class: 'muted' }, 'Loading directory…')));
+        return;
+      }
+      const term = search.value.trim().toLowerCase();
+      const shown = directory
+        .filter((p) => !term || p.name.toLowerCase().includes(term) || p.emp_code.toLowerCase().includes(term))
+        .slice(0, 80);
+      if (!shown.length) {
+        mount(listHost, h('div', { class: 'subtle', style: { padding: '12px', fontSize: '12px' } },
+          directory.length ? 'No people match that search.' : 'No people are visible in your projects.'));
+        return;
+      }
+      mount(listHost, ...shown.map((p) => {
+        const cb = h('input', { type: 'checkbox', checked: selected.has(p.id), onchange: () => {
+          if (cb.checked) selected.add(p.id); else selected.delete(p.id);
+          countChip.textContent = `${selected.size} selected`;
+        } });
+        return h('label', { class: 'list-item', style: { cursor: 'pointer' } },
+          cb,
+          h('div', { class: 'grow' },
+            h('div', { class: 'li-name' }, p.name),
+            h('div', { class: 'li-meta' }, `${p.emp_code}${p.designation ? ` · ${p.designation}` : ''}`),
+          ),
+        );
+      }));
+    }
+    search.addEventListener('input', paint);
+
+    modal({
+      title: 'Group members',
+      subtitle: `${g.name} · ${g.members.length} current member${g.members.length === 1 ? '' : 's'}`,
+      size: 'modal-lg',
+      body: h('div', { class: 'col', style: { gap: '10px' } },
+        h('div', { class: 'row' }, h('div', { class: 'search-box grow' }, icon('search', 15), search), countChip),
+        h('div', { class: 'card' }, listHost),
+      ),
+      footer: h('div', { class: 'row', style: { gap: '8px', justifyContent: 'flex-end', width: '100%' } },
+        h('button', { class: 'btn', onclick: close }, 'Cancel'),
+        h('button', {
+          class: 'btn btn-primary',
+          onclick: async (e) => {
+            e.target.disabled = true;
+            try {
+              await api(`/groups/${g.id}/members`, { method: 'PUT', body: { members: [...selected] } });
+              close();
+              toast('Group updated', `${selected.size} member${selected.size === 1 ? '' : 's'} saved.`, 'success');
+              renderAdmin(document.getElementById('content'), { tab: 'groups' });
+            } catch (err) {
+              toast('Could not save members', err.message, 'error');
+              e.target.disabled = false;
+            }
+          },
+        }, 'Save members'),
+      ),
+    });
+
+    (async () => {
+      try {
+        const res = await api('/people?q=');
+        directory = res.people || [];
+      } catch (err) {
+        directory = [];
+        toast('Directory unavailable', err.message, 'error');
+      }
+      loading = false;
+      paint();
+    })();
   }
 
   const close = () => document.querySelector('.overlay')?.remove();

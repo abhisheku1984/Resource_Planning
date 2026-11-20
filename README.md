@@ -26,7 +26,7 @@ The first run creates `data/resource_planning.db` and seeds a demo dataset
 
 ```bash
 npm run seed         # rebuild the demo dataset from scratch
-npm test             # 23 integration + UI tests
+npm test             # 24 integration + UI tests
 ```
 
 Environment variables: `PORT`, `HOST`, `DATA_DIR`, `DB_FILE`.
@@ -174,9 +174,11 @@ Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticate
   exports containing fresh data, imports preserving supervisor edits, and
   blocked cross-project access), plus read-only enforcement, admin-only
   endpoints, layout round-trips and concurrent writes.
-* `tests/ui.smoke.mjs` — 6 tests that render the views against a minimal DOM shim
+* `tests/ui.smoke.mjs` — 7 tests that render the views against a minimal DOM shim
   and a stubbed API, catching import errors, render crashes and broken
-  autosave/table wiring without needing a browser.
+  autosave/table wiring without needing a browser. Includes an offline test that
+  drops the connection mid-save and asserts the panel reports `Not saved`,
+  keeps the typed value, and succeeds on explicit retry.
 
 ## Project layout
 

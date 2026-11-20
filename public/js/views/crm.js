@@ -206,10 +206,10 @@ export function createCrm({ onChanged, getScope }) {
   function renderDetail() {
     const rec = current;
     if (!rec) return;
-    const v = rec.values;
-    const columns = rec.columns;
+    const v = rec.values || {};
+    const columns = rec.columns || [];
     const colMap = new Map(columns.map((c) => [c.key, c]));
-    const canEdit = state.user.isAdmin || state.user.capabilities?.['employee.edit'];
+    const canEdit = !!state.user && (state.user.isAdmin || state.user.capabilities?.['employee.edit']);
 
     currentInputs = new Map();
 

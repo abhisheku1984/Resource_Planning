@@ -26,7 +26,7 @@ class El {
     this.style = {};
     this.classList = new ClassList();
     this.listeners = {};
-    this.textContent = '';
+    this._text = '';
     this._className = '';
     this.id = '';
     this.value = '';
@@ -40,6 +40,12 @@ class El {
   get firstElementChild() { return this.children.find((c) => c instanceof El) || null; }
   get firstChild() { return this.children[0] || null; }
   set innerHTML(v) { this._html = v; this.children = []; }
+  get textContent() { return this._text ?? ''; }
+  set textContent(v) {
+    this._text = v;
+    // mirrors the DOM: assigning textContent replaces any child nodes
+    if (this.children && this.children.length) this.children = [];
+  }
   get innerHTML() { return this._html || ''; }
   get rowCount() { return 1; }
   appendChild(c) { c.parentElement = this; this.children.push(c); return c; }
@@ -305,7 +311,7 @@ test('login view renders the demo accounts', async () => {
 });
 
 function flatten(node, out = []) {
-  if (node.textContent) out.push(node.textContent);
+  if (typeof node.textContent === 'string' && node.textContent) out.push(node.textContent);
   for (const c of node.children || []) flatten(c, out);
   return out;
 }
@@ -424,4 +430,49 @@ test('CRM autosaves with explicit Saving -> Saved states', async () => {
   const finalText = flatten(crm.el).join(' ');
   assert.ok(/Saved|Saving/.test(finalText) || states.length > 0, 'a save indicator is shown');
   void input;
+});
+
+test('CRM keeps values and reports "Not saved" when the network fails, then retries safely', async () => {
+  const { createCrm } = await import('../public/js/views/crm.js');
+  core.state.user = { id: 1, name: 'Priya Nair', isAdmin: false, capabilities: { 'employee.edit': true } };
+  const crm = createCrm({ getScope: () => ({ projectId: 1 }), onChanged() {} });
+  documentShim.body.replaceChildren(crm.el);
+  crm.showAssignment(1);
+  await new Promise((r) => setTimeout(r, 80));
+
+  const originalFetch = globalThis.fetch;
+  // simulate a dropped connection on the next PATCH only
+  globalThis.fetch = async (url, opts) => {
+    if ((opts?.method || 'GET') === 'PATCH') throw new TypeError('Failed to fetch');
+    return originalFetch(url, opts);
+  };
+  // the record is fetched before the failure kicks in
+  crm.showAssignment(1);
+  await new Promise((r) => setTimeout(r, 150));
+
+  const nameInput = crm.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'name');
+  if (!nameInput) {
+    // form has not painted yet in the shim; wait and retry once
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const retryInput = crm.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'name');
+  assert.ok(retryInput, 'the CRM exposes the name field for editing');
+  retryInput.value = 'Offline Edit';
+  retryInput.dispatchEvent({ type: 'input', target: retryInput });
+  await new Promise((r) => setTimeout(r, 1400));
+
+  const afterFail = flatten(crm.el).join(' ');
+  assert.ok(afterFail.includes('Not saved'), 'the panel must not claim success while offline');
+  assert.ok(afterFail.includes('Changes are not saved yet'), 'a retry banner is shown');
+  assert.equal(retryInput.value, 'Offline Edit', 'the typed value is preserved for retry');
+
+  // network recovers and the explicit retry succeeds
+  globalThis.fetch = originalFetch;
+  const retry = crm.el.querySelectorAll('button').find((b) => (flatten(b).join(' ') || '').includes('Retry save'));
+  assert.ok(retry, 'retry control exists');
+  retry.click();
+  await new Promise((r) => setTimeout(r, 200));
+  const afterRetry = flatten(crm.el).join(' ');
+  assert.ok(afterRetry.includes('Saved') || !afterRetry.includes('Not saved'), 'a successful retry reports Saved');
+  assert.ok(calls.filter((c) => c.startsWith('PATCH')).length >= 1);
 });

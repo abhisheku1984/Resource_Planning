@@ -61,6 +61,11 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     onclick: () => openColumnChooser(),
   }, icon('columns', 14), 'Columns');
 
+  const filterBtn = h('button', {
+    class: 'btn btn-sm', title: 'Filter rows by column values',
+    onclick: () => openFilterModal(),
+  }, icon('filter', 14), 'Filter');
+
   const exportBtn = h('button', {
     class: 'btn btn-sm', title: 'Export current view to Excel',
     onclick: doExport,
@@ -71,6 +76,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     statusSelect,
     supplierSelect,
     h('div', { class: 'grow' }),
+    filterBtn,
     colsBtn,
     exportBtn,
   );
@@ -501,6 +507,81 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     selectedId = row.assignmentId;
     for (const tr of el.querySelectorAll('tbody tr')) tr.classList.toggle('selected', tr.dataset.id === String(selectedId));
     if (onSelect) onSelect(row);
+  }
+
+  /* ------------------------------------------------------------- filters */
+  async function openFilterModal() {
+    const { modal } = await import('../core.js');
+    const cols = data.columns.filter((c) => c.type !== 'textarea');
+    if (!cols.length) {
+      toast('No filters available', 'Select a category first so column filters can be offered.', 'info');
+      return;
+    }
+    const picked = h('select', { class: 'select' },
+      h('option', { value: '' }, 'Choose a column'),
+      ...cols.map((c) => h('option', { value: c.key }, c.label)));
+    const valueHost = h('div', { class: 'field' });
+    let activeKey = null;
+    let activeField = null;
+
+    const paintValue = () => {
+      activeKey = picked.value || null;
+      activeField = cols.find((c) => c.key === activeKey);
+      if (!activeField) { mount(valueHost); return; }
+      const current = q.filters[`f_${activeKey}`] || '';
+      const { input } = buildFilterInput(activeField, current);
+      mount(valueHost, h('label', { class: 'field-label' }, `Value for ${activeField.label}`), input);
+    };
+    picked.addEventListener('change', paintValue);
+    paintValue();
+
+    function buildFilterInput(col, current) {
+      if (col.type === 'select') {
+        const sel = h('select', { class: 'select' },
+          h('option', { value: '' }, 'Any value'),
+          ...(col.options || []).map((o) => h('option', { value: o, selected: o === current }, o)));
+        return { input: sel };
+      }
+      const type = col.type === 'date' ? 'date' : col.type === 'number' ? 'number' : 'text';
+      return { input: h('input', { class: 'input', type, value: current, placeholder: 'Exact match' }) };
+    }
+
+    modal({
+      title: 'Filter rows',
+      subtitle: 'Filters combine with search, status and supplier.',
+      body: h('div', { class: 'col', style: { gap: '12px' } },
+        h('div', { class: 'field' }, h('label', { class: 'field-label' }, 'Column'), picked),
+        valueHost,
+        Object.keys(q.filters).length
+          ? h('div', null,
+            h('div', { class: 'crm-section-title' }, 'Active filters'),
+            ...Object.entries(q.filters).filter(([, v]) => v).map(([k, v]) =>
+              h('div', { class: 'row', style: { fontSize: '12px', padding: '4px 0' } },
+                h('span', { class: 'badge badge-neutral' }, k.slice(2)),
+                h('span', { class: 'mono' }, v),
+                h('button', {
+                  class: 'btn btn-ghost btn-xs', style: { marginLeft: 'auto' },
+                  onclick: () => { delete q.filters[k]; q.page = 1; load(); document.querySelector('.overlay')?.remove(); },
+                }, icon('x', 11), 'Remove'),
+              )))
+          : null,
+      ),
+      footer: h('div', { class: 'row', style: { gap: '8px', justifyContent: 'flex-end', width: '100%' } },
+        h('button', { class: 'btn', onclick: () => document.querySelector('.overlay')?.remove() }, 'Close'),
+        h('button', {
+          class: 'btn btn-primary',
+          onclick: () => {
+            if (!activeKey) return;
+            const input = valueHost.querySelector('input, select');
+            const v = input ? input.value : '';
+            if (v) q.filters[`f_${activeKey}`] = v; else delete q.filters[`f_${activeKey}`];
+            q.page = 1;
+            document.querySelector('.overlay')?.remove();
+            load();
+          },
+        }, 'Apply filter'),
+      ),
+    });
   }
 
   /* ------------------------------------------------------------- export */
