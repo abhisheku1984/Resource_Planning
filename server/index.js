@@ -8,7 +8,10 @@ const { router } = require('./routes');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
-const HOST = process.env.HOST || '0.0.0.0';
+// Bind to loopback by default: only this machine can reach the app.
+// Set HOST=0.0.0.0 (or start-windows.bat --lan) when you deliberately want
+// other people on your network to connect.
+const HOST = process.env.HOST || '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
 app.disable('x-powered-by');
@@ -16,7 +19,24 @@ app.use(express.json({ limit: '40mb' }));
 
 // Preview-host friendly: no origin or host allowlist, and allow iframe embedding.
 app.use((req, res, next) => {
+  // --- security headers ---
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  // Everything this app loads is same-origin; no third-party scripts, no fonts
+  // or analytics from anywhere else.
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+  ].join('; '));
   res.removeHeader('X-Frame-Options');
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -64,7 +84,10 @@ function ensureSeeded() {
 if (require.main === module) {
   ensureSeeded();
   app.listen(PORT, HOST, () => {
-    console.log(`Resource Planning platform listening on http://${HOST}:${PORT}`);
+    const where = HOST === '127.0.0.1' || HOST === 'localhost'
+      ? `http://localhost:${PORT}  (this computer only)`
+      : `http://${HOST}:${PORT}  (reachable from your network)`;
+    console.log(`Resource Planning platform listening on ${where}`);
   });
 }
 

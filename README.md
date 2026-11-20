@@ -11,6 +11,8 @@ Excel exports generated from a central database.
   as a live store.
 * **Design** — see [DESIGN.md](DESIGN.md) for navigation, wireframes and the
   design system.
+* **Data safety** — see [SECURITY.md](SECURITY.md): what the app touches, what it
+  sends (nothing), and the limitations to know before loading real HR data.
 
 ---
 
@@ -36,6 +38,11 @@ npm test             # 24 integration + UI tests
 ```
 
 Environment variables: `PORT`, `HOST`, `DATA_DIR`, `DB_FILE`.
+
+> **Privacy default:** the server binds to `127.0.0.1`, so only this computer can
+> reach it. Set `HOST=0.0.0.0` (or run `start-windows.bat --lan`) to share it on a
+> trusted network. The app makes **no outbound requests** at runtime — no CDNs, no
+> web fonts, no telemetry. See [SECURITY.md](SECURITY.md).
 
 ### Windows
 

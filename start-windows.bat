@@ -67,6 +67,16 @@ if not exist "node_modules\express" (
 )
 
 REM ---- 3. start the server and open the browser ---------------------------
+REM  By default the server only listens on this computer (127.0.0.1).
+REM  Run  start-windows.bat --lan  to let other people on your network connect.
+set BIND=127.0.0.1
+if /i "%~1"=="--lan" set BIND=0.0.0.0
+if "%BIND%"=="127.0.0.1" (
+  echo  Privacy: the server will accept connections from THIS computer only.
+) else (
+  echo  WARNING: listening on all network interfaces - other machines on your
+  echo           network can reach this app. Use only on a trusted network.
+)
 echo.
 echo  Starting the server on http://localhost:4000
 echo  Sign in with  priya.nair@resourceplanning.io  /  Super@12345
@@ -76,6 +86,7 @@ echo.
 
 start "" /b cmd /c "timeout /t 4 >nul & start http://localhost:4000"
 
+set HOST=%BIND%
 call npm start
 echo.
 echo  Server stopped.

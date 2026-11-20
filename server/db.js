@@ -123,6 +123,8 @@ CREATE TABLE IF NOT EXISTS category_fields (
   visible     INTEGER NOT NULL DEFAULT 1,
   editable    INTEGER NOT NULL DEFAULT 1,
   required    INTEGER NOT NULL DEFAULT 0,
+  filterable  INTEGER NOT NULL DEFAULT 0,   -- shown as a filter chip on the bench board
+  submit_field INTEGER NOT NULL DEFAULT 0,  -- captured by the supervisor submit form
   sort_order  INTEGER NOT NULL DEFAULT 0,
   section     TEXT,
   PRIMARY KEY (category_id, field_id)
@@ -237,6 +239,22 @@ CREATE TABLE IF NOT EXISTS duplicate_reviews (
   resolved_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS import_jobs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  filename    TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'pending',   -- pending | running | done | failed
+  total_rows  INTEGER NOT NULL DEFAULT 0,
+  processed   INTEGER NOT NULL DEFAULT 0,
+  created     INTEGER NOT NULL DEFAULT 0,
+  updated     INTEGER NOT NULL DEFAULT 0,
+  skipped     INTEGER NOT NULL DEFAULT 0,
+  new_fields  TEXT,
+  errors      TEXT,
+  started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT,
+  user_id     INTEGER REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS imports (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   filename    TEXT NOT NULL,
@@ -252,6 +270,23 @@ CREATE TABLE IF NOT EXISTS imports (
 
 db.exec(SCHEMA);
 
+/** Additive migrations so an existing database keeps working. */
+function migrate() {
+  const cols = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  const add = (table, name, ddl) => {
+    if (!cols(table).includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  };
+  add('category_fields', 'filterable', 'filterable INTEGER NOT NULL DEFAULT 0');
+  add('category_fields', 'submit_field', 'submit_field INTEGER NOT NULL DEFAULT 0');
+  add('fields', 'group_name', 'group_name TEXT');
+  add('fields', 'imported', 'imported INTEGER NOT NULL DEFAULT 0');
+  add('employees', 'name_source', "name_source TEXT DEFAULT 'manual'");
+  // value lookups by field are the hot path for filters
+  db.exec('CREATE INDEX IF NOT EXISTS idx_av_field_value ON assignment_values(field_id, value)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_assign_proj ON assignments(project_id, category_id, active)');
+}
+migrate();
+
 /** Run fn inside a real SQL transaction; rolls back on any error. */
 function tx(fn) {
   db.exec('BEGIN IMMEDIATE');
@@ -265,10 +300,18 @@ function tx(fn) {
   }
 }
 
+const stmtCache = new Map();
+function prepare(sql) {
+  let st = stmtCache.get(sql);
+  if (!st) { st = db.prepare(sql); stmtCache.set(sql, st); }
+  return st;
+}
+
 const q = {
-  all: (sql, ...params) => db.prepare(sql).all(...params),
-  get: (sql, ...params) => db.prepare(sql).get(...params),
-  run: (sql, ...params) => db.prepare(sql).run(...params),
+  all: (sql, ...params) => prepare(sql).all(...params),
+  get: (sql, ...params) => prepare(sql).get(...params),
+  run: (sql, ...params) => prepare(sql).run(...params),
+  prepare,
 };
 
 module.exports = { db, q, tx, DB_FILE, DATA_DIR, SCHEMA };

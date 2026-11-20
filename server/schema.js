@@ -1,6 +1,7 @@
 'use strict';
 const { q, tx } = require('./db');
 const { record } = require('./audit');
+const fielddefs = require('./fielddefs');
 
 /**
  * Field catalogue + dynamic column engine.
@@ -9,43 +10,52 @@ const { record } = require('./audit');
  * employees table and mapped through; everything else lives in
  * assignment_values so administrators can invent new columns at runtime.
  */
-const CORE_FIELDS = [
-  { key: 'emp_code', label: 'Employee ID', type: 'text', core: 1, system: 1, help: 'Unique business key. Used to detect duplicates.' },
-  { key: 'name', label: 'Employee Name', type: 'text', core: 1, system: 1 },
-  { key: 'designation', label: 'Designation', type: 'text', core: 1 },
-  { key: 'email', label: 'Email Address', type: 'email', core: 1 },
-  { key: 'phone', label: 'Contact Number', type: 'tel', core: 1 },
-];
+const CORE_FIELDS = fielddefs.CORE;
+const DEFAULT_FIELDS = [...fielddefs.IMPORTED, ...fielddefs.LEGACY];
 
-const DEFAULT_FIELDS = [
-  { key: 'status', label: 'Current Status', type: 'select', options: ['Active', 'On Leave', 'Training', 'Billing Hold', 'Released', 'Completed'] },
-  { key: 'supplier', label: 'Supplier', type: 'select', options: 'SUPPLIERS' },
-  { key: 'training_status', label: 'Training Status', type: 'select', options: ['Not Started', 'In Progress', 'Completed', 'Failed', 'Waived'] },
-  { key: 'joining_date', label: 'Joining Date', type: 'date' },
-  { key: 'completion_status', label: 'Completion Status', type: 'select', options: ['Pending', 'Partial', 'Completed', 'Dropped'] },
-  { key: 'billing_status', label: 'Billing Status', type: 'select', options: ['Billable', 'Non-Billable', 'Shadow', 'T&M', 'Fixed Price'] },
-  { key: 'allocation_status', label: 'Allocation Status', type: 'select', options: ['Allocated', 'Partially Allocated', 'Bench', 'Rolling Off'] },
-  { key: 'effective_date', label: 'Effective Date', type: 'date' },
-  { key: 'skill_track', label: 'Skill Track', type: 'select', options: ['Java', 'Data Engineering', 'Cloud', 'QA', 'Business Analysis', 'DevOps'] },
-  { key: 'remarks', label: 'Remarks', type: 'textarea' },
-];
-
+/**
+ * Idempotent: inserts any catalogue field that is missing and refreshes the
+ * presentation metadata (group, filterable) without touching stored values.
+ */
 function seedFields() {
-  const existing = q.all('SELECT key FROM fields').map((r) => r.key);
-  let order = 0;
+  const existing = new Set(q.all('SELECT key FROM fields').map((r) => r.key));
   for (const f of [...CORE_FIELDS, ...DEFAULT_FIELDS]) {
-    order += 10;
-    if (existing.includes(f.key)) continue;
+    if (existing.has(f.key)) {
+      q.run('UPDATE fields SET group_name = ? WHERE key = ? AND (group_name IS NULL OR group_name <> ?)',
+        f.group || null, f.key, f.group || null);
+      continue;
+    }
     q.run(
-      `INSERT INTO fields (key, label, type, options, help, core, system) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO fields (key, label, type, options, help, core, system, group_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       f.key,
       f.label,
       f.type,
       f.options ? JSON.stringify(f.options) : null,
       f.help || null,
-      f.core || 0,
-      f.system || 0
+      f.core ? 1 : 0,
+      f.system ? 1 : 0,
+      f.group || null
     );
+  }
+  // keep the facet/submit flags on the catalogue definition
+  for (const f of [...CORE_FIELDS, ...DEFAULT_FIELDS]) {
+    if (!f.filterable && !f.submit) continue;
+    const row = q.get('SELECT id FROM fields WHERE key = ?', f.key);
+    if (!row) continue;
+    for (const cat of q.all('SELECT id FROM categories')) {
+      const exists = q.get('SELECT 1 x FROM category_fields WHERE category_id = ? AND field_id = ?', cat.id, row.id);
+      if (!exists) {
+        q.run(
+          `INSERT INTO category_fields (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order)
+           VALUES (?, ?, 1, 1, 0, ?, ?, ?)`,
+          cat.id, row.id, f.filterable ? 1 : 0, f.submit ? 1 : 0, 900 + row.id
+        );
+      } else {
+        q.run('UPDATE category_fields SET filterable = ?, submit_field = ? WHERE category_id = ? AND field_id = ?',
+          f.filterable ? 1 : 0, f.submit ? 1 : 0, cat.id, row.id);
+      }
+    }
   }
 }
 
@@ -72,13 +82,26 @@ function fieldDef(row) {
     type: row.type,
     options: parseOptions(row),
     help: row.help,
+    group: row.group_name || null,
     core: !!row.core,
     system: !!row.system,
+    imported: !!row.imported,
   };
 }
 
 function listFields() {
   return q.all('SELECT * FROM fields ORDER BY id').map(fieldDef);
+}
+
+/** Field catalogue grouped for the "show columns" picker. */
+function groupedFields() {
+  const groups = new Map();
+  for (const f of listFields()) {
+    const g = f.group || 'Other';
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(f);
+  }
+  return [...groups.entries()].map(([name, fields]) => ({ name, fields }));
 }
 
 /**
@@ -102,6 +125,8 @@ function columnsForCategory(categoryId) {
       visible: true,
       editable: c ? !!c.editable : true,
       required: c ? !!c.required : false,
+      filterable: c ? !!c.filterable : false,
+      submitField: c ? !!c.submit_field : false,
       sort: c ? c.sort_order : f.id,
       section: c ? c.section : null,
     });
@@ -115,13 +140,16 @@ function setCategoryFields(categoryId, rows, actor) {
     let order = 10;
     for (const r of rows) {
       q.run(
-        `INSERT INTO category_fields (category_id, field_id, visible, editable, required, sort_order, section)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO category_fields
+           (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order, section)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         categoryId,
         r.field_id,
         r.visible === false ? 0 : 1,
         r.editable === false ? 0 : 1,
         r.required ? 1 : 0,
+        r.filterable ? 1 : 0,
+        r.submit_field ? 1 : 0,
         r.sort_order ?? order,
         r.section || null
       );
@@ -197,6 +225,7 @@ module.exports = {
   DEFAULT_FIELDS,
   seedFields,
   listFields,
+  groupedFields,
   fieldDef,
   parseOptions,
   supplierOptions,
