@@ -623,11 +623,15 @@ router.get('/users', requireAuth, requireAdmin, wrap((req, res) => {
   const users = q.all('SELECT id, email, name, role, title, active, created_at FROM users ORDER BY role, name')
     .map((u) => ({
       ...u,
-      projects: q.all(
-        `SELECT up.project_id, p.name, up.can_edit, up.can_export, up.can_crm
-           FROM user_projects up JOIN projects p ON p.id = up.project_id WHERE up.user_id = ?`,
-        u.id
-      ),
+      // Admins implicitly hold every grant; expose the full list so the UI can
+      // render them consistently with supervisors.
+      projects: u.role === 'admin'
+        ? q.all('SELECT id AS project_id, name, 1 AS can_edit, 1 AS can_export, 1 AS can_crm FROM projects ORDER BY name')
+        : q.all(
+            `SELECT up.project_id, p.name, up.can_edit, up.can_export, up.can_crm
+               FROM user_projects up JOIN projects p ON p.id = up.project_id WHERE up.user_id = ?`,
+            u.id
+          ),
       capabilities: Object.fromEntries(
         q.all('SELECT capability, allowed FROM user_capabilities WHERE user_id = ?', u.id).map((c) => [c.capability, !!c.allowed])
       ),

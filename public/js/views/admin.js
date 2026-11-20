@@ -780,7 +780,7 @@ async function renderAccess(host) {
       )),
       h('td', null, h('span', { class: `badge ${u.role === 'admin' ? 'badge-brand' : 'badge-neutral'}` }, u.role === 'admin' ? 'Administrator' : 'Supervisor')),
       h('td', null, u.role === 'admin'
-        ? h('span', { class: 'badge badge-info' }, 'All projects')
+        ? h('span', { class: 'badge badge-info' }, `All ${u.projects.length} projects`)
         : h('div', { class: 'row', style: { gap: '3px', flexWrap: 'wrap', maxWidth: '230px' } },
           ...(u.projects.length ? u.projects.map((p) => h('span', {
             class: `badge ${p.can_edit ? 'badge-success' : 'badge-warn'}`, style: { height: '19px', fontSize: '10.5px' },
