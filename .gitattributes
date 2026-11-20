@@ -1,0 +1,10 @@
+# Normalise line endings on checkout so Windows users get working scripts
+* text=auto eol=lf
+
+# Windows launchers must keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary artefacts
+*.xlsx binary
+*.db binary

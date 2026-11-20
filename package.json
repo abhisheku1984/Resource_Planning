@@ -6,10 +6,10 @@
   "type": "commonjs",
   "main": "server/index.js",
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js",
-    "test": "node --test --test-concurrency=1 tests/api.test.js tests/ui.smoke.mjs",
-    "seed": "node server/seed.js --reset"
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 tests/api.test.js tests/ui.smoke.mjs",
+    "seed": "node --disable-warning=ExperimentalWarning server/seed.js --reset"
   },
   "engines": {
     "node": ">=22.5"

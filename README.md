@@ -16,6 +16,12 @@ Excel exports generated from a central database.
 
 ## Quick start
 
+> **This is a Node.js application, not a Python one.** There is no `pip`, no
+> virtualenv and no `requirements.txt`. The only prerequisite is Node.js 22.5 or
+> newer — `node:sqlite` is built into Node, so there is nothing to compile and no
+> native modules to install. `package.json` is used only to fetch two pure-JS
+> packages (Express and ExcelJS).
+
 ```bash
 npm install
 npm start            # http://localhost:4000  (binds 0.0.0.0)
@@ -30,6 +36,51 @@ npm test             # 24 integration + UI tests
 ```
 
 Environment variables: `PORT`, `HOST`, `DATA_DIR`, `DB_FILE`.
+
+### Windows
+
+1. Install **Node.js 22 LTS or newer** from <https://nodejs.org> — pick the
+   Windows Installer (`.msi`) and accept the defaults. Verify in a *new*
+   PowerShell or Command Prompt window:
+
+   ```powershell
+   node -v      # must print v22.5.0 or higher
+   npm -v
+   ```
+
+2. Clone and enter the repository (any parent folder works):
+
+   ```powershell
+   git clone https://github.com/abhisheku1984/Resource_Planning.git
+   cd Resource_Planning
+   git checkout arena/bd816d6f-resource-planning
+   ```
+
+3. **Double-click `start-windows.bat`.** It checks your Node version, runs
+   `npm install` on first launch, starts the server and opens
+   <http://localhost:4000> automatically. Keep the console window open while you
+   work; press `Ctrl+C` there to stop.
+
+   Or do it manually:
+
+   ```powershell
+   npm install
+   npm start
+   ```
+
+4. Double-click `run-tests.bat` to run the test suite.
+
+Notes for Windows:
+
+* If PowerShell blocks `npm` with a script-execution error, use Command Prompt
+  instead, or run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
+* `data\resource_planning.db` is created on first start — delete that file (or
+  run `npm run seed`) to reset the demo data.
+* The launcher is a `.bat` file, so no WSL is required. WSL2 works too if you
+  prefer a Linux shell.
+* Windows Firewall may ask for permission the first time; allow it on private
+  networks. For access from another machine on your LAN, open port 4000 (the
+  server already binds `0.0.0.0`).
 
 ### Demo accounts
 
@@ -199,4 +250,6 @@ public/
   js/app.js        shell, navigation, routing
   js/views/*.js    dashboard, workspace, table, crm, datahub, admin, audit, …
 tests/             integration + UI smoke tests
+start-windows.bat  Windows one-click launcher (checks Node, installs, opens browser)
+run-tests.bat      Windows one-click test runner
 ```
