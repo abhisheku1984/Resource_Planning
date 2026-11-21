@@ -953,67 +953,74 @@ function replaceForTest(t, object, key, value) {
   t.after(() => previous ? Object.defineProperty(object, key, previous) : delete object[key]);
 }
 
-test('hands-free Ask: speech → scoped question → open CRM → dictate → review → confirm, without an automatic write', async (t) => {
+for (const language of ['en', 'hi']) test(`hands-free Ask (${language}): speech → scoped question → open CRM → dictate → review → confirm, without an automatic write`, async (t) => {
   const { createAssistant } = await import('../public/js/views/assistant.js');
   let mic, listening = false, packInstalled = false;
-  const heard = [], asks = [], saves = [];
+  const l = (en, hi) => language === 'hi' ? hi : en;
+  const locale = l('en-IN', 'hi-IN'), heard = [], asks = [], saves = [];
+  t.after(() => localStorage.removeItem('rp.askLanguage'));
   const define = (key, value) => replaceForTest(t, window, key, value);
   class Recognition {
     processLocally = false;
-    static available = async (o) => { assert.ok(o.processLocally && o.langs.length === 1); return o.langs[0] !== 'en-IN' ? 'unavailable' : packInstalled ? 'available' : 'downloadable'; };
-    static install = async (o) => { assert.deepEqual(o, { langs: ['en-IN'], processLocally: true }); return (packInstalled = true); };
-    start() { assert.equal(this.lang, 'en-IN'); assert.equal(this.processLocally, true); assert.equal(listening, false); mic = this; listening = true; }
+    static available = async (o) => { assert.ok(o.processLocally && o.langs.length === 1); assert.equal(o.langs[0].split('-')[0], language); return o.langs[0] !== locale ? 'unavailable' : packInstalled ? 'available' : 'downloadable'; };
+    static install = async (o) => { assert.deepEqual(o, { langs: [locale], processLocally: true }); return (packInstalled = true); };
+    start() { assert.equal(this.lang, locale); assert.equal(this.processLocally, true); assert.equal(listening, false); mic = this; listening = true; }
     stop() { listening = false; this.onend(); }
     abort() { listening = false; this.onend?.(); }
   }
   define('SpeechRecognition', Recognition); define('isSecureContext', true);
   define('SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
-  define('speechSynthesis', { getVoices: () => [{ lang: 'en-US', localService: false }, { lang: 'en-US', localService: true }],
-    speak(u) { assert.ok(!listening && u.voice.localService); heard.push(u.text); u.onend(); }, cancel() {} });
+  define('speechSynthesis', { getVoices: () => [{ lang: locale, localService: false }, { lang: l('hi-IN', 'en-IN'), localService: true }, { lang: locale, localService: true }],
+    speak(u) { assert.ok(!listening && u.voice.localService); assert.equal(u.lang, locale); heard.push(u.text); u.onend(); }, cancel() {} });
   core.state.user = { id: 7, isAdmin: false };
   const name = 'Summer Project', form = { projectName: name, assignmentId: 73, name: 'Alex Rao', empCode: 'QA-123', rev: 4,
     fields: [{ key: 'detail_comments', label: 'Detail Comments', editable: true, type: 'textarea', value: 'Original' },
       { key: 'billing_start_date', label: 'Billing Start Date', editable: true, type: 'date', value: '' },
       { key: 'demand_number', label: 'Demand Number', editable: false, type: 'text', value: '' }] };
+  const question = l('How many on bench?', 'बेंच पर कितने लोग हैं?'), openCrm = l('Open CRM', 'सीआरएम खोलें');
+  const review = l('Review changes', 'बदलाव की समीक्षा करें'), confirm = l('Confirm save', 'सहेजने की पुष्टि करें');
+  const note = l('Ready for interview', 'साक्षात्कार के लिए तैयार');
   t.mock.method(globalThis, 'fetch', async (url, opts) => {
     if (url === '/api/agent/projects') return jsonResponse({ projectNames: [name, 'Autumn Project'] });
     const body = JSON.parse(opts.body);
     if (url === '/api/agent/ask') {
-      asks.push(body);
+      asks.push(body); assert.equal(body.language, language);
       if (!body.projectName && !body.message.includes(name)) return jsonResponse({ kind: 'choose_project', reply: 'Which project?' });
       if (body.message === name) return jsonResponse({ kind: 'project', projectName: name, reply: 'Selected' });
-      if (body.message === 'Open CRM') return jsonResponse({ kind: 'crm_lookup', projectName: name, reply: 'Whose CRM record?' });
-      if (body.message === 'Open CRM for QA 123') return jsonResponse({ kind: 'crm', projectName: name, reply: 'CRM open for Alex', crm: form });
-      return jsonResponse({ kind: 'count', reply: '3 people on bench in Summer Project.', projectName: name });
+      if (body.message === openCrm) return jsonResponse({ kind: 'crm_lookup', projectName: name, reply: 'Whose CRM record?' });
+      if (body.message === l('Open CRM for QA 123', 'QA १२३ का सीआरएम खोलें')) return jsonResponse({ kind: 'crm', projectName: name, reply: l('CRM open for Alex', 'Alex Rao का CRM खुला है।'), crm: form });
+      return jsonResponse({ kind: 'count', reply: l('3 people on bench in Summer Project.', 'Summer Project में बेंच पर 3 कर्मचारी हैं।'), projectName: name });
     }
     assert.equal(url, '/api/employees/73/submit'); saves.push(body);
     return jsonResponse({ record: { rev: 5, values: body.changes } });
   });
   const assistant = createAssistant(); documentShim.body.replaceChildren(assistant.el); assistant.open(); await settleClicks();
-  button(assistant.el, 'Start voice mode').click(); await settleClicks();
+  button(assistant.el, l('English', 'हिन्दी')).click();
+  button(assistant.el, l('Start voice mode', 'बोलना शुरू करें')).click(); await settleClicks();
   assert.ok(!packInstalled && !listening, 'install requires a separate explicit gesture');
-  button(assistant.el, 'Install English speech pack').click(); await settleClicks();
+  button(assistant.el, l('Install English speech pack', 'हिन्दी स्पीच पैक इंस्टॉल करें')).click(); await settleClicks();
   const say = async (text) => {
     assert.ok(listening, 'next turn must not require clicking the mic');
     const result = [{ transcript: text }]; result.isFinal = true;
     mic.onresult({ results: [result] }); await settleClicks();
   };
-  await say('How many on bench?'); await say(name);
-  assert.match(heard.at(-1), /3 people on bench/);
-  assert.deepEqual(asks.at(-1), { message: 'How many on bench?', projectName: name });
-  await say('Open CRM'); await say('QA 123'); assert.match(heard.at(-1), /CRM open for Alex/);
-  await say('Set Demand Number to forbidden'); assert.match(heard.at(-1), /read-only/);
-  await say('Set Detail Comments to Ready for interview');
-  assert.equal(assistant.el.querySelector('.assistant-crm').querySelector('textarea').value, 'Ready for interview');
-  await say('Confirm save'); assert.equal(saves.length, 0);
-  await say('Review changes'); assert.match(heard.at(-1), /Alex Rao.*QA-123.*Summer Project.*Detail Comments: Ready for interview/);
-  await say('Set Billing Start Date to May 12 2027'); await say('Confirm save'); assert.equal(saves.length, 0, 'changing a value invalidates the review');
-  await say('Review changes'); await say('Confirm save');
-  assert.deepEqual(saves, [{ crmProjectName: name, changes: { detail_comments: 'Ready for interview', billing_start_date: '2027-05-12' }, rev: 4, reason: 'Confirmed CRM form in assistant' }]);
-  await say('Set Detail Comments to Do not keep'); await say('Discard changes'); await say('Close CRM');
+  await say(question); await say(name);
+  assert.match(heard.at(-1), l(/3 people on bench/, /बेंच पर 3 कर्मचारी/));
+  assert.deepEqual(asks.at(-1), { message: question, projectName: name, language });
+  await say(openCrm); await say(l('QA 123', 'QA १२३')); assert.match(heard.at(-1), l(/CRM open for Alex/, /Alex Rao का CRM खुला/));
+  await say(l('Set Demand Number to forbidden', 'मांग संख्या में ३ लिखें')); assert.match(heard.at(-1), l(/read-only/, /केवल पढ़ने/));
+  await say(l(`Set Detail Comments to ${note}`, `टिप्पणी में ${note} लिखें।`));
+  assert.equal(assistant.el.querySelector('.assistant-crm').querySelector('textarea').value, note);
+  await say(confirm); assert.equal(saves.length, 0);
+  await say(review); assert.match(heard.at(-1), l(/Alex Rao.*QA-123.*Summer Project.*Detail Comments: Ready for interview/, /Alex Rao.*QA-123.*Summer Project.*टिप्पणी: साक्षात्कार के लिए तैयार/));
+  await say(l('Set Billing Start Date to May 12 2027', 'बिलिंग शुरू होने की तारीख में १२ मई २०२७ लिखें')); await say(confirm); assert.equal(saves.length, 0, 'changing a value invalidates the review');
+  await say(review); await say(confirm);
+  assert.deepEqual(saves, [{ crmProjectName: name, changes: { detail_comments: note, billing_start_date: '2027-05-12' }, rev: 4, reason: 'Confirmed CRM form in assistant' }]);
+  await say(l('Set Detail Comments to Do not keep', 'टिप्पणी में यह नोट हटा दें लिखें')); await say(l('Discard changes', 'बदलाव रद्द करें')); await say(l('Close CRM', 'सीआरएम बंद करें'));
   assert.ok(!assistant.el.querySelector('.assistant-crm').children.length); assert.equal(saves.length, 1);
-  const late = mic; assistant.toggle(false); assert.ok(!listening);
-  const result = [{ transcript: 'Confirm save' }]; result.isFinal = true;
+  const late = mic;
+  if (language === 'hi') await say('सुनना बंद करें।'); else assistant.toggle(false); assert.ok(!listening);
+  const result = [{ transcript: confirm }]; result.isFinal = true;
   late.onresult({ results: [result] }); await settleClicks(); assert.equal(saves.length, 1);
 });
 
@@ -1091,9 +1098,92 @@ test('unavailable English pack: show Windows dictation steps, accept explicitly 
   button(help, 'Focus message box').click(); const input = document.activeElement; assert.equal(input, a.el.querySelector('.assistant-input'));
   input.value = 'How many people?'; input.dispatchEvent({ type: 'input' }); assert.equal(messages.length, 0);
   input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
-  assert.deepEqual(messages, [{ message: 'How many people?', projectName: 'Summer Project' }]);
+  assert.deepEqual(messages, [{ message: 'How many people?', projectName: 'Summer Project', language: 'en' }]);
   const read = button(help, 'Read last reply'); assert.equal(read.disabled, false);
   read.click(); assert.deepEqual(spoken, []); assert.match(flatten(a.el).join(' '), /No local English read-aloud/);
   local = true; read.click(); assert.deepEqual(spoken, ['3 people in Summer Project.']);
   a.toggle(false); assert.ok(cancelled); assert.deepEqual(starts, []);
+});
+
+test('Hindi without a local pack: typed Ask still works, read-aloud rejects English and remote Hindi voices', async (t) => {
+  const { createAssistant } = await import('../public/js/views/assistant.js');
+  const probes = [], messages = [], spoken = [], voices = [{ lang: 'en-IN', localService: true }, { lang: 'hi-IN', localService: false }];
+  const { starts } = setupPacks(t, (lang) => { probes.push(lang); return lang.startsWith('en') ? 'available' : 'unavailable'; });
+  let cancelled = 0;
+  replaceForTest(t, window, 'SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
+  replaceForTest(t, window, 'speechSynthesis', { getVoices: () => voices, speak: (u) => spoken.push(u), cancel: () => cancelled++ });
+  core.state.user = { isAdmin: false };
+  t.after(() => localStorage.removeItem('rp.askLanguage'));
+  const project = 'Giga One', reply = 'Giga One में बेंच पर 3 कर्मचारी हैं।';
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url === '/api/agent/projects') return jsonResponse({ projectNames: [project] });
+    assert.equal(url, '/api/agent/ask'); messages.push(JSON.parse(opts.body));
+    return jsonResponse({ kind: 'count', projectName: project, reply });
+  });
+  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
+  const question = 'बेंच पर कितने लोग हैं?';
+  a.el.querySelector('.assistant-input').value = question;
+  button(a.el, 'हिन्दी').click(); await settleClicks();
+  assert.equal(button(a.el, 'हिन्दी').getAttribute('aria-pressed'), 'true');
+  assert.equal(localStorage.getItem('rp.askLanguage'), 'hi');
+  assert.deepEqual(probes, [], 'choosing Hindi alone must not start or install speech');
+  button(a.el, 'बोलना शुरू करें').click(); await settleClicks();
+  assert.deepEqual(probes, ['hi-IN', 'hi']); assert.match(flatten(a.el).join(' '), /हिन्दी स्पीच पैक उपलब्ध नहीं/);
+  assert.ok(a.el.querySelector('.voice-help').open); button(a.el, 'संदेश बॉक्स चुनें').click();
+  const input = document.activeElement; assert.equal(input.value, question, 'do not drop unsent text on switch');
+  input.dispatchEvent({ type: 'keydown', key: 'Enter', isComposing: true }); assert.equal(messages.length, 0);
+  input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
+  assert.deepEqual(messages, [{ message: question, projectName: project, language: 'hi' }]);
+  const read = button(a.el, 'पिछला जवाब सुनें'); read.click(); assert.deepEqual(spoken, []);
+  assert.match(flatten(a.el).join(' '), /हिन्दी की स्थानीय आवाज़ उपलब्ध नहीं/);
+  voices.push({ lang: 'hi-IN', localService: true }); read.click();
+  assert.equal(spoken.length, 1); assert.equal(spoken[0].text, reply); assert.equal(spoken[0].voice, voices.at(-1));
+  button(a.el, 'English').click(); spoken[0].onend();
+  assert.equal(cancelled, 1); assert.deepEqual(starts, []); assert.ok(button(a.el, 'Read last reply').disabled);
+  a.toggle(false);
+});
+
+test('switching voice language supersedes a pending pack check/install and never reuses the old install gesture', async (t) => {
+  const { createLocalVoice } = await import('../public/js/voice.js');
+  let release, finishInstall, ready = false;
+  const installed = [];
+  const { starts, states, options } = setupPacks(t, (tag) => tag === 'en-US' ? new Promise((r) => { release = r; })
+    : tag === 'hi' && ready ? 'available' : 'downloadable', (request) => { installed.push(request); return new Promise((r) => { finishInstall = r; }); });
+  const voice = createLocalVoice(options);
+  const oldCheck = voice.toggle(); voice.setLanguage('hi'); release('available'); await oldCheck;
+  assert.deepEqual(starts, []); assert.match(states.at(-1).text, /हिन्दी/);
+  await voice.toggle(); assert.equal(states.at(-1).action, 'install');
+  voice.setLanguage('en'); voice.setLanguage('hi'); await voice.toggle(); assert.equal(installed.length, 0);
+  const oldInstall = voice.toggle(); voice.setLanguage('en'); finishInstall(true); await oldInstall;
+  assert.deepEqual(installed, [{ langs: ['hi-IN'], processLocally: true }]); assert.deepEqual(starts, []);
+  assert.match(states.at(-1).text, /English selected/);
+  ready = true; voice.setLanguage('hi'); await voice.toggle(); assert.deepEqual(starts, ['hi']); voice.setLanguage('en'); assert.equal(voice.isActive(), false);
+});
+
+test('switching Ask language keeps the scoped CRM draft, but neither an old review nor a late reply can authorize a write', async (t) => {
+  const { createAssistant } = await import('../public/js/views/assistant.js');
+  core.state.user = { isAdmin: false };
+  t.after(() => localStorage.removeItem('rp.askLanguage'));
+  let complete, delay = true; const saves = [];
+  const project = 'Project with a name', form = { name: 'राधा सिंह', empCode: 'E-1', projectName: project, assignmentId: 19, rev: 8,
+    fields: [{ key: 'detail_comments', label: 'Detail Comments', type: 'textarea', editable: true, value: 'पहले' }] };
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url === '/api/agent/projects') return jsonResponse({ projectNames: [project] });
+    if (url === '/api/agent/ask') {
+      if (delay) return new Promise((r) => { complete = () => r(jsonResponse({ projectName: project, crm: form, reply: 'OLD REPLY' })); });
+      return jsonResponse({ projectName: project, crm: form, reply: 'रिकॉर्ड खुला है।' });
+    }
+    assert.equal(url, '/api/employees/19/submit'); saves.push(JSON.parse(opts.body)); return jsonResponse({ record: { rev: 9, values: saves.at(-1).changes } });
+  });
+  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
+  const type = async (text) => { const input = a.el.querySelector('.assistant-input'); input.value = text; input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks(); };
+  await type('Open CRM for E-1'); button(a.el, 'हिन्दी').click(); complete(); await settleClicks();
+  assert.doesNotMatch(flatten(a.el).join(' '), /OLD REPLY/); assert.equal(a.el.querySelector('.assistant-crm').children.length, 0);
+  delay = false; await type('E-1 का सीआरएम खोलें'); await type('फ़ील्ड बताएं');
+  assert.match(flatten(a.el.querySelector('.assistant-log')).at(-1), /CRM फ़ील्ड: टिप्पणी/);
+  await type('टिप्पणी में सहेजने की पुष्टि करें लिखें'); await type('टिप्पणी पढ़ें'); assert.equal(saves.length, 0);
+  await type('बदलाव की समीक्षा करें'); button(a.el, 'English').click();
+  assert.equal(a.el.querySelector('.assistant-crm').querySelector('textarea').value, 'सहेजने की पुष्टि करें');
+  await type('Confirm save'); assert.equal(saves.length, 0); await type('Review changes'); await type('Confirm save');
+  assert.deepEqual(saves, [{ crmProjectName: project, changes: { detail_comments: 'सहेजने की पुष्टि करें' }, rev: 8, reason: 'Confirmed CRM form in assistant' }]); a.toggle(false);
 });

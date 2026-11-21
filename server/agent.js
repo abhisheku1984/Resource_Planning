@@ -7,6 +7,8 @@ const { assignmentScope } = require('./access');
 const { can } = require('./auth');
 const schema = require('./schema');
 const { crmForm } = require('./assistant-crm');
+const hindi = require('./agent-hi');
+const copy = require('./agent-copy');
 
 const FROM = `FROM giga_assignments g JOIN assignments a ON a.id = g.assignment_id JOIN employees e ON e.id = g.employee_id`;
 function visibleProjectNames(user) {
@@ -20,24 +22,29 @@ function scopeFor(user, name, flag) {
 const norm = (s) => s.toLowerCase().replace(/’/g, "'").replace(/\s+/g, ' ').trim();
 const numbers = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
 const spoken = (s) => norm(s).replace(/\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (w) => String(numbers.indexOf(w)));
-const choose = (names) => ({ understood: false, kind: 'choose_project', reply: 'Which Giga Project Name? Say or select one of your workbook projects: ' + names.slice(0, 8).join(', ') + '.', suggestions: names.slice(0, 8) });
-const unavailable = () => ({ understood: false, kind: 'denied', reply: 'That Giga Project Name is not available in your access. Choose an exact workbook project name; I have not searched any other project.' });
-function nameMatches(raw, names) {
-  const name = raw.trim();
-  if (names.includes(name)) return [name];
-  const same = names.filter((s) => norm(s) === norm(name));
-  return same.length ? same : names.filter((s) => spoken(s) === spoken(name));
-}
-function resolve(user, message, selected) {
-  const names = visibleProjectNames(user);
-  if (!names.length) return { error: { kind: 'denied', reply: 'There are no named workbook placements in your access. Ask an administrator about your Giga project.' } };
-  // A project name can itself contain prepositions or punctuation. Test entire
-  // clauses, not any matching word or prefix (e.g. Alpha vs Alpha East).
-  const text = message.trim().replace(/[.?!]+$/, '').trim();
+function resolve(user, message, selected, lang) {
+  const names = visibleProjectNames(user), hi = lang === copy.hi;
+  const choose = (choices) => ({ understood: false, kind: 'choose_project', reply: lang.choose(choices.slice(0, 8)), suggestions: choices.slice(0, 8) });
+  const unavailable = () => ({ understood: false, kind: 'denied', reply: lang.unavailable });
+  if (!names.length) return { error: { kind: 'denied', reply: lang.noProjects } };
+  const sound = (s) => spoken(hi ? hindi.spokenProject(norm(s)) : s);
+  const matches = (raw) => {
+    const name = raw.trim();
+    if (names.includes(name)) return [name];
+    const same = names.filter((s) => norm(s) === norm(name));
+    if (same.length) return same;
+    const alias = sound(name);
+    return names.filter((s) => sound(s) === alias);
+  };
+  // Compare whole names first, even if a workbook name contains a preposition.
+  const text = message.trim().replace(/[.?!।]+$/u, '').trim();
   let ask = text, explicit = null;
   const select = text.match(/^(?:select|switch to|use)\s+(?:project\s+)?(.+)$/i);
   const prefix = text.match(/^(?:in|for|within)\s+(.+?)[,:]?\s+((?:how many|who|what|list|show|count|break ?down|open|set|mark)\b.*)$/i);
-  if (select || nameMatches(text, names).length) { explicit = select ? select[1] : text; ask = ''; }
+  const clauseHi = hi && hindi.projectClause(text, matches);
+  if (matches(text).length) { explicit = text; ask = ''; }
+  else if (clauseHi) ({ explicit, ask } = clauseHi);
+  else if (select) { explicit = select[1]; ask = ''; }
   else if (prefix) { explicit = prefix[1]; ask = prefix[2]; }
   else {
     const clauses = [...text.matchAll(/\s+(?:in|within|under|from|for|across)\s+/gi)].filter((m) =>
@@ -45,20 +52,21 @@ function resolve(user, message, selected) {
     // Only skip the employee delimiter in "Open CRM for <person>".
     if (clauses.length) {
       const tail = (m) => text.slice(m.index + m[0].length);
-      const clause = clauses.find((m) => nameMatches(tail(m), names).length) || clauses.at(-1);
+      const clause = clauses.find((m) => matches(tail(m)).length) || clauses.at(-1);
       explicit = tail(clause); ask = text.slice(0, clause.index);
       // Also accept “how many people in <exact name> are on bench?” without
       // treating a longer unseen project name as a shorter, visible sibling.
       const predicate = explicit.match(/^(.+?)\s+(?:are|is)\s+(.+)$/i);
-      if (!nameMatches(explicit, names).length && predicate && nameMatches(predicate[1], names).length) {
+      if (!matches(explicit).length && predicate && matches(predicate[1]).length) {
         explicit = predicate[1]; ask += ' ' + predicate[2];
       }
       if (/^(?:(?:my|this|that|the selected) (?:giga )?projects?)$/i.test(explicit)) explicit = null;
     }
   }
+  if (hi && explicit && !matches(explicit).length && /^(?:इस|चुने हुए) (?:प्रोजेक्ट|परियोजना)$/u.test(explicit)) explicit = null;
   if (explicit !== null) {
-    let hits = nameMatches(explicit, names);
-    if (!hits.length) hits = nameMatches(explicit.replace(/^(?:the )?(?:giga )?project(?: name)?\s+/i, ''), names);
+    let hits = matches(explicit);
+    if (!hits.length) hits = matches(explicit.replace(/^(?:(?:the )?(?:giga )?project(?: name)?|प्रोजेक्ट|परियोजना)\s+/iu, ''));
     if (hits.length !== 1) return { error: hits.length ? choose(hits) : unavailable() };
     return { name: hits[0], ask };
   }
@@ -66,11 +74,10 @@ function resolve(user, message, selected) {
   return names.length === 1 ? { name: names[0], ask } : { error: choose(names) };
 }
 
-const examples = (name) => [`How many are on bench in ${name}?`, `Break down bench category in ${name}`, `Who is on bench in ${name}?`];
 const fmt = (n) => n.toLocaleString('en-IN');
 const metricText = (s) => norm(s).replace(/[-/]/g, ' ').replace(/\s+/g, ' ').trim();
 const METRICS = ['bench_category', 'block_status', 'billing_status', 'offsite_onsite', 'bl_status'];
-function report(user, name, ask) {
+function report(user, name, ask, lang) {
   const t = norm(ask);
   const group = /^(?:break ?down(?: by| of)?|show (?:the )?breakdown(?: by| of)?|group by)\s+/;
   const list = /^(?:who(?: is| are)?|list|show(?: me)?|which people|names of)\b\s*/;
@@ -87,72 +94,73 @@ function report(user, name, ask) {
     if (val) matches.push({ field: f, value: val });
     if (f.key === 'bl_status' && /^bl ?\d+$/.test(metric)) matches.push({ field: f, value: 'BL-' + metric.match(/\d+/)[0] });
   }
-  if (matches.length > 1) return { kind: 'clarify', reply: `Which field in ${name}: ${matches.map((m) => m.field.label).join(' or ')}? Include the field name in your question.` };
+  if (matches.length > 1) return { kind: 'clarify', reply: lang.whichField(name, matches.map((m) => m.field.label)) };
   if (!matches.length && metric) return null; // don't answer an unrecognised filter with headcount
   const { field, value } = matches[0] || { field: fields.find((f) => f.key === 'bench_category'), value: null };
   const scope = scopeFor(user, name);
   const vjoin = ' JOIN assignment_values v ON v.assignment_id = a.id AND v.field_id = ?';
   const from = `${FROM}${value ? vjoin : ''} WHERE ${scope.sql}${value ? ' AND v.value = ?' : ''}`;
   const args = value ? [field.id, ...scope.args, value] : scope.args;
-  const subject = value ? ` (${field.label}: ${value})` : '';
   const total = q.get(`SELECT COUNT(DISTINCT e.id) c ${from}`, ...args).c;
-  const reply = `${fmt(total)} ${total === 1 ? 'person' : 'people'}${subject} in ${name}.`;
+  const reply = lang.count(name, total, field, value);
   const data = { count: total, project: name, field: field.key, value };
   if (verb === list) {
     const people = q.all(`SELECT DISTINCT e.emp_code, e.name ${from} ORDER BY e.name, e.emp_code LIMIT 25`, ...args);
-    return { kind: 'list', reply: reply + (total > 25 ? ' Showing the first 25.' : ''), data,
-      table: { title: 'People · ' + name, columns: ['Employee ID', 'Name', 'Giga Project Name'], rows: people.map((r) => [r.emp_code, r.name, name]) } };
+    return { kind: 'list', reply: reply + (total > 25 ? lang.first25 : ''), data,
+      table: { title: lang.people + ' · ' + name, columns: lang.peopleColumns, rows: people.map((r) => [r.emp_code, r.name, name]) } };
   }
   const buckets = q.all(`SELECT v.value, COUNT(DISTINCT e.id) c ${FROM}${vjoin} WHERE ${scope.sql} AND v.value <> '' GROUP BY v.value ORDER BY c DESC, v.value`, field.id, ...scope.args);
-  return { kind: verb === group ? 'breakdown' : 'count', reply, data, table: { title: `${field.label} · ${name}`, columns: [field.label, 'People'], rows: buckets.map((r) => [r.value, fmt(r.c)]) } };
+  return { kind: verb === group ? 'breakdown' : 'count', reply, data, table: { title: `${field.label} · ${name}`, columns: [field.label, lang.people], rows: buckets.map((r) => [r.value, fmt(r.c)]) } };
 }
 
-function findPlacement(user, name, raw, crm) {
+function findPlacement(user, name, raw, crm, lang) {
   const scope = scopeFor(user, name, crm ? 'can_crm' : 'can_edit');
-  const who = raw.trim().replace(/^employee(?: id)?\s+/i, '');
-  const placement = who.match(/^placement\s+(\d+)$/i);
-  // Spoken "E M P dash 01042" or "EMP 01042" as well as a literal workbook ID or full name.
-  const code = who.replace(/\b(?:dash|hyphen)\b/i, '-').match(/^([a-z](?:\s*[a-z])*)[\s-]+([\d ]+)$/i);
+  const who = raw.trim().replace(lang === copy.hi ? /^(?:employee(?: id)?|कर्मचारी(?: (?:आई\s*डी|id))?)\s+/iu : /^employee(?: id)?\s+/i, '');
+  const id = lang === copy.hi ? hindi.employeeTerm(who) : who;
+  const placement = id.match(/^placement\s+(\d+)$/i);
+  // Keep the literal ID/name and also try its spoken code, preserving leading zeros.
+  const code = id.replace(/\b(?:dash|hyphen)\b/i, '-').match(/^([a-z](?:\s*[a-z])*)[\s-]+([\d ]+)$/i);
   const rows = q.all(`SELECT a.id, e.name, e.emp_code ${FROM} WHERE ${scope.sql} AND ` + (placement ? 'a.id = ?' :
     '(e.emp_code = ? COLLATE NOCASE OR e.emp_code = ? COLLATE NOCASE OR e.name = ? COLLATE NOCASE)') + ' ORDER BY a.id LIMIT 11',
-    ...scope.args, ...(placement ? [Number(placement[1])] : [who, code ? code[1].replace(/\s/g, '') + '-' + code[2].replace(/\s/g, '') : who, who]));
+    ...scope.args, ...(placement ? [Number(placement[1])] : [who, code ? code[1].replace(/\s/g, '') + '-' + code[2].replace(/\s/g, '') : id, who]));
   if (rows.length === 1) return { person: rows[0] };
   const kind = crm ? 'crm_lookup' : 'clarify';
-  if (!rows.length) return { error: { kind, reply: `No matching accessible placement in ${name}. Give the employee ID or exact full name.` } };
-  return { error: { kind, reply: `More than one placement matches in ${name}. Use “placement” and the placement number instead of the name.`,
-    table: { title: 'Matching placements · ' + name, columns: ['Placement', 'Employee ID', 'Name'], rows: rows.slice(0, 10).map((r) => [r.id, r.emp_code, r.name]) } } };
+  if (!rows.length) return { error: { kind, reply: lang.noMatch(name) } };
+  return { error: { kind, reply: lang.ambiguous(name),
+    table: { title: lang.placements + ' · ' + name, columns: lang.placementColumns, rows: rows.slice(0, 10).map((r) => [r.id, r.emp_code, r.name]) } } };
 }
 
-function action(user, name, ask) {
+function action(user, name, ask, lang) {
   const crm = ask.match(/^(?:open|show)\s+(?:the\s+)?c\.?\s*r\.?\s*m\.?(?:\s+(?:for\s+)?(.+))?$/i);
   const change = !crm && ask.match(/^(?:set|change|mark|move|put)\s+(.+?)\s+(?:to|as|on)\s+(.+)$/i);
   if (!crm && !change) return null;
-  if (!can(user, crm ? 'crm.use' : 'employee.edit')) return { kind: 'denied', reply: `You do not have ${crm ? 'CRM' : 'edit'} permission in ${name}.` };
-  if (crm && !crm[1]) return { kind: 'crm_lookup', reply: `Whose CRM record in ${name}? Say the employee ID or full name.` };
-  const { person, error } = findPlacement(user, name, (crm || change)[1], !!crm);
+  if (!can(user, crm ? 'crm.use' : 'employee.edit')) return { kind: 'denied', reply: lang.noPermission(name, crm) };
+  if (crm && !crm[1]) return { kind: 'crm_lookup', reply: lang.askPerson(name) };
+  const { person, error } = findPlacement(user, name, (crm || change)[1], !!crm, lang);
   if (error) return error;
-  const ref = `${person.name} (${person.emp_code}) in ${name}`;
+  const ref = lang.reference(person, name);
   if (crm) {
     const form = crmForm(user, person.id, name);
-    return { kind: 'crm', crm: form, reply: `CRM open for ${ref}. ` + (form.fields.some((f) => f.editable)
-      ? 'Say “list fields” or “set Detail Comments to” followed by your note. Then say “review changes”.' : 'This CRM record is read-only.') };
+    return { kind: 'crm', crm: form, reply: lang.openCrm(ref, form.fields.some((f) => f.editable)) };
   }
   for (const field of schema.listFields(user).filter((f) => ['bench_category', 'block_status'].includes(f.key))) {
     const to = (field.options || []).find((v) => norm(v) === norm(change[2]));
     if (!to) continue;
     const from = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', person.id, field.id)?.value ?? null;
-    if (to === from) return { kind: 'change', reply: `${ref} is already ${to}. Nothing to approve.` };
-    return { kind: 'change', reply: `Proposed ${field.label}: ${to} for ${ref}. An administrator must approve before anything is saved.`,
+    if (to === from) return { kind: 'change', reply: lang.unchanged(ref, to) };
+    return { kind: 'change', reply: lang.proposed(ref, field, to),
       proposal: { kind: 'update_assignment', assignmentId: person.id, projectName: name, ref: person.emp_code, summary: `${ref} · ${field.label}: ${from ?? '(empty)'} → ${to}`,
         changes: { [field.key]: { label: field.label, from, to } } } };
   }
   return null;
 }
-function understand(user, message, selected = null) {
-  const { name, ask, error } = resolve(user, String(message || ''), selected);
+function understand(user, message, selected = null, language = 'en') {
+  const lang = language === 'hi' ? copy.hi : copy.en;
+  const { name, ask: question, error } = resolve(user, String(message || ''), selected, lang);
   if (error) return error;
-  const answer = !ask ? { kind: 'project', reply: `Selected Giga project: ${name}.` }
-    : action(user, name, ask) || report(user, name, ask) || { kind: 'help', understood: false, reply: `For ${name}, I can count or list people, break down a status, propose a bench or block change, or open an employee’s CRM. Try one of the examples.` };
-  return { understood: true, projectName: name, suggestions: examples(name), ...answer };
+  const ask = lang === copy.hi ? hindi.intent(question) : question;
+  const answer = !ask ? { kind: 'project', reply: lang.selected(name) }
+    : action(user, name, ask, lang) || report(user, name, ask, lang) || { kind: 'help', understood: false, reply: lang.help(name) };
+  return { understood: true, projectName: name, suggestions: lang.examples(name), ...answer };
 }
 module.exports = { understand, visibleProjectNames };

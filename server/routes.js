@@ -568,8 +568,10 @@ router.get('/agent/projects', requireAuth, wrap((req, res) => {
 
 router.post('/agent/ask', requireAuth, wrap((req, res) => {
   const message = String(req.body?.message || '').trim();
-  if (message.length > 1000) return res.status(422).json({ error: 'Keep your question under 1,000 characters.' });
-  const plan = agent.understand(req.user, message, req.body?.projectName);
+  const language = req.body?.language ?? 'en';
+  if (!['en', 'hi'].includes(language)) return res.status(422).json({ error: 'Choose English or Hindi.' });
+  if (message.length > 1000) return res.status(422).json({ error: language === 'hi' ? 'सवाल 1,000 अक्षरों तक रखें।' : 'Keep your question under 1,000 characters.' });
+  const plan = agent.understand(req.user, message, req.body?.projectName, language);
   let proposal = null;
   if (plan.proposal) {
     // raising a proposal needs the ability to edit at all; approving it is admin-only

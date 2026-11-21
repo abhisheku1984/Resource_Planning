@@ -116,51 +116,60 @@ matching placements counts once per bucket; distinct buckets can overlap.
 
 ### Voice mode and CRM entry
 
-1. Open the app directly on **localhost or HTTPS** in a desktop browser that
-   supports **on-device** English speech recognition. Click **Start voice
-   mode** and allow the microphone. If offered, **Install English speech pack**
-   is a separate, optional browser download. No audio is uploaded. For spoken
-   replies, install a local English system voice as well. If the app is embedded
-   and permission is blocked, open it in a standalone tab. Typed commands always work.
-2. Ask **“How many are on bench in Giga One?”**. The mic pauses during replies
-   and listens for the next turn automatically. Say **“Open CRM”**, then an
-   employee ID or exact full name. For multiple matches, say **“placement”** and
-   the offered number. No CRM access means no form; read-only users cannot edit.
-3. Say **“List fields”**, **“Read Detail Comments”**, or **“Set Detail Comments
-   to ready for interview”**. Use any editable field on that CRM form, including
-   the BC–BS supervisor fields. For dates, say e.g. **“May 12 2027”**.
-4. Say **“Review changes”** to hear the employee, project and values. Then say
-   **“Confirm save”** or **“Discard changes”**. Only confirmation writes the
-   form, through the existing audited supervisor-save path. A changed record
-   must be reopened; there is no automatic overwrite or voice autosave.
-5. Say **“Close CRM”** to return to questions, or **“Stop listening”** to turn
-   off the microphone. Closing Ask, hiding the tab or signing out also stops it.
+In **Ask → Voice language / भाषा**, choose **English** or **हिन्दी**. The
+selection applies to typed questions, the microphone, replies and CRM commands;
+it does not change the rest of the site or translate workbook names. Ask remembers
+the choice in this browser. Switching stops listening/read-aloud; it preserves
+unsaved CRM values but requires a fresh review before confirmation.
 
-### If Start voice mode says English is not ready
+On **localhost or HTTPS**, click **Start voice mode** / **बोलना शुरू करें**.
+The browser must support on-device recognition for **the chosen language**.
+Allow the microphone when prompted. It pauses during spoken replies and listens
+again for the next command. You can also just type the same commands and press
+Enter, with **no microphone, speech pack or read-aloud voice**.
 
-This is a **browser speech setup** message, not an employee-data or CRM error.
-Open the app in its **own tab** (on the server PC: <http://localhost:4000>),
-preferably in an up-to-date desktop Chrome browser. An embedded page can be
-blocked by its host’s permissions policy even on HTTPS.
+| Try this | English | हिन्दी |
+|---|---|---|
+| Ask about a workbook project | How many are on bench in Giga One? | Giga One में बेंच पर कितने लोग हैं? |
+| Ask for a list or breakdown | Who is on bench? / Break down billing status | बेंच पर कौन है? / बिलिंग स्थिति का विवरण दिखाएँ |
+| Open an employee’s form | Open CRM | सीआरएम खोलें |
+| Hear editable and read-only field names | List fields | फ़ील्ड बताएं |
+| Draft a note | Set Detail Comments to ready for interview | टिप्पणी में साक्षात्कार के लिए तैयार लिखें |
+| Check a draft value | Read Detail Comments | टिप्पणी पढ़ें |
+| Review the person, project and changes | Review changes | बदलाव की समीक्षा करें |
+| Confirm the reviewed draft **or** discard it | Confirm save / Discard changes | सहेजने की पुष्टि करें / बदलाव रद्द करें |
+| Close the form / turn off the mic | Close CRM / Stop listening | सीआरएम बंद करें / सुनना बंद करें |
 
-* **Install English speech pack:** click it to allow the browser’s one-time
-  language download. Ask checks your preferred English variants and US, Indian,
-  British and generic English individually and prefers an already-ready pack.
-* **Downloading:** wait for the browser download to finish, then click **Check
-  again**. Checking does not install anything or turn on a cloud service.
-* **No local English pack available:** this site cannot install a pack that
-  the browser does not offer. Changing microphone permissions alone will not
-  fix a missing speech service. If the browser specifically reports microphone
-  access denied, allow it for this site and check the Windows microphone setting.
-* **Use voice on Windows 11 without a browser pack:** open **Start → Voice
-  access** (or **Settings → Accessibility → Speech → Voice access**). Finish its
-  one-time English language setup. Back in Ask, focus the message box, dictate
-  your question, then say **“Press Enter”**. This also works for **“Open CRM”**,
-  **“Review changes”** and **“Confirm save”**. For offline use, choose **Voice
-  access**, not the separate online **Win+H** voice typing feature. Windows
-  controls its microphone; stop Voice access in Windows when done. Under
-  **Voice setup and device dictation**, **Read last reply** uses a local English
-  system voice if one is installed (use headphones to avoid audio feedback).
+Use a project in **your** workbook. After “Open CRM”, give the employee ID or
+exact full name; if more than one placement matches, say **placement** /
+**प्लेसमेंट** and the offered number. Use the field names on that form. Dates
+can be dictated as **May 12 2027** or **१२ मई २०२७**. CRM grants, read-only
+fields, revision checks and the audited confirmation step apply in both
+languages. Closing Ask, hiding the tab or signing out stops app voice mode.
+
+### If a local speech pack or read-aloud voice is unavailable
+
+* **Recognition (listening):** open the app in its own tab on localhost or HTTPS
+  in a supported desktop browser. Embedded or managed pages can block speech or
+  the microphone. Ask checks only variants of the chosen language (English:
+  preferred English locales, `en-US`, `en-IN`, `en-GB`, `en`; Hindi: preferred
+  Hindi locales, `hi-IN`, `hi`). **`en-IN` is Indian English, not Hindi.**
+* **Installation:** if the browser offers a pack, the separate **Install English
+  speech pack** / **हिन्दी स्पीच पैक इंस्टॉल करें** button requests it. For a
+  download in progress, wait and select **Check again** / **फिर जाँचें**.
+  Choosing a language never installs anything. If a pack is unavailable to this
+  site, the app cannot supply it; it does not switch to English or cloud speech.
+  A missing pack and denied microphone permission are different problems.
+* **Read-aloud:** requires a local system voice for the selected language, separate
+  from the recognition pack. Without one, read replies in the conversation. Under
+  **Voice setup and device dictation**, **Read last reply** / **पिछला जवाब सुनें**
+  works without turning on the app microphone.
+* **Device dictation:** if your OS supports *offline* dictation in your language,
+  focus the Ask message box, dictate, then submit. For English on supported Windows
+  11 PCs: **Start → Voice access**, finish English setup, focus the box, dictate
+  and say **“Press Enter”**. Hindi availability depends on the OS and its supported
+  languages; choosing हिन्दी in Ask does not add it to Windows. Windows controls
+  its own microphone. **Win+H** is a separate online voice typing feature.
 
 No database reset, reinstall of the app, or workbook re-import is needed for
 speech setup. If you still need help, note the browser name/version, Windows
