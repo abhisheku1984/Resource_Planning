@@ -334,6 +334,8 @@ globalThis.fetch = async (url, opts = {}) => {
       users: [{ id: 7, email: 'lead@x.io', name: 'Test Leader', role: 'supervisor', title: 'Lead', active: 1,
         projects: [{ project_id: 1, name: 'Nexus', can_edit: 1, can_export: 1, can_crm: 1 }],
         capabilities: { 'employee.edit': true } }],
+      gigaProjectNames: ['Giga Apple', 'Giga Pear'],
+      gigaCapabilities: ['project.view', 'employee.edit', 'crm.use', 'export.data'],
       capabilities: ['employee.edit', 'crm.use', 'export.data'],
     });
   }
@@ -819,15 +821,18 @@ test('New user submits the form with its grants; Delete requires confirmation', 
   input('name@company.com').value = 'new@example.test';
   input('At least 8 characters').value = 'example123';
   dialog.querySelector('select').value = 'supervisor';
-  const grant = dialog.querySelectorAll('input').find((el) => el.attrs['aria-label'] === 'Grant access to Nexus');
+  const picker = dialog.querySelectorAll('select')[1];
+  assert.ok(flatten(picker).includes('Giga Apple'));
+  picker.value = 'g:Giga Apple'; picker.dispatchEvent({ type: 'change' });
   const capability = dialog.querySelectorAll('label').find((l) => flatten(l).join('') === 'Edit employee records').querySelector('input');
-  for (const check of [grant, capability]) { check.checked = true; check.dispatchEvent({ type: 'change' }); }
+  capability.checked = true; capability.dispatchEvent({ type: 'change' });
   button(dialog, 'Create user').click();
   await settleClicks();
   const post = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/users' && opts.method === 'POST');
   const payload = JSON.parse(post.arguments[1].body);
   assert.equal(payload.email, 'new@example.test');
-  assert.equal(payload.projects[0].project_id, 1);
+  assert.equal(payload.gigaProjectName, 'Giga Apple');
+  assert.equal(payload.projects, undefined);
   assert.equal(payload.capabilities['employee.edit'], true);
   assert.ok(!body.querySelector('.overlay'));
 
@@ -841,6 +846,28 @@ test('New user submits the form with its grants; Delete requires confirmation', 
   await settleClicks();
   assert.equal(deletes().length, 1);
   assert.equal(fetch.mock.calls.at(-1).arguments[1].method, 'GET', 'refresh the user list after deletion');
+});
+
+test('Edit access can replace existing hierarchy grants with one workbook Giga project', async (t) => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  core.state.user = { id: 1, isAdmin: true };
+  core.state.tree = [{ id: 1, name: 'Nexus', subprojects: [] }];
+  const content = new El('div');
+  documentShim.body.replaceChildren(content);
+  const fetch = t.mock.method(globalThis, 'fetch');
+  await renderAdmin(content, { tab: 'access' });
+  button(content, 'Edit access').click();
+  const dialog = body.querySelector('.overlay');
+  const picker = dialog.querySelector('select');
+  assert.equal(picker.value, 'legacy');
+  picker.value = 'g:Giga Pear'; picker.dispatchEvent({ type: 'change' });
+  button(dialog, 'Save access').click();
+  await settleClicks();
+  const put = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/users/7/access' && opts.method === 'PUT');
+  const saved = JSON.parse(put.arguments[1].body);
+  assert.equal(saved.gigaProjectName, 'Giga Pear');
+  assert.equal(saved.projects, undefined);
+  assert.equal(saved.capabilities['employee.edit'], true);
 });
 
 test('Data model renders a populated category, opens the field form and saves the selected layout', async (t) => {

@@ -13,6 +13,7 @@
 
 const { q } = require('./db');
 const schema = require('./schema');
+const { assignmentScope } = require('./access');
 const fielddefs = require('./fielddefs');
 
 const BENCH = fielddefs.BENCH_CATEGORIES;
@@ -91,9 +92,7 @@ function findValue(text, options) {
 
 function findPeople(user, text) {
   const t = norm(text);
-  const scope = visibleProjects(user).map((p) => p.id);
-  if (!scope.length) return [];
-  const ph = scope.map(() => '?').join(',');
+  const acl = assignmentScope(user);
 
   const codeMatch = text.match(/\b([A-Z]{2,5}-\d{3,6})\b/i);
   if (codeMatch) {
@@ -101,8 +100,8 @@ function findPeople(user, text) {
       'SELECT a.id AS assignmentId, e.emp_code, e.name, a.project_id, p.name AS projectName' +
       ' FROM assignments a JOIN employees e ON e.id = a.employee_id' +
       ' JOIN projects p ON p.id = a.project_id' +
-      ' WHERE a.active = 1 AND upper(e.emp_code) = upper(?) AND a.project_id IN (' + ph + ')',
-      codeMatch[1], ...scope
+      ` WHERE a.active = 1 AND upper(e.emp_code) = upper(?) AND ${acl.sql}`,
+      codeMatch[1], ...acl.args
     );
   }
 
@@ -114,8 +113,8 @@ function findPeople(user, text) {
         'SELECT a.id AS assignmentId, e.emp_code, e.name, a.project_id, p.name AS projectName' +
         ' FROM assignments a JOIN employees e ON e.id = a.employee_id' +
         ' JOIN projects p ON p.id = a.project_id' +
-        ' WHERE a.active = 1 AND lower(e.name) LIKE ? AND a.project_id IN (' + ph + ') LIMIT 25',
-        '%' + phrase + '%', ...scope
+        ` WHERE a.active = 1 AND lower(e.name) LIKE ? AND ${acl.sql} LIMIT 25`,
+        '%' + phrase + '%', ...acl.args
       );
       const unique = Array.from(new Map(rows.map((r) => [r.assignmentId, r])).values());
       if (unique.length) return unique;
@@ -129,21 +128,22 @@ function label(key) {
   return f ? f.label : key;
 }
 
+function projectScope(user, project) {
+  const acl = assignmentScope(user);
+  return project ? { sql: `${acl.sql} AND a.project_id = ?`, args: [...acl.args, project.id] } : acl;
+}
+
 function breakdown(user, project, fieldKey) {
   const field = schema.listFields().find((f) => f.key === fieldKey);
   if (!field) return [];
-  const ids = project ? [project.id] : (user.isAdmin
-    ? q.all('SELECT id FROM projects').map((r) => r.id)
-    : (user.projects || []).map((p) => p.id));
-  if (!ids.length) return [];
-  const ph = ids.map(() => '?').join(',');
+  const acl = projectScope(user, project);
   return q.all(
     'SELECT v.value AS a, COUNT(*) AS b FROM assignment_values v' +
     ' JOIN assignments a ON a.id = v.assignment_id' +
-    ' WHERE a.active = 1 AND v.field_id = ? AND a.project_id IN (' + ph + ')' +
+    ` WHERE a.active = 1 AND v.field_id = ? AND ${acl.sql}` +
     " AND v.value IS NOT NULL AND v.value <> ''" +
     ' GROUP BY v.value ORDER BY b DESC LIMIT 12',
-    field.id, ...ids
+    field.id, ...acl.args
   ).map((r) => [r.a, Number(r.b).toLocaleString('en-IN')]);
 }
 
@@ -172,15 +172,9 @@ function answerCount(user, text) {
   const blockValue = findValue(t, BLOCK);
   const fieldKey = blockValue ? 'block_status' : (benchValue ? 'bench_category' : null);
 
-  const where = ['a.active = 1', 'e.active = 1'];
-  const args = [];
-
-  if (project) { where.push('a.project_id = ?'); args.push(project.id); }
-  else if (!user.isAdmin) {
-    const ids = (user.projects || []).map((p) => p.id);
-    where.push('a.project_id IN (' + (ids.map(() => '?').join(',') || 'NULL') + ')');
-    args.push(...ids);
-  }
+  const acl = projectScope(user, project);
+  const where = ['a.active = 1', 'e.active = 1', acl.sql];
+  const args = acl.args;
 
   if (fieldKey) {
     const field = schema.listFields().find((f) => f.key === fieldKey);
@@ -216,19 +210,16 @@ function answerList(user, text) {
   const project = findProject(user, text);
   const benchValue = findValue(text, BENCH) || 'Bench';
   const field = schema.listFields().find((f) => f.key === 'bench_category');
-  const ids = project ? [project.id] : (user.isAdmin
-    ? q.all('SELECT id FROM projects').map((r) => r.id)
-    : (user.projects || []).map((p) => p.id));
-  if (!ids.length) return { understood: true, kind: 'list', reply: 'You do not have any projects assigned.', table: null };
+  const acl = projectScope(user, project);
 
   const rows = q.all(
     'SELECT e.emp_code, e.name, p.code AS project, v.value AS bench_category' +
     ' FROM assignment_values v JOIN assignments a ON a.id = v.assignment_id' +
     ' JOIN employees e ON e.id = a.employee_id JOIN projects p ON p.id = a.project_id' +
     ' WHERE a.active = 1 AND v.field_id = ? AND v.value = ?' +
-    ' AND a.project_id IN (' + ids.map(() => '?').join(',') + ')' +
+    ` AND ${acl.sql}` +
     ' ORDER BY e.name LIMIT 25',
-    field.id, benchValue, ...ids
+    field.id, benchValue, ...acl.args
   );
 
   return {

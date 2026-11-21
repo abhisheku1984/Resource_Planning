@@ -94,7 +94,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   }, icon('filter', 14), 'Filter');
 
   const exportBtn = h('button', {
-    class: 'btn btn-sm', title: 'Export current view to Excel',
+    class: 'btn btn-sm', title: 'Export current view to Excel', disabled: !!state.user?.gigaAccess && !state.user.capabilities['export.data'],
     onclick: doExport,
   }, icon('download', 14), 'Export');
 
@@ -118,6 +118,15 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
 
   mount(el, head, toolbar, ...(filterBar ? [filtersHost] : []), chipsHost, bodyHost, foot);
 
+  // One set of parameters for both the table and "Export current view".
+  function currentView() {
+    return {
+      projectId: q.projectId, subprojectId: q.subprojectId, categoryId: q.categoryId,
+      supplierId: q.supplierId, status: q.status, search: q.search, ...q.filters,
+      ...Object.fromEntries(Object.entries(facetFilters).map(([key, vals]) => [`f_${key}`, vals])),
+    };
+  }
+
   /* ------------------------------------------------------------- loading */
   async function load({ silent = false } = {}) {
     if (controller) controller.abort();
@@ -129,15 +138,9 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     params.set('pageSize', q.pageSize);
     params.set('sort', q.sort);
     params.set('dir', q.dir);
-    if (q.search) params.set('search', q.search);
-    if (q.projectId) params.set('projectId', q.projectId);
-    if (q.subprojectId) params.set('subprojectId', q.subprojectId);
-    if (q.categoryId) params.set('categoryId', q.categoryId);
-    if (q.supplierId) params.set('supplierId', q.supplierId);
-    if (q.status) params.set('status', q.status);
-    for (const [k, v] of Object.entries(q.filters)) if (v) params.set(k, v);
-    for (const [k, vals] of Object.entries(facetFilters)) {
-      if (vals && vals.length) params.set(`f_${k}`, vals.join('|'));
+    for (const [key, value] of Object.entries(currentView())) {
+      if (Array.isArray(value)) { for (const v of value) params.append(`${key}[]`, v); }
+      else if (value) params.set(key, value);
     }
     try {
       const res = await api(`/employees?${params}`, { signal: controller.signal });
@@ -145,7 +148,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
       // Never blank the dropdowns on a response that lacks facets: that is what
       // left them permanently disabled. Only replace when there is something to
       // show, and keep the last good values otherwise.
-      if (Array.isArray(res.facets) && res.facets.length) {
+      if (Array.isArray(res.facets) && (res.facets.length || state.user?.gigaAccess)) {
         facets = res.facets;
         if (filterBar) filterBar.setFacets(facets, res.scope?.category?.name || res.scope?.project?.name || '');
       }
@@ -358,7 +361,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
         onclick: (e) => { e.stopPropagation(); select(row); },
       }, target || '—');
     }
-    if (!col.editable) {
+    if (!col.editable || (state.user?.gigaAccess && !state.user.capabilities['employee.edit'])) {
       return staticView(col, raw);
     }
     return editableCell(row, col, raw);
@@ -625,16 +628,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     exportBtn.replaceChildren(spinner(), 'Generating…');
     try {
       const { downloadExport } = await import('../core.js');
-      const res = await downloadExport({
-        projectId: q.projectId || '',
-        subprojectId: q.subprojectId || '',
-        categoryId: q.categoryId || '',
-        supplierId: q.supplierId || '',
-        // the five dropdowns are value filters, so they travel as f_ params
-        ...Object.fromEntries(Object.entries(facetFilters)
-          .filter(([, vals]) => vals && vals.length)
-          .map(([k, vals]) => [`f_${k}`, vals.join('|')])),
-      });
+      const res = await downloadExport(currentView());
       toast('Export ready', `${res.filename} · ${fmtNum(res.rows)} rows generated from the database.`, 'success', 5000);
     } catch (err) {
       if (err.status === 403) toast('Export not permitted', 'Your role does not allow exports for this scope.', 'error');

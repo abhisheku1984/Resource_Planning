@@ -8,18 +8,26 @@ import {
 } from '../core.js';
 
 export async function renderDataHub(content, ctx) {
+  const giga = state.user?.gigaAccess;
+  const canExport = !giga || state.user.capabilities['export.data'];
   mount(content, h('div', { class: 'page' },
     h('div', { class: 'page-head' },
       h('div', null,
         h('div', { class: 'page-title' }, 'Data Hub'),
-        h('div', { class: 'page-sub' }, 'Generate an Excel snapshot of the central database at any scope, or apply a daily dataset without disturbing supervisor edits.'),
+        h('div', { class: 'page-sub' }, giga ? `Giga Project Name: ${giga.name || 'No project access'}` : 'Generate an Excel snapshot of the central database at any scope, or apply a daily dataset without disturbing supervisor edits.'),
       ),
       h('div', { class: 'page-actions' },
-        h('button', { class: 'btn btn-primary', onclick: () => openExportModal({}) }, icon('download', 15), 'Generate export'),
+        h('button', { class: 'btn btn-primary', disabled: !canExport, onclick: () => openExportModal({}) }, icon('download', 15), 'Generate export'),
       ),
     ),
     h('div', { id: 'hub-body' }, h('div', { class: 'card' }, h('div', { class: 'card-body row' }, spinner(), h('span', { class: 'muted' }, 'Loading…')))),
   ));
+
+  if (giga) {
+    const host = content.querySelector('#hub-body');
+    mount(host, canExport ? exportCard() : emptyState({ title: 'Export not permitted', message: 'Ask your administrator if you need an Excel export of your Giga project.', iconName: 'shield' }));
+    return; // master imports and duplicate reviews span Giga projects
+  }
 
   let imports = [];
   try {

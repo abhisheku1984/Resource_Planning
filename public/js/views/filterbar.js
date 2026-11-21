@@ -98,7 +98,7 @@ export function createFilterBar({ onChange }) {
       : all;
     const shown = matching.slice(0, MAX_SHOWN);
     const chosen = active[facet.key] || [];
-    const total = all.reduce((a, v) => a + v.count, 0);
+    const total = facet.allCount ?? all.reduce((a, v) => a + v.count, 0);
 
     const box = h('input', {
       class: 'input facet-search',

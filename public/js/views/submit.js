@@ -15,8 +15,8 @@ import {
 
 /**
  * The panel is deliberately a short, ordered list, not the whole record: the
- * person (Employee ID + name) and the workbook's supervisor columns from Leader
- * Input Last Week through Giga Project Name. Submit writes them in one
+ * person's name and the workbook's BC–BS supervisor columns from Leader
+ * Input Last Week through Demand Number. Autosave writes them in one
  * transaction; the next export carries the new value plus who changed it.
  *
  * The list comes from the server (`state.crmKeys`, admin-configurable), so this

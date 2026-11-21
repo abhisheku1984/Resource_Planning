@@ -13,6 +13,10 @@ const PORT = Number(process.env.PORT) || 4000;
 // other people on your network to connect.
 const HOST = process.env.HOST || '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+// The hosted preview is embedded by Arena; local/Windows installs keep their
+// original same-origin framing policy. This does not relax scripts or API auth.
+const FRAME_ANCESTORS = process.env.ARENA_PREVIEW === '1'
+  ? "frame-ancestors 'self' https://arena.ai https://*.arena.ai" : "frame-ancestors 'self'";
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '40mb' }));
@@ -33,7 +37,7 @@ app.use((req, res, next) => {
     "font-src 'self'",
     "connect-src 'self'",
     "form-action 'self'",
-    "frame-ancestors 'self'",
+    FRAME_ANCESTORS,
     "base-uri 'none'",
     "object-src 'none'",
   ].join('; '));

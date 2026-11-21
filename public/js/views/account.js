@@ -42,12 +42,14 @@ export function openAccountModal() {
           h('div', { class: 'muted', style: { fontSize: '12.5px' } }, user.email),
           h('div', { class: 'row', style: { marginTop: '5px', gap: '6px' } },
             h('span', { class: `badge ${user.isAdmin ? 'badge-brand' : 'badge-neutral'}` }, user.isAdmin ? 'Administrator' : 'Supervisor'),
-            h('span', { class: 'badge badge-outline' }, `${user.projects?.length || 0} project${user.projects?.length === 1 ? '' : 's'}`),
+            h('span', { class: 'badge badge-outline' }, user.gigaAccess ? (user.gigaAccess.name ? '1 Giga project' : 'No project access') : `${user.projects?.length || 0} project${user.projects?.length === 1 ? '' : 's'}`),
           ),
         ),
       ),
       h('div', { style: { paddingTop: '16px' } },
-        h('div', { class: 'crm-section-title' }, 'Authorized projects'),
+        user.gigaAccess ? h('div', { class: 'note' }, icon('shield', 15), user.gigaAccess.name
+          ? `Giga Project Name: ${user.gigaAccess.name}. Only matching records are accessible.` : 'No project access assigned.') : null,
+        h('div', { class: 'crm-section-title' }, user.gigaAccess ? 'Placements in your Giga project' : 'Authorized projects'),
         (user.projects || []).length
           ? h('div', { class: 'col', style: { gap: '6px' } },
             ...user.projects.map((p) => h('div', { class: 'spread', style: { fontSize: '12.5px' } },

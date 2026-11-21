@@ -101,7 +101,9 @@ login is the only thing protecting the data.
 
 ### Content-Security-Policy
 
-Every response carries a CSP that only permits same-origin content:
+By default, every response carries the following CSP. The hosted preview
+(`ARENA_PREVIEW=1`) additionally allows Arena to frame the app; the Windows
+start commands do not enable this exception.
 
 ```
 default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
@@ -127,7 +129,12 @@ These are the controls actually implemented (each has a test):
 * **Authorization is server-side.** Every read and write re-checks the caller's
   project grant. Hiding a button in the browser is never the protection — the API
   returns `403` regardless. Tests assert this for each verb on a foreign project.
-* **Per-project rights** — `can_edit`, `can_export`, `can_crm` can differ per
+* **Giga-scoped accounts** — one workbook Giga Project Name replaces hierarchy
+  grants. SQL checks the current assignment value before listing, counting,
+  editing or exporting it; names are bound values, not `LIKE` patterns. A blank
+  grant authorizes no rows. Access is reloaded on each authenticated request.
+  Master imports and global configuration are unavailable to these accounts.
+* **Hierarchy-based accounts** — `can_edit`, `can_export`, `can_crm` can differ per
   person per project. A read-only reviewer cannot write, even with a crafted request.
 * **SQL injection** is not possible in the normal path: every query uses bound
   parameters. Sort column names are whitelisted rather than interpolated.

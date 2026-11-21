@@ -12,6 +12,7 @@
  */
 const { q } = require('./db');
 const schema = require('./schema');
+const { assignmentScope } = require('./access');
 const emp = require('./employees');
 const { record } = require('./audit');
 
@@ -63,10 +64,16 @@ function loadProposal(id) {
   };
 }
 
-function listProposals(status) {
-  const rows = status
-    ? q.all('SELECT id FROM agent_actions WHERE status = ? ORDER BY id DESC LIMIT 100', status)
-    : q.all('SELECT id FROM agent_actions ORDER BY id DESC LIMIT 100');
+function proposalScope(user) {
+  if (user.isAdmin) return { sql: '1', args: [] };
+  const acl = assignmentScope(user);
+  return { sql: `assignment_id IN (SELECT a.id FROM assignments a WHERE ${acl.sql})`, args: acl.args };
+}
+
+function listProposals(user, status) {
+  const { sql, args } = proposalScope(user);
+  const rows = q.all(`SELECT id FROM agent_actions WHERE ${sql} ${status ? 'AND status = ?' : ''} ORDER BY id DESC LIMIT 100`,
+    ...args, ...(status ? [status] : []));
   return rows.map((r) => loadProposal(r.id));
 }
 
@@ -142,8 +149,9 @@ function reject(actor, id, note) {
   return loadProposal(id);
 }
 
-function pendingCount() {
-  return Number(q.get("SELECT COUNT(*) c FROM agent_actions WHERE status = 'pending'").c);
+function pendingCount(user) {
+  const { sql, args } = proposalScope(user);
+  return Number(q.get(`SELECT COUNT(*) c FROM agent_actions WHERE status = 'pending' AND ${sql}`, ...args).c);
 }
 
 module.exports = { raiseProposal, loadProposal, listProposals, approve, reject, pendingCount };

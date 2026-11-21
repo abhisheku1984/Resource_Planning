@@ -2,6 +2,8 @@
 const { q, tx } = require('./db');
 const { record } = require('./audit');
 const schema = require('./schema');
+const { getAssignment } = require('./query');
+const { assignmentScope, assertAssignment, assertGigaPlacement, suppliersFor, denied } = require('./access');
 
 /**
  * Employee records live in two places:
@@ -34,6 +36,11 @@ function supplierIdFor(name, actor) {
   if (!name) return null;
   const clean = String(name).trim();
   if (!clean) return null;
+  if (actor?.gigaAccess) {
+    const supplier = suppliersFor(actor, true).find((s) => s.name === clean);
+    if (!supplier) throw denied('Choose a supplier already serving your Giga project.');
+    return supplier.id;
+  }
   const found = q.get('SELECT id FROM suppliers WHERE lower(name) = lower(?)', clean);
   if (found) return found.id;
   const code = clean.toUpperCase().replace(/[^A-Z0-9]+/g, '-').slice(0, 24);
@@ -48,7 +55,7 @@ function supplierIdFor(name, actor) {
  * Build the dynamic SELECT for an employee table.
  * Only columns configured as visible for the selected category are returned.
  */
-function buildRowQuery({ projectId, subprojectId, categoryId }) {
+function buildRowQuery({ projectId, subprojectId, categoryId }, user) {
   const categoryIdForColumns = categoryId
     ? categoryId
     : null;
@@ -56,8 +63,8 @@ function buildRowQuery({ projectId, subprojectId, categoryId }) {
   // instead of every configurable field (which would make the table unusable).
   const DEFAULT_KEYS = ['emp_code', 'first_name', 'last_name', 'supplier', 'status', 'remarks'];
   const columns = categoryIdForColumns
-    ? schema.columnsForCategory(categoryIdForColumns)
-    : schema.listFields()
+    ? schema.columnsForCategory(categoryIdForColumns, user)
+    : schema.listFields(user)
         .filter((f) => DEFAULT_KEYS.includes(f.key))
         .sort((a, b) => DEFAULT_KEYS.indexOf(a.key) - DEFAULT_KEYS.indexOf(b.key));
 
@@ -144,15 +151,12 @@ function listEmployees(user, params = {}) {
     }
   }
 
-  const { sql: baseSql, columns, dynamic } = buildRowQuery({ projectId, subprojectId, categoryId });
-  const where = [];
-  const args = [];
-
+  const { sql: baseSql, columns, dynamic } = buildRowQuery({ projectId, subprojectId, categoryId }, user);
+  assertGigaPlacement(user, { projectId, subprojectId, categoryId });
+  const acl = assignmentScope(user);
+  const where = [acl.sql];
+  const args = [...acl.args];
   if (projectId) { where.push('a.project_id = ?'); args.push(Number(projectId)); }
-  else if (!user.isAdmin) {
-    where.push(`a.project_id IN (${allowedProjectIds.map(() => '?').join(',') || 'NULL'})`);
-    args.push(...allowedProjectIds);
-  }
   if (subprojectId) { where.push('a.subproject_id = ?'); args.push(Number(subprojectId)); }
   if (categoryId) { where.push('a.category_id = ?'); args.push(Number(categoryId)); }
 
@@ -290,57 +294,6 @@ function normalizeRow(r, columns, dynamic) {
   return out;
 }
 
-/** Read one assignment with full context (used by the CRM panel). */
-function getAssignment(id) {
-  const meta = q.get(
-    `SELECT a.*, e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone, e.id AS employee_id
-       FROM assignments a JOIN employees e ON e.id = a.employee_id WHERE a.id = ?`,
-    id
-  );
-  if (!meta) return null;
-  const columns = schema.columnsForCategory(meta.category_id);
-  const values = {};
-  const allFields = schema.listFields();
-  for (const f of allFields) {
-    const mapped = MAPPED[f.key];
-    if (mapped) {
-      values[f.key] =
-        f.key === 'emp_code' ? meta.emp_code
-        : f.key === 'name' ? meta.name
-        : f.key === 'email' ? meta.email
-        : f.key === 'phone' ? meta.phone
-        : f.key === 'first_name' ? meta.first_name
-        : f.key === 'last_name' ? meta.last_name
-        : f.key === 'status' ? meta.status
-        : f.key === 'remarks' ? meta.remarks
-        : f.key === 'supplier' ? (meta.supplier_id ? q.get('SELECT name FROM suppliers WHERE id = ?', meta.supplier_id)?.name : null)
-        : null;
-    } else {
-      const row = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', id, f.id);
-      values[f.key] = row ? row.value : null;
-    }
-  }
-  const project = q.get('SELECT * FROM projects WHERE id = ?', meta.project_id);
-  const sub = q.get('SELECT * FROM subprojects WHERE id = ?', meta.subproject_id);
-  const cat = q.get('SELECT * FROM categories WHERE id = ?', meta.category_id);
-  return {
-    assignmentId: meta.id,
-    employeeId: meta.employee_id,
-    projectId: meta.project_id,
-    subprojectId: meta.subproject_id,
-    categoryId: meta.category_id,
-    supplierId: meta.supplier_id,
-    projectName: project?.name,
-    subprojectName: sub?.name,
-    categoryName: cat?.name,
-    updatedAt: meta.updated_at,
-    values,
-    columns: columns.map(publicColumn),
-  };
-}
-
-const EDITABLE_CORE = new Set(['first_name', 'last_name', 'email', 'phone']);
-
 /**
  * Apply a set of field changes to an assignment.
  *  - validates per field type
@@ -351,9 +304,20 @@ const EDITABLE_CORE = new Set(['first_name', 'last_name', 'email', 'phone']);
 function updateAssignment(user, assignmentId, changes, { expectedRev = null, source = 'manual', reason = 'CRM edit' } = {}) {
   const assignment = q.get('SELECT * FROM assignments WHERE id = ?', assignmentId);
   if (!assignment) throw Object.assign(new Error('Employee record not found.'), { status: 404 });
-  assertProjectAccess(user, assignment.project_id, 'can_edit');
+  assertAssignment(user, assignmentId, 'can_edit'); // before returning any conflict snapshot
+  if (user.gigaAccess) {
+    if (Object.hasOwn(changes, 'giga_project_name')) throw denied('A supervisor cannot change the Giga project of a record.');
+    // Identity is shared by every placement. An edit here must not change a
+    // person in another Giga project through a second, visible placement.
+    if (Object.keys(changes).some((k) => MAPPED[k]?.table === 'e')) {
+      const acl = assignmentScope(user);
+      if (q.get(`SELECT 1 FROM assignments a WHERE a.employee_id = ? AND NOT (${acl.sql}) LIMIT 1`, assignment.employee_id, ...acl.args)) {
+        throw denied('This identity is shared with another project. Ask an administrator to update it.');
+      }
+    }
+  }
 
-  const categoryColumns = schema.columnsForCategory(assignment.category_id);
+  const categoryColumns = schema.columnsForCategory(assignment.category_id, user);
   const byKey = new Map(categoryColumns.map((c) => [c.key, c]));
   const employee = q.get('SELECT * FROM employees WHERE id = ?', assignment.employee_id);
 
@@ -366,7 +330,7 @@ function updateAssignment(user, assignmentId, changes, { expectedRev = null, sou
       const err = new Error('This record was changed by someone else. Review the latest values and retry.');
       err.status = 409;
       err.code = 'STALE';
-      err.current = getAssignment(assignmentId);
+      err.current = getAssignment(user, assignmentId);
       throw err;
     }
   }
@@ -378,7 +342,7 @@ function updateAssignment(user, assignmentId, changes, { expectedRev = null, sou
     let assignmentTouched = false;
 
     for (const [key, rawValue] of Object.entries(changes)) {
-      const field = byKey.get(key) || schema.listFields().find((f) => f.key === key);
+      const field = byKey.get(key) || schema.listFields(user).find((f) => f.key === key);
       if (!field) { errors[key] = 'Unknown field.'; continue; }
       const configured = byKey.get(key);
       if (!user.isAdmin && configured && !configured.editable) {
@@ -486,7 +450,7 @@ function updateAssignment(user, assignmentId, changes, { expectedRev = null, sou
       if (!assignmentTouched) {
         q.run("UPDATE assignments SET updated_at = datetime('now'), updated_by = ?, rev = rev + 1 WHERE id = ?", user.id, assignmentId);
       }
-      if (!employeeTouched) {
+      if (!employeeTouched && !user.gigaAccess) {
         q.run(`UPDATE employees SET updated_at = datetime('now') WHERE id = ?`, employee.id);
       }
     }
@@ -495,11 +459,11 @@ function updateAssignment(user, assignmentId, changes, { expectedRev = null, sou
       const err = new Error('Some values could not be saved.');
       err.status = 422;
       err.errors = errors;
-      err.current = getAssignment(assignmentId);
+      err.current = getAssignment(user, assignmentId);
       throw err;
     }
 
-    return getAssignment(assignmentId);
+    return getAssignment(user, assignmentId);
   });
 }
 
@@ -629,7 +593,12 @@ function createPerson(user, payload) {
   const name = String(payload.name || `${first} ${last}`.trim()).trim();
   if (!emp_code || !String(emp_code).trim()) throw Object.assign(new Error('Employee ID is required.'), { status: 422 });
   if (!name) throw Object.assign(new Error('First Name and Last Name are required.'), { status: 422 });
-  assertProjectAccess(user, project_id, 'can_edit');
+  if (user.gigaAccess) {
+    assertGigaPlacement(user, { projectId: project_id, subprojectId: subproject_id, categoryId: category_id });
+    if (!user.gigaAccess.name || (payload.giga_project_name !== undefined && payload.giga_project_name !== user.gigaAccess.name)) {
+      throw denied();
+    }
+  } else assertProjectAccess(user, project_id, 'can_edit');
   const sub = q.get('SELECT * FROM subprojects WHERE id = ?', Number(subproject_id));
   if (!sub || sub.project_id !== Number(project_id)) throw Object.assign(new Error('Subproject does not belong to the selected project.'), { status: 422 });
   const cat = q.get('SELECT * FROM categories WHERE id = ?', Number(category_id));
@@ -638,6 +607,14 @@ function createPerson(user, payload) {
   const candidates = findCandidates(payload);
   const hardConflict = candidates.find((c) => c.confidence >= 0.85 && c.employee.emp_code.toLowerCase() !== String(emp_code).trim().toLowerCase());
   const sameId = candidates.find((c) => c.match === 'employee-id');
+  if (user.gigaAccess) {
+    // Do not claim or reveal a matching identity from another project.
+    for (const match of [sameId, hardConflict].filter(Boolean)) {
+      if (!q.get('SELECT 1 FROM giga_assignments WHERE employee_id = ? AND project_name = ? LIMIT 1', match.employee.id, user.gigaAccess.name)) {
+        throw denied('An administrator must review this employee before it can be linked.');
+      }
+    }
+  }
 
   return tx(() => {
     let employee = sameId ? sameId.employee : null;
@@ -673,6 +650,7 @@ function createPerson(user, payload) {
     let assignmentId;
     if (existingAssignment) {
       assignmentId = existingAssignment.id;
+      if (user.gigaAccess) assertAssignment(user, assignmentId);
     } else {
       const res = q.run(
         `INSERT INTO assignments (employee_id, project_id, subproject_id, category_id, status, updated_by)
@@ -684,6 +662,10 @@ function createPerson(user, payload) {
         user.id
       );
       assignmentId = Number(res.lastInsertRowid);
+      if (user.gigaAccess) {
+        q.run(`INSERT INTO assignment_values (assignment_id, field_id, value, updated_by)
+               VALUES (?, (SELECT id FROM fields WHERE key = 'giga_project_name'), ?, ?)`, assignmentId, user.gigaAccess.name, user.id);
+      }
       record({
         entity: 'assignment', entityId: assignmentId, ref: employee.emp_code, action: 'create',
         newValue: `${cat.name}`, actor: user, meta: { via: 'crm' },
@@ -709,12 +691,12 @@ function createPerson(user, payload) {
           name: hardConflict.employee.name,
           reason: hardConflict.match,
         },
-        record: getAssignment(assignmentId),
+        record: getAssignment(user, assignmentId),
       };
     }
 
     // Friendly duplicates (same employee id, new project placement) are linked, not copied.
-    return { employeeId: employee.id, assignmentId, created, needsReview: false, record: getAssignment(assignmentId) };
+    return { employeeId: employee.id, assignmentId, created, needsReview: false, record: getAssignment(user, assignmentId) };
   });
 }
 

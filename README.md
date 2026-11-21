@@ -260,30 +260,56 @@ kept: the second copy is stored under `… (2nd column)`.
 `GET /api/import/template` returns the same blank workbook
 (requires `import.data`).
 
-### Access control
+### Assign or change one Giga project
 
-* **Roles** — `admin` (everything) and `supervisor`.
-* **Capabilities** — `project.view`, `employee.edit`, `employee.create`,
-  `crm.use`, `export.data`, `import.data`, `schema.manage`, `users.manage`,
-  `audit.view`.
-* **Project grants** — each supervisor has per-project `can_edit`, `can_export`
-  and `can_crm` flags.
+1. Sign in as an **Administrator**. Open **Administration → Users & access → New user**.
+2. Enter the person's name, email and temporary password. Leave **Role** as
+   **Supervisor**. In **Giga Project Name**, choose one name from the workbook
+   rows already imported into the app. If there are no names, import a workbook
+   with this column filled in; there is no separate project list to maintain.
+3. A selected project gives read access. Check **Edit employee records** for a
+   leader who updates the BC–BS fields. Add CRM, Excel export, employee creation
+   or audit permissions only if needed. Click **Create user**. Account and access
+   are saved together: an invalid project leaves no partial account behind.
+4. To change it later, find that person's row and click **Edit access**. The
+   picker shows the current selection. Choose a different name and **Save access**,
+   or choose **No project access** to keep the login and revoke workforce access.
+   The change applies on the next request, including in existing sessions. Refresh
+   an already open page to reload its navigation and rows; no new sign-in is needed.
 
-**Users & access** is where accounts are created and removed. *New user* takes
-the name, email, role and temporary password **and** the project grants and
-capabilities in the same dialog — `POST /api/users` accepts `projects` and
-`capabilities` in the same transaction. If a grant fails, no account is created:
-correct it and retry with the same email. Supervisors see only the projects you
-grant. To remove someone, click **Delete** beside their name and confirm
-**Delete user**. Deletion revokes sessions and removes project grants and
-capabilities. Their employees, edits, import history and approvals stay in the
-database; the audit trail and employee export keep their past attribution. You
-cannot delete your own account or the last active administrator.
+**Example:** if XYZ has *Giga North*, XYZ sees only assignments whose **Giga
+Project Name** is *Giga North*, even when *Giga South* or blank rows share the
+same hierarchy project, subproject and category. A matching assignment in another
+placement is still in scope. Clearing Directory filters cannot broaden the grant.
+Names are matched exactly after trimming outside whitespace. A rename or removal
+of the last matching workbook value gives no rows, **not** access to another Giga.
+A supervisor cannot change the Giga name on a row to move it out of scope.
 
-Every read and write re-checks the grant on the server
-(`assertProjectAccess`, `visibleProjectIds`). The UI hides controls as a
-courtesy; the API is the enforcement point, and the tests assert 403s for each
-verb on foreign projects.
+**Upgrading:** existing hierarchy-based accounts keep their grants until you
+choose a Giga project (or **No project access**) in their editor. That choice
+**replaces**, rather than adds to, their old grants. Administrators retain full
+access. Master workbook import and global configuration are not available to
+Giga-scoped users. The leader update form is unchanged: no Giga field is added.
+
+**API:** admin-only `GET /api/users` includes `gigaProjectNames` (all distinct,
+nonblank live names) and each supervisor's `gigaAccess`. Send `gigaProjectName`
+plus `capabilities` with `POST /api/users` or `PUT /api/users/:id/access`.
+For example, given an imported name `Giga North`:
+
+```json
+{"gigaProjectName":"Giga North","capabilities":{"employee.edit":true,"export.data":false}}
+```
+
+Send `{"gigaProjectName":null}` to revoke. The server validates the name and
+uses a single grant per user (`user_giga_access`) and a live SQL view over the
+existing field (`giga_assignments`); no workforce data is copied. Reads, edits,
+counts, CRM, assistant responses, audit and in-app Excel exports are restricted
+server-side, before filtering or pagination. New assignments, when permitted,
+inherit the user's Giga name.
+
+**Delete** beside a user's name still asks for confirmation. Deletion revokes
+sessions, grants and capabilities; employees, edits, import history, approvals,
+and past attribution remain. You cannot delete yourself or the last active admin.
 
 ### Concurrency and audit
 
@@ -313,7 +339,7 @@ verb on foreign projects.
 | `GET`/`PUT` | `/api/categories/:id/columns` | Read / write the column layout |
 | `GET`/`POST`/`PATCH` | `/api/projects`, `/api/subprojects`, `/api/categories` | Hierarchy |
 | `GET`/`POST`/`PATCH` | `/api/suppliers`, `/api/groups`, `/api/fields`, `/api/users` | Configuration |
-| `PUT` | `/api/users/:id/access` | Project grants + capabilities |
+| `PUT` | `/api/users/:id/access` | Replace or revoke Giga project access; update capabilities |
 | `DELETE` | `/api/users/:id` | Remove an account (not yourself, not the last admin) |
 | `GET` | `/api/duplicates`, `POST /api/duplicates/:id/resolve` | Review queue |
 | `GET` | `/api/export` | Excel snapshot (scope-aware) |

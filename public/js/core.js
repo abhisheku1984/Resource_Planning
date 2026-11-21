@@ -232,7 +232,10 @@ export async function downloadWorkbook(path, query, fallbackName = 'download.xls
 
 export async function downloadExport(query) {
   const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(query || {})) if (v !== null && v !== undefined && v !== '') params.set(k, v);
+  for (const [k, v] of Object.entries(query || {})) {
+    if (Array.isArray(v)) { for (const value of v) params.append(`${k}[]`, value); }
+    else if (v !== null && v !== undefined && v !== '') params.set(k, v);
+  }
   const res = await fetch(`/api/export?${params}`, {
     headers: { Authorization: `Bearer ${state.token}` },
   });

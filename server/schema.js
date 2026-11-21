@@ -2,6 +2,7 @@
 const { q, tx, remember } = require('./db');
 const { record } = require('./audit');
 const fielddefs = require('./fielddefs');
+const { assignmentScope, suppliersFor } = require('./access');
 
 /**
  * Field catalogue + dynamic column engine.
@@ -100,13 +101,14 @@ function seedFields() {
   }
 }
 
-function supplierOptions() {
-  return q.all('SELECT name FROM suppliers WHERE active = 1 ORDER BY name').map((r) => r.name);
+function supplierOptions(user) {
+  return suppliersFor(user, true).map((r) => r.name);
 }
 
-function parseOptions(field) {
+function parseOptions(field, user) {
+  if (user?.gigaAccess && field.key === 'supplier') return supplierOptions(user);
   if (!field.options) return null;
-  if (field.options === 'SUPPLIERS') return supplierOptions();
+  if (field.options === 'SUPPLIERS') return supplierOptions(user);
   try {
     const parsed = JSON.parse(field.options);
     return Array.isArray(parsed) ? parsed : null;
@@ -115,13 +117,13 @@ function parseOptions(field) {
   }
 }
 
-function fieldDef(row) {
+function fieldDef(row, user) {
   return {
     id: row.id,
     key: row.key,
     label: row.label,
     type: row.type,
-    options: parseOptions(row),
+    options: parseOptions(row, user),
     help: row.help,
     group: row.group_name || null,
     core: !!row.core,
@@ -130,8 +132,9 @@ function fieldDef(row) {
   };
 }
 
-function listFields() {
-  return remember('fields:all', () => q.all('SELECT * FROM fields ORDER BY id').map(fieldDef));
+function listFields(user) {
+  return remember(`fields:${user?.gigaAccess ? user.id : 'all'}`, () =>
+    q.all('SELECT * FROM fields ORDER BY id').map((row) => fieldDef(row, user)));
 }
 
 /** Field catalogue grouped for the "show columns" picker. */
@@ -147,14 +150,14 @@ function groupedFields() {
 
 /** The editor and employee table must agree on visibility and order, including
  *  catalogue fields that do not have a category_fields row yet. */
-function categoryLayout(categoryId) {
+function categoryLayout(categoryId, user) {
   const config = new Map(q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId).map((r) => [r.field_id, r]));
-  return listFields().map((f) => {
+  return listFields(user).map((f) => {
     const c = config.get(f.id);
     return {
       ...f,
       visible: c ? !!c.visible : !!(f.core || f.filterable || f.submit || f.key === 'remarks'),
-      editable: c ? !!c.editable : true,
+      editable: user?.gigaAccess && f.key === 'giga_project_name' ? false : c ? !!c.editable : true,
       required: !!c?.required,
       filterable: c ? !!c.filterable : !!f.filterable,
       submit_field: c ? !!c.submit_field : !!f.submit,
@@ -166,8 +169,8 @@ function categoryLayout(categoryId) {
   }).sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
 }
 
-function columnsForCategory(categoryId) {
-  return remember(`cols:${categoryId}`, () => categoryLayout(categoryId).filter((f) => f.visible)
+function columnsForCategory(categoryId, user) {
+  return remember(`cols:${categoryId}:${user?.gigaAccess ? user.id : 'all'}`, () => categoryLayout(categoryId, user).filter((f) => f.visible)
     .map(({ sort_order, submit_field, configured, canHide, ...f }) => ({ ...f, sort: sort_order, submitField: submit_field })));
 }
 
@@ -219,14 +222,14 @@ function hierarchy(user) {
         ...subs.map((s) => s.id)
       )
     : [];
-  const counts = new Map(
-    q.all(
-      `SELECT subproject_id, COUNT(*) c FROM assignments WHERE active = 1 AND subproject_id IN (${subs
-        .map(() => '?')
-        .join(',')}) GROUP BY subproject_id`,
-      ...(subs.length ? subs.map((s) => s.id) : [0])
-    ).map((r) => [r.subproject_id, r.c])
-  );
+  const acl = assignmentScope(user);
+  const counts = new Map();
+  const visibleCategories = new Set();
+  for (const r of q.all(`SELECT a.subproject_id, a.category_id, COUNT(*) c FROM assignments a
+                          WHERE a.active = 1 AND ${acl.sql} GROUP BY a.subproject_id, a.category_id`, ...acl.args)) {
+    counts.set(r.subproject_id, (counts.get(r.subproject_id) || 0) + r.c);
+    visibleCategories.add(r.category_id);
+  }
   return projects.map((p) => ({
     id: p.id,
     code: p.code,
@@ -237,14 +240,14 @@ function hierarchy(user) {
     start_date: p.start_date,
     grant: user.isAdmin ? { can_edit: 1, can_export: 1, can_crm: 1 } : user.projects.find((x) => x.id === p.id),
     subprojects: subs
-      .filter((s) => s.project_id === p.id)
+      .filter((s) => s.project_id === p.id && (!user.gigaAccess || counts.has(s.id)))
       .map((s) => ({
         id: s.id,
         code: s.code,
         name: s.name,
         description: s.description,
         employeeCount: counts.get(s.id) || 0,
-        categories: cats.filter((c) => c.subproject_id === s.id).map((c) => ({
+        categories: cats.filter((c) => c.subproject_id === s.id && (!user.gigaAccess || visibleCategories.has(c.id))).map((c) => ({
           id: c.id,
           code: c.code,
           name: c.name,

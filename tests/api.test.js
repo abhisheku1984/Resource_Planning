@@ -1102,3 +1102,186 @@ test('a failed project grant leaves no partial account; creation can be retried 
   assert.equal(me.name, 'New leader');
   assert.equal(me.projects[0].can_export, 0);
 });
+
+test('Giga Project Name is an assignment-level grant, not a removable Directory filter', async (t) => {
+  const adminToken = await login('admin@resourceplanning.io', 'Admin@12345');
+  const admin = client(adminToken);
+  const A = "Orion's Giga %_|Alpha", B = `${A} East`;
+  const email = 'xyz@example.test', password = 'ExampleGiga123';
+  const places = q.all(`SELECT c.id AS category_id, c.subproject_id, s.project_id FROM categories c
+                         JOIN subprojects s ON s.id = c.subproject_id ORDER BY c.id`);
+  const p = places[0], p2 = places.find((v) => v.project_id !== p.project_id);
+  const sibling = places.find((v) => v.project_id === p.project_id && v.category_id !== p.category_id);
+  const field = q.get("SELECT id FROM fields WHERE key = 'giga_project_name'").id;
+  const tag = (id, name) => q.run(`INSERT INTO assignment_values (assignment_id, field_id, value) VALUES (?, ?, ?)
+    ON CONFLICT(assignment_id, field_id) DO UPDATE SET value=excluded.value`, id, field, name);
+  const add = async (code, place, giga) => {
+    const r = await admin('POST', '/employees', { emp_code: code, name: `Person ${code}`, ...place });
+    assert.equal(r.status, 200);
+    tag(r.data.assignmentId, giga);
+    return r.data;
+  };
+  const one = await add('GIG-88001', p, A);
+  const two = await add('GIG-88002', p2, `\u00a0 ${A}\u2003`); // same workbook name after trimming
+  const other = await add('GIG-88003', p, B); // same parent, subproject AND category as one
+  const sharedOther = await add('GIG-88001', sibling, B); // CRM must hide this second placement
+  const blank = await add('GIG-88004', p, ' \t');
+  const expected = [one.assignmentId, two.assignmentId].sort((a, b) => a-b);
+  const caps = { 'employee.edit': true, 'employee.create': true, 'crm.use': true, 'export.data': true, 'audit.view': true };
+
+  const list = await admin('GET', '/users');
+  assert.equal(list.data.gigaProjectNames.filter((n) => n === A).length, 1);
+  assert.ok(list.data.gigaProjectNames.includes(B));
+  assert.ok(list.data.gigaProjectNames.every((n) => n && n === n.trim()));
+  const account = { name: 'XYZ', email, password, capabilities: caps };
+  assert.equal((await admin('POST', '/users', { ...account, gigaProjectName: `${A}x` })).status, 422);
+  assert.equal((await admin('POST', '/users', { ...account, role: 'admin', gigaProjectName: A })).status, 422);
+  const made = await admin('POST', '/users', { ...account, gigaProjectName: A });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const accessPath = `/users/${made.data.user.id}/access`;
+  const token = await login(email, password), xyz = client(token);
+  const ids = async (suffix = '') => {
+    const r = await xyz('GET', '/employees?pageSize=200' + suffix);
+    assert.equal(r.status, 200, JSON.stringify(r.data.error));
+    assert.equal(r.data.total, r.data.rows.length);
+    return r.data.rows.map((row) => row.assignmentId).sort((a, b) => a-b);
+  };
+
+  await t.test('workspace, Directory, standalone counts and dashboard include only matching placements', async () => {
+    const boot = (await xyz('GET', '/bootstrap')).data;
+    assert.equal(boot.user.gigaAccess.name, A);
+    assert.equal(boot.totals.employees, 2);
+    assert.equal(boot.totals.assignments, 2);
+    assert.deepEqual(boot.tree.flatMap((project) => project.subprojects.flatMap((s) => s.categories.map((c) => c.id))).sort((x,y) => x-y),
+      [p.category_id, p2.category_id].sort((x,y) => x-y));
+    assert.deepEqual(await ids(), expected);
+    assert.deepEqual(await ids(`&categoryId=${p.category_id}`), [one.assignmentId]);
+    assert.deepEqual(await ids('&search=GIG-88003'), []);
+    assert.deepEqual(await ids(`&f_giga_project_name[]=${encodeURIComponent(B)}`), []);
+    const facets = (await xyz('GET', '/employees/facets')).data.facets;
+    const giga = facets.find((f) => f.key === 'giga_project_name');
+    assert.ok(giga.values.every((v) => v.value.trim() === A));
+    assert.equal(giga.total, 2);
+    for (const v of giga.values) assert.equal((await ids(`&f_giga_project_name[]=${encodeURIComponent(v.value)}`)).length, v.count);
+    assert.deepEqual(boot.suppliers, []);
+    assert.deepEqual(boot.fields.find((f) => f.key === 'supplier').options, []);
+    const dash = (await xyz('GET', '/dashboard')).data;
+    for (const key of ['byProject','byStatus','bySupplier','byCategory']) assert.equal(dash[key].reduce((n,r) => n+r.c,0), 2, key);
+    assert.ok(dash.attention.every((r) => expected.includes(r.assignment_id)));
+    assert.equal((await xyz('GET', `/categories/${sibling.category_id}/columns`)).status, 403);
+  });
+
+  await t.test('opening, searching, editing, creating and history cannot cross the grant', async () => {
+    const search = (await xyz('GET','/people?q=GIG-88')).data.people;
+    assert.equal(search.length, 2);
+    assert.equal(search.find((r) => r.id === one.employeeId).placements, 1);
+    assert.deepEqual((await xyz('GET', `/people/${one.employeeId}`)).data.placements.map((r) => r.assignment_id), [one.assignmentId]);
+    assert.equal((await xyz('GET', `/people/${other.employeeId}`)).status, 403);
+    for (const row of [other, sharedOther, blank]) {
+      const path = `/employees/${row.assignmentId}`;
+      assert.equal((await xyz('GET', path)).status, 403);
+      assert.equal((await xyz('GET', `${path}/history`)).status, 403);
+      for (const [verb, url] of [['PATCH', path], ['POST', `${path}/submit`]]) {
+        const denied = await xyz(verb, url, { changes: { leader_input_this_week: 'no' }, rev: -1 });
+        assert.equal(denied.status, 403);
+        assert.ok(!denied.data.current, 'no out-of-scope conflict snapshot');
+      }
+    }
+    const item = `/employees/${one.assignmentId}`;
+    assert.equal((await xyz('PATCH', item, { changes: { giga_project_name: B } })).status, 403);
+    const foreignSupplier = q.get('SELECT id, name FROM suppliers LIMIT 1');
+    const supplierEdit = await xyz('PATCH', item, { changes: { supplier: foreignSupplier.name } });
+    assert.ok([403, 422].includes(supplierEdit.status));
+    assert.equal(q.get('SELECT supplier_id FROM assignments WHERE id = ?', one.assignmentId).supplier_id, null);
+    assert.equal((await xyz('PATCH', item, { changes: { email: 'shared@example.test' } })).status, 403);
+    assert.equal((await xyz('POST', `${item}/submit`, { changes: { leader_input_this_week: 'Ready for review' } })).status, 200);
+    assert.equal((await xyz('POST','/employees',{ ...p, emp_code: 'GIG-88003', name: 'Other person' })).status, 403);
+    assert.equal((await xyz('POST','/employees',{ ...sibling, emp_code: 'GIG-88001', name: 'Same person' })).status, 403);
+    assert.equal((await xyz('POST','/employees',{ ...p, emp_code: 'GIG-88005', name: 'New person', giga_project_name: B })).status, 403);
+    // New rows created in an allowed placement inherit the server-side grant.
+    const added = await xyz('POST','/employees',{ ...p, emp_code: 'GIG-88005', name: 'New person' });
+    assert.equal(added.status, 200, JSON.stringify(added.data.error));
+    assert.equal(added.data.record.values.giga_project_name, A);
+    expected.push(added.data.assignmentId);
+    assert.deepEqual(await ids(), expected);
+  });
+
+  await t.test('reports, assistant and export cannot reveal another Giga project', async () => {
+    const ask = async (message) => (await xyz('POST','/agent/ask',{ message })).data;
+    assert.equal((await ask('How many people in my projects?')).data.count, expected.length);
+    assert.ok(!(await ask('Set GIG-88003 to hard block')).proposal);
+    const hiddenProposal = await admin('POST','/agent/ask',{ message: 'Set GIG-88003 to hard block' });
+    assert.ok(hiddenProposal.data.proposal);
+    const proposals = (await xyz('GET','/agent/proposals')).data;
+    assert.ok(proposals.proposals.every((r) => expected.includes(r.assignmentId)));
+    assert.equal(proposals.pending, 0);
+    for (const entity of ['assignment','employee','user']) {
+      const rows = (await xyz('GET','/audit?entity=' + entity)).data.activity;
+      assert.ok(rows.every((r) => r.entity === 'assignment' ? expected.includes(r.entity_id) : r.entity === 'employee' && r.entity_id !== other.employeeId));
+    }
+    assert.deepEqual((await xyz('GET',`/audit/assignment/${other.assignmentId}`)).data.history, []);
+    assert.deepEqual((await xyz('GET','/groups')).data.groups, []);
+    assert.deepEqual((await xyz('GET','/imports')).data.imports, []);
+    assert.equal((await xyz('POST','/import',{})).status, 403);
+    assert.equal((await xyz('GET','/users')).status, 403);
+    assert.equal((await xyz('PUT',accessPath,{ gigaProjectName: B })).status, 403);
+    const res = await fetch(`${base}/api/export`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(res.status, 200);
+    assert.equal(Number(res.headers.get('X-Export-Rows')), expected.length);
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
+    const ws = wb.getWorksheet('Employees'), gi = ws.getRow(1).values.indexOf('Giga Project Name');
+    assert.ok(gi > 0);
+    ws.eachRow((row, i) => { if (i > 1) assert.equal(String(row.getCell(gi).value).trim(), A); });
+    const foreignFilter = await fetch(`${base}/api/export?f_giga_project_name[]=${encodeURIComponent(B)}`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(foreignFilter.status, 200);
+    assert.equal(foreignFilter.headers.get('X-Export-Rows'), '0');
+    await foreignFilter.arrayBuffer();
+  });
+
+  await t.test('Edit access replaces the grant immediately; disappearing names and revocation fail closed', async () => {
+    for (const invalid of [{ gigaProjectName: 'invented' }, { gigaProjectName: [A,B] }, { projects: [{ project_id: p.project_id }] },
+      { gigaProjectName: B, capabilities: { 'import.data': true } }]) {
+      assert.equal((await admin('PUT',accessPath,invalid)).status, 422);
+      assert.deepEqual(await ids(), expected, 'no partial change after a failed edit');
+    }
+    assert.equal((await admin('PUT',accessPath,{ gigaProjectName: B, capabilities: { 'employee.edit': false } })).status, 200);
+    assert.equal((await xyz('GET','/auth/me')).data.user.gigaAccess.name, B, 'same signed-in session, no re-login');
+    assert.deepEqual(await ids(), [other.assignmentId, sharedOther.assignmentId].sort((a,b) => a-b));
+    assert.equal((await xyz('GET', `/employees/${one.assignmentId}`)).status, 403);
+    assert.equal((await xyz('PATCH', `/employees/${other.assignmentId}`, { changes: { remarks: 'no' } })).status, 403);
+    for (const row of [other, sharedOther]) tag(row.assignmentId, 'A different Giga project');
+    assert.deepEqual(await ids(), []);
+    assert.equal((await xyz('GET','/projects')).data.projects.length, 0);
+    tag(blank.assignmentId, B); // subsequent imports/reclassifications change membership without changing the grant
+    assert.deepEqual(await ids(), [blank.assignmentId]);
+    assert.equal((await admin('PUT',accessPath,{ gigaProjectName: null })).status, 200);
+    assert.deepEqual(await ids(), []);
+    assert.equal((await xyz('GET','/bootstrap')).data.totals.assignments, 0);
+    assert.equal((await xyz('GET', `/employees/${blank.assignmentId}`)).status, 403);
+    assert.equal((await xyz('GET','/export')).status, 403);
+    assert.deepEqual((await admin('GET','/users')).data.users.find((u)=>u.email===email).gigaAccess, { name: null });
+  });
+
+  await t.test('converting a hierarchy account replaces its grants, not the account or other users’ access', async () => {
+    const legacy = await admin('POST', '/users', {
+      name: 'Former uploader', email: 'old-grants@example.test', password,
+      projects: [{ project_id: p.project_id }], capabilities: { 'import.data': true, 'employee.edit': true },
+    });
+    const id = legacy.data.user.id;
+    q.run('INSERT INTO user_subprojects (user_id, subproject_id) VALUES (?, ?)', id, p.subproject_id);
+    const session = client(await login('old-grants@example.test', password));
+    assert.equal((await session('GET', '/auth/me')).data.user.gigaAccess, null);
+    assert.equal((await session('GET', `/employees/${blank.assignmentId}`)).status, 200);
+    assert.equal((await admin('PUT', `/users/${id}/access`, { gigaProjectName: A })).status, 200);
+    assert.equal((await session('GET', `/employees/${blank.assignmentId}`)).status, 403);
+    assert.equal((await session('GET', `/employees/${two.assignmentId}`)).status, 200);
+    assert.equal((await session('GET', '/auth/me')).data.user.capabilities['import.data'], false);
+    assert.equal(q.get('SELECT count(*) c FROM user_projects WHERE user_id = ?', id).c, 0);
+    assert.equal(q.get('SELECT count(*) c FROM user_subprojects WHERE user_id = ?', id).c, 0);
+    assert.deepEqual(await ids(), [], 'XYZ remains revoked');
+    assert.equal((await admin('DELETE', `/users/${id}`)).status, 200);
+    assert.equal((await session('GET', '/auth/me')).status, 401);
+    assert.equal(q.get('SELECT count(*) c FROM user_giga_access WHERE user_id = ?', id).c, 0);
+    assert.equal((await admin('GET', `/employees/${one.assignmentId}`)).status, 200);
+  });
+});

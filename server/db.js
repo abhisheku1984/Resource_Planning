@@ -26,6 +26,9 @@ db.exec(`
   PRAGMA busy_timeout = 5000;
 `);
 
+// Match the whitespace removed by JS String.trim() at import/grant time,
+// including non-breaking spaces pasted into an Excel cell.
+const GIGA_NAME = 'trim(av.value, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))';
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,6 +238,23 @@ CREATE TABLE IF NOT EXISTS user_projects (
   can_crm    INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (user_id, project_id)
 );
+
+-- No grant row = existing hierarchy-based account. A grant row with a NULL
+-- name = explicitly revoked; it must never fall back to hierarchy access.
+CREATE TABLE IF NOT EXISTS user_giga_access (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  project_name TEXT CHECK (project_name IS NULL OR length(project_name) > 0)
+);
+
+-- A live view of the workbook field, not a copy of assignments or a catalogue
+-- to maintain. An import or an authorized reclassification takes effect at once.
+CREATE VIEW IF NOT EXISTS giga_assignments AS
+  SELECT a.id AS assignment_id, a.employee_id, a.project_id, a.subproject_id, a.category_id,
+         ${GIGA_NAME} AS project_name
+    FROM assignment_values av JOIN fields f ON f.id = av.field_id
+    JOIN assignments a ON a.id = av.assignment_id JOIN employees e ON e.id = a.employee_id
+   WHERE f.key = 'giga_project_name' AND a.active = 1 AND e.active = 1
+     AND ${GIGA_NAME} <> '';
 
 CREATE TABLE IF NOT EXISTS user_subprojects (
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

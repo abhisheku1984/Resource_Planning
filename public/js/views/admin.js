@@ -390,11 +390,16 @@ async function renderDataModel(host, initialCategory = null) {
 /* ================================================================= access */
 async function renderAccess(host) {
   mount(host, h('div', { class: 'card' }, h('div', { class: 'card-body row' }, spinner(), h('span', { class: 'muted' }, 'Loading users…'))));
-  let users; let capabilities;
+  let users; let capabilities; let gigaNames; let gigaCapabilities;
   try {
     const res = await api('/users');
     users = res.users;
     capabilities = res.capabilities;
+    gigaNames = res.gigaProjectNames;
+    gigaCapabilities = res.gigaCapabilities;
+    if (!Array.isArray(gigaNames) || !Array.isArray(gigaCapabilities)) {
+      throw new Error('Restart the application server after updating to load Giga project access.');
+    }
   } catch (err) {
     mount(host, emptyState({ title: 'Could not load users', message: err.message, iconName: 'alert' }));
     return;
@@ -415,7 +420,7 @@ async function renderAccess(host) {
 
   const table = h('table', { class: 'data' },
     h('thead', null, h('tr', null,
-      h('th', null, 'User'), h('th', null, 'Role'), h('th', null, 'Project access'), h('th', null, 'Capabilities'), h('th', null, ''),
+      h('th', null, 'User'), h('th', null, 'Role'), h('th', null, 'Project scope'), h('th', null, 'Capabilities'), h('th', null, ''),
     )),
     h('tbody', null, ...users.map((u) => h('tr', null,
       h('td', null, h('div', { class: 'row', style: { gap: '9px' } },
@@ -428,7 +433,10 @@ async function renderAccess(host) {
       h('td', null, h('span', { class: `badge ${u.role === 'admin' ? 'badge-brand' : 'badge-neutral'}` }, u.role === 'admin' ? 'Administrator' : 'Supervisor')),
       h('td', null, u.role === 'admin'
         ? h('span', { class: 'badge badge-info' }, `All ${u.projects.length} projects`)
-        : h('div', { class: 'row', style: { gap: '3px', flexWrap: 'wrap', maxWidth: '230px' } },
+        : u.gigaAccess
+          ? h('span', { class: 'badge badge-info' }, u.gigaAccess.name ? `Giga: ${u.gigaAccess.name}` : 'No project access')
+          : h('div', { class: 'row', style: { gap: '3px', flexWrap: 'wrap', maxWidth: '230px' } },
+          u.projects.length ? h('span', { class: 'subtle' }, 'Hierarchy:') : null,
           ...(u.projects.length ? u.projects.map((p) => h('span', {
             class: `badge ${p.can_edit ? 'badge-success' : 'badge-warn'}`, style: { height: '19px', fontSize: '10.5px' },
             title: `${p.can_edit ? 'Edit' : 'Read only'} · ${p.can_export ? 'Export' : 'No export'} · ${p.can_crm ? 'CRM' : 'No CRM'}`,
@@ -438,7 +446,9 @@ async function renderAccess(host) {
         ? h('span', { class: 'badge badge-brand' }, 'All capabilities')
         : h('span', { class: 'badge badge-outline' }, `${Object.values(u.capabilities).filter(Boolean).length} granted`)),
       h('td', null, h('div', { class: 'row', style: { gap: '4px', justifyContent: 'flex-end' } },
-        h('button', { class: 'btn btn-ghost btn-xs', onclick: () => openEditor(u) }, icon('sliders', 12), 'Access'),
+        h('button', { class: 'btn btn-ghost btn-xs', disabled: u.role === 'admin',
+          title: u.role === 'admin' ? 'Administrators have unrestricted access' : `Edit access for ${u.name}`,
+          onclick: () => openEditor(u) }, icon('edit', 12), 'Edit access'),
         u.id === state.user.id
           ? h('span', { class: 'subtle', title: 'You cannot delete your own account.' }, 'Your account')
           : h('button', { class: 'btn btn-ghost btn-xs', onclick: () => deleteUser(u) }, icon('trash', 12), 'Delete'),
@@ -448,12 +458,12 @@ async function renderAccess(host) {
 
   mount(host, h('div', null,
     h('div', { class: 'note', style: { marginBottom: '14px' } }, icon('shield', 15),
-      h('span', null, 'Every restriction here is enforced by the backend. Hiding a control in the UI never substitutes for a server-side check.')),
+      h('span', null, 'Assign a supervisor one Giga Project Name from the workbook. Use Edit access to change or revoke it.')),
     h('div', { class: 'card' },
       h('div', { class: 'card-head' },
         h('div', null,
           h('div', { class: 'card-title' }, icon('users', 15), 'Users & access control', h('span', { class: 'count-pill' }, users.length)),
-          h('div', { class: 'card-sub' }, 'Project grants and capability matrix per person.'),
+          h('div', { class: 'card-sub' }, 'Project scope and permissions for each account.'),
         ),
         h('button', { class: 'btn btn-sm btn-primary', onclick: newUser }, icon('plus', 14), 'New user'),
       ),
@@ -461,15 +471,26 @@ async function renderAccess(host) {
     ),
   ));
 
-  /**
-   * The project-grant and capability controls, shared by the "edit access"
-   * dialog and the "new user" dialog so both offer exactly the same choices.
-   * `grants` is a Map keyed by project id, `caps` a plain object keyed by
-   * capability; both are mutated in place as the boxes are ticked.
-   */
-  function buildAccessControls(grants, caps) {
+  function buildAccessControls(user = null) {
+    const grants = new Map((user?.projects || []).map((p) => [p.project_id, { ...p }]));
+    const caps = { ...user?.capabilities };
+    const existing = user?.gigaAccess;
+    const legacy = user && !existing;
     let disabled = false;
-
+    let choice = existing ? (existing.name ? `g:${existing.name}` : 'none') : legacy ? 'legacy' : '';
+    // Prefix real names so workbook text such as "none" is never a policy flag.
+    const picker = h('select', { class: 'select', onchange: () => { choice = picker.value; paint(); } },
+      h('option', { value: '', disabled: true }, 'Choose a Giga project…'),
+      ...(legacy ? [h('option', { value: 'legacy' }, 'Keep hierarchy-based access')] : []),
+      h('option', { value: 'none' }, 'No project access'),
+      ...gigaNames.map((name) => h('option', { value: `g:${name}` }, name)),
+      existing?.name && !gigaNames.includes(existing.name)
+        ? h('option', { value: `g:${existing.name}` }, `${existing.name} (no current rows)`) : null,
+    );
+    picker.value = choice;
+    const hint = h('div', { class: 'field-help' });
+    const hierarchyHost = h('div', { class: 'col', style: { gap: '4px' } });
+    const grantHost = h('div', { class: 'col', style: { gap: '7px' } }, field('Giga Project Name', picker), hint, hierarchyHost);
     const projectRows = state.tree.map((p) => {
       const g = grants.get(p.id);
       const cb = h('input', { type: 'checkbox', 'aria-label': `Grant access to ${p.name}`, checked: !!g, onchange: () => {
@@ -479,10 +500,9 @@ async function renderAccess(host) {
       } });
       return { p, cb };
     });
-    const grantHost = h('div', { class: 'col', style: { gap: '4px' } });
 
     function paintGrants() {
-      mount(grantHost, ...projectRows.map(({ p, cb }) => {
+      mount(hierarchyHost, ...projectRows.map(({ p, cb }) => {
         const g = grants.get(p.id);
         cb.disabled = disabled;
         const mk = (label, key) => {
@@ -503,38 +523,46 @@ async function renderAccess(host) {
     }
 
     const capHost = h('div', { class: 'crm-grid' });
-    function paintCaps() {
-      mount(capHost, ...capabilities.map((cap) => {
-        const c = h('input', { type: 'checkbox', checked: !disabled && !!caps[cap], disabled,
-          onchange: () => { caps[cap] = c.checked; } });
+    function paint() {
+      const inHierarchy = choice === 'legacy';
+      const selected = choice.startsWith('g:');
+      picker.disabled = disabled;
+      hint.textContent = disabled ? 'Administrators have full access to all projects.'
+        : inHierarchy ? 'This account still uses the hierarchy grants below. Choosing a Giga project replaces them.'
+        : choice === 'none' ? 'This account can sign in but cannot see any workforce records.'
+        : !gigaNames.length ? 'No Giga project names found. Import rows with Giga Project Name filled in.'
+        : 'Only matching workbook rows are accessible. Enable Edit employee records below if this person should update them.';
+      if (inHierarchy) paintGrants(); else mount(hierarchyHost);
+      mount(capHost, ...(inHierarchy ? capabilities : gigaCapabilities).map((cap) => {
+        const fixedView = !inHierarchy && cap === 'project.view';
+        const off = !inHierarchy && !selected;
+        const c = h('input', { type: 'checkbox', checked: disabled || (!off && (fixedView || !!caps[cap])),
+          disabled: disabled || off || fixedView, onchange: () => { caps[cap] = c.checked; } });
         return h('label', { class: 'checkbox', style: { fontSize: '12px' } }, c, CAP_LABELS[cap] || cap);
       }));
     }
-
-    paintGrants();
-    paintCaps();
-
+    paint();
     return {
-      grantHost,
-      capHost,
-      setDisabled(v) { disabled = v; paintGrants(); paintCaps(); },
+      grantHost, capHost,
+      setDisabled(v) { disabled = v; paint(); },
+      payload() {
+        if (disabled) return {}; // administrator role is unrestricted by design
+        if (choice === 'legacy') return { projects: [...grants.values()], capabilities: caps };
+        if (!choice) throw new Error('Choose a Giga Project Name, or select No project access.');
+        const name = choice === 'none' ? null : choice.slice(2);
+        return { gigaProjectName: name,
+          capabilities: Object.fromEntries(gigaCapabilities.map((cap) => [cap, !!name && (cap === 'project.view' || !!caps[cap])])) };
+      },
     };
   }
 
   function openEditor(u) {
-    const grants = new Map((u.projects || []).map((p) => [p.project_id, { ...p }]));
-    const caps = { ...u.capabilities };
-    const isAdminTarget = u.role === 'admin';
-    const controls = buildAccessControls(grants, caps);
-    controls.setDisabled(isAdminTarget);
-
+    const controls = buildAccessControls(u);
     modal({
-      title: 'Access control',
+      title: 'Edit access',
       subtitle: `${u.name} · ${u.email}`,
       size: 'modal-lg',
       body: h('div', null,
-        isAdminTarget ? h('div', { class: 'note', style: { marginBottom: '12px' } }, icon('info', 15),
-          h('span', null, 'Administrators always have full access across every project.')) : null,
         h('div', { class: 'crm-section-title' }, 'Project access'),
         controls.grantHost,
         h('div', { class: 'crm-section-title' }, 'Capabilities'),
@@ -544,16 +572,19 @@ async function renderAccess(host) {
         h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
         h('button', {
           class: 'btn btn-primary',
-          onclick: async () => {
+          onclick: async (event) => {
+            const button = event.currentTarget;
+            button.disabled = true;
             try {
               await api(`/users/${u.id}/access`, {
                 method: 'PUT',
-                body: { projects: [...grants.values()], capabilities: caps },
+                body: controls.payload(),
               });
               closeModal();
               toast('Access updated', `${u.name}'s permissions are now enforced by the backend.`, 'success', 5000);
               await renderAccess(host);
             } catch (err) { toast('Could not save access', err.message, 'error'); }
+            finally { button.disabled = false; }
           },
         }, 'Save access'),
       ),
@@ -566,11 +597,7 @@ async function renderAccess(host) {
     const title = h('input', { class: 'input', placeholder: 'Job title (optional)' });
     const pw = h('input', { class: 'input', type: 'password', placeholder: 'At least 8 characters' });
 
-    // Access is chosen here, in the same step as the account, so a new user is
-    // never left able to sign in with nothing to see.
-    const grants = new Map();
-    const caps = {};
-    const controls = buildAccessControls(grants, caps);
+    const controls = buildAccessControls();
     const role = h('select', { class: 'select', onchange: () => controls.setDisabled(role.value === 'admin') },
       h('option', { value: 'supervisor' }, 'Supervisor'), h('option', { value: 'admin' }, 'Administrator'));
 
@@ -600,7 +627,7 @@ async function renderAccess(host) {
                 method: 'POST',
                 body: {
                   name: name.value, email: email.value, title: title.value, role: role.value, password: pw.value,
-                  projects: [...grants.values()], capabilities: caps,
+                  ...controls.payload(),
                 },
               });
               closeModal(); toast('User created', `${email.value} can sign in now, with the access you chose.`, 'success', 5000);
