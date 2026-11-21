@@ -273,7 +273,7 @@ function renderRoute() {
       break;
     case 'admin':
     case 'access':
-      renderAdmin(content, { ...ctx, tab: r.name === 'access' ? 'access' : (r.params.tab || 'hierarchy') });
+      renderAdmin(content, { ...ctx, tab: r.name === 'access' ? 'access' : (r.params.tab || 'columns') });
       break;
     default:
       renderDashboard(content, ctx);

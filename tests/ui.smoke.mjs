@@ -328,7 +328,14 @@ globalThis.fetch = async (url, opts = {}) => {
   if (path.startsWith('/projects')) return jsonResponse({ projects: [] });
   if (path.startsWith('/suppliers')) return jsonResponse({ suppliers: [] });
   if (path.startsWith('/groups')) return jsonResponse({ groups: [] });
-  if (path.startsWith('/users')) return jsonResponse({ users: [], capabilities: ['employee.edit'] });
+  if (path.startsWith('/users')) {
+    return jsonResponse({
+      users: [{ id: 7, email: 'lead@x.io', name: 'Test Leader', role: 'supervisor', title: 'Lead', active: 1,
+        projects: [{ project_id: 1, name: 'Nexus', can_edit: 1, can_export: 1, can_crm: 1 }],
+        capabilities: { 'employee.edit': true } }],
+      capabilities: ['employee.edit', 'crm.use', 'export.data'],
+    });
+  }
   if (path.startsWith('/fields')) return jsonResponse({ fields: [] });
   if (path.startsWith('/duplicates')) return jsonResponse({ reviews: [] });
   if (path.startsWith('/categories/') && path.includes('/columns')) return jsonResponse({ category: { id: 4, name: 'Training Cohort' }, fields: [], isConfigured: false });
@@ -763,4 +770,24 @@ test('typing in the update panel saves itself: no Submit, no export, straight to
   // the button is an optional "save now", not the only path
   assert.ok(flatten(panel.el).join(' ').includes('Save now'));
   state.crmKeys = [];
+});
+
+test('Administration shows only Data model, CRM panel and Users & access', async () => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  core.state.user = { id: 1, name: 'Ananya Deshmukh', isAdmin: true, role: 'admin', capabilities: {} };
+  core.state.tree = [{ id: 1, name: 'Nexus Digital Transformation' }];
+  const content = documentShim.createElement('div');
+  await renderAdmin(content, { tab: 'access' });
+  await new Promise((r) => setTimeout(r, 60));
+
+  const text = flatten(content).join(' ');
+  for (const label of ['Data model', 'CRM panel', 'Users & access']) {
+    assert.ok(text.includes(label), `tab present: ${label}`);
+  }
+  for (const gone of ['Projects & hierarchy', 'Suppliers', 'Employee groups']) {
+    assert.ok(!text.includes(gone), `tab removed: ${gone}`);
+  }
+  assert.ok(text.includes('New user'), 'a new user can be created from here');
+  assert.ok(text.includes('Delete'), 'each user can be deleted');
+  assert.ok(text.includes('Test Leader'), 'the user list renders');
 });

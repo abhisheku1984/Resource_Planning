@@ -979,3 +979,80 @@ test('the import template downloads with your 65 headers and round-trips', async
   assert.equal(headers.length, 68);
   assert.ok(wb.getWorksheet('How to use'), 'the template explains itself');
 });
+
+test('a new user is created with their project access and capabilities in the same step', async () => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const project = q.get('SELECT * FROM projects LIMIT 1');
+
+  const created = await admin('POST', '/users', {
+    name: 'Test Leader', email: 'test.leader@resourceplanning.io', role: 'supervisor',
+    title: 'Delivery Lead', password: 'Leader@12345',
+    projects: [{ project_id: project.id, can_edit: true, can_export: false, can_crm: true }],
+    capabilities: { 'employee.edit': true, 'crm.use': true, 'export.data': false },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.data));
+  const id = created.data.user.id;
+
+  const list = await admin('GET', '/users');
+  const me = list.data.users.find((u) => u.id === id);
+  assert.ok(me, 'the new user is listed');
+  assert.equal(me.projects.length, 1);
+  assert.equal(me.projects[0].project_id, project.id);
+  assert.equal(me.projects[0].can_export, 0);
+  assert.equal(me.capabilities['employee.edit'], true);
+  assert.equal(me.capabilities['export.data'], false);
+
+  // and they can sign in straight away, with that access
+  const token = await login('test.leader@resourceplanning.io', 'Leader@12345');
+  const boot = await client(token)('GET', '/bootstrap');
+  assert.equal(boot.status, 200);
+  assert.ok(boot.data.user.projects.some((p) => p.id === project.id), 'the grant is live at sign-in');
+
+  const gone = await admin('DELETE', `/users/${id}`);
+  assert.equal(gone.status, 200);
+  const after = await admin('GET', '/users');
+  assert.ok(!after.data.users.some((u) => u.id === id), 'the account is gone');
+  const relogin = await fetch(`${base}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'test.leader@resourceplanning.io', password: 'Leader@12345' }),
+  });
+  assert.equal(relogin.status, 401, 'a deleted user cannot sign in');
+});
+
+test('an administrator cannot delete their own account, but can delete another admin', async () => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const list = await admin('GET', '/users');
+  const self = list.data.users.find((u) => u.email === 'admin@resourceplanning.io');
+  assert.ok(self);
+
+  const selfDelete = await admin('DELETE', `/users/${self.id}`);
+  assert.equal(selfDelete.status, 422);
+  assert.match(selfDelete.data.error, /your own account/);
+
+  // a second admin can be created and deleted by the first
+  const second = await admin('POST', '/users', {
+    name: 'Second Admin', email: 'second.admin@resourceplanning.io', role: 'admin', password: 'Admin@12345',
+  });
+  assert.equal(second.status, 200);
+  const secondId = second.data.user.id;
+  assert.equal((await admin('DELETE', `/users/${secondId}`)).status, 200);
+
+  // the seeded admin is still there and still the only administrator
+  const after = await admin('GET', '/users');
+  assert.equal(after.data.users.filter((u) => u.role === 'admin').length, 1);
+});
+
+test('deleting a user keeps their import history but clears the uploader link', async () => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const created = await admin('POST', '/users', {
+    name: 'Importer', email: 'importer@resourceplanning.io', role: 'supervisor', password: 'Import@12345',
+  });
+  assert.equal(created.status, 200);
+  const id = created.data.user.id;
+  q.run('INSERT INTO imports (filename, uploaded_by, created, updated) VALUES (?, ?, ?, ?)', 'importer-daily.xlsx', id, 3, 1);
+
+  assert.equal((await admin('DELETE', `/users/${id}`)).status, 200);
+  const row = q.get('SELECT * FROM imports WHERE filename = ?', 'importer-daily.xlsx');
+  assert.ok(row, 'the import record survives');
+  assert.equal(row.uploaded_by, null, 'the uploader link is cleared');
+});

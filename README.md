@@ -117,13 +117,16 @@ employees ──< assignments >── projects / subprojects / categories / supp
   `supplier`, `remarks`) map onto real columns. Every other field stores its
   value in `assignment_values`, so administrators can invent columns at runtime.
 
-### Configurable hierarchy
+### The project tree
 
-Projects, subprojects and categories are ordinary records created in
-*Administration → Projects & hierarchy*. Because categories hang off
-subprojects (not projects), two projects can have completely different
-structures, and two subprojects of the same project can have different category
-sets — see the seeded Nexus vs. Atlas trees.
+Projects, subprojects and categories are ordinary records, and categories hang
+off subprojects (not projects), so two projects can have completely different
+structures and two subprojects of the same project can have different category
+sets — see the seeded Nexus vs. Atlas trees. The tree is **read-only in the
+UI**: there is deliberately no hierarchy editor, no supplier register and no
+employee-group register, because the workbook has no such tabs and a second
+place to maintain them is a second place to get out of date. (The API still
+accepts hierarchy writes; only the screens were removed.)
 
 ### Dynamic tables
 
@@ -244,6 +247,16 @@ kept: the second copy is stored under `… (2nd column)`.
 * **Project grants** — each supervisor has per-project `can_edit`, `can_export`
   and `can_crm` flags.
 
+**Users & access** is where accounts are created and removed. *New user* takes
+the name, email, role and temporary password **and** the project grants and
+capabilities in the same dialog — `POST /api/users` accepts `projects` and
+`capabilities` and applies them with the account, so a new user is never left
+able to sign in with nothing to see. *Delete* removes the account permanently
+(`DELETE /api/users/:id`): sessions, grants and capabilities cascade away, the
+import history is kept with its uploader link cleared, and the audit trail
+keeps the actor's name. Two guards hold — you cannot delete your own account,
+and the last administrator cannot be deleted.
+
 Every read and write re-checks the grant on the server
 (`assertProjectAccess`, `visibleProjectIds`). The UI hides controls as a
 courtesy; the API is the enforcement point, and the tests assert 403s for each
@@ -278,6 +291,7 @@ verb on foreign projects.
 | `GET`/`POST`/`PATCH` | `/api/projects`, `/api/subprojects`, `/api/categories` | Hierarchy |
 | `GET`/`POST`/`PATCH` | `/api/suppliers`, `/api/groups`, `/api/fields`, `/api/users` | Configuration |
 | `PUT` | `/api/users/:id/access` | Project grants + capabilities |
+| `DELETE` | `/api/users/:id` | Remove an account (not yourself, not the last admin) |
 | `GET` | `/api/duplicates`, `POST /api/duplicates/:id/resolve` | Review queue |
 | `GET` | `/api/export` | Excel snapshot (scope-aware) |
 | `POST` | `/api/import` | Daily dataset upsert (dry-run supported, optional `projectId`/`subprojectId`/`categoryId` placement) |

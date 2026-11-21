@@ -790,7 +790,7 @@ router.get('/users', requireAuth, requireAdmin, wrap((req, res) => {
 }));
 
 router.post('/users', requireAuth, requireAdmin, wrap((req, res) => {
-  const { email, name, role, password, title } = req.body || {};
+  const { email, name, role, password, title, projects, capabilities } = req.body || {};
   if (!email || !name) return res.status(422).json({ error: 'Name and email are required.' });
   if (q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email)) {
     return res.status(422).json({ error: 'A user with that email already exists.' });
@@ -801,8 +801,46 @@ router.post('/users', requireAuth, requireAdmin, wrap((req, res) => {
     email, name, role === 'admin' ? 'admin' : 'supervisor', title || null, auth.hashPassword(password)
   );
   const id = Number(r.lastInsertRowid);
+  // Access can be granted in the same step the account is created, so a new
+  // user is never left able to sign in with nothing to see.
+  if (Array.isArray(projects)) {
+    for (const p of projects) {
+      q.run(
+        `INSERT INTO user_projects (user_id, project_id, can_edit, can_export, can_crm) VALUES (?, ?, ?, ?, ?)`,
+        id, Number(p.project_id ?? p.id), p.can_edit === false ? 0 : 1, p.can_export === false ? 0 : 1, p.can_crm === false ? 0 : 1
+      );
+    }
+  }
+  if (capabilities && typeof capabilities === 'object') {
+    for (const [cap, allowed] of Object.entries(capabilities)) {
+      q.run(
+        `INSERT INTO user_capabilities (user_id, capability, allowed) VALUES (?, ?, ?)`,
+        id, cap, allowed ? 1 : 0
+      );
+    }
+  }
   record({ entity: 'user', entityId: id, ref: email, action: 'create', newValue: `${name} (${role})`, actor: req.user });
   res.json({ user: q.get('SELECT id, email, name, role, title FROM users WHERE id = ?', id) });
+}));
+
+router.delete('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
+  const id = Number(req.params.id);
+  const target = q.get('SELECT * FROM users WHERE id = ?', id);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (id === req.user.id) return res.status(422).json({ error: 'You cannot delete your own account.' });
+  if (target.role === 'admin') {
+    const admins = q.get("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1");
+    if (admins.n <= 1) return res.status(422).json({ error: 'At least one administrator must remain.' });
+  }
+  return tx(() => {
+    // imports.uploaded_by has no cascade; keep the import history, drop the link.
+    q.run('UPDATE imports SET uploaded_by = NULL WHERE uploaded_by = ?', id);
+    // sessions, user_projects, user_subprojects and user_capabilities all
+    // declare ON DELETE CASCADE, so they go with the account.
+    q.run('DELETE FROM users WHERE id = ?', id);
+    record({ entity: 'user', entityId: id, ref: target.email, action: 'delete', newValue: `${target.name} (${target.role})`, actor: req.user });
+    res.json({ ok: true });
+  });
 }));
 
 router.patch('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
