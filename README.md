@@ -10,10 +10,10 @@ import/export only, supervisors update records in the app.
 > compiled and there are no native modules. `package.json` pulls two pure-JS
 > packages (Express and ExcelJS).
 
-For a **new checkout** of the version on PR #3:
+For a **new checkout** of `main`:
 
 ```bash
-git clone --branch arena/558e92f0-resource-planning https://github.com/abhisheku1984/Resource_Planning.git
+git clone --branch main https://github.com/abhisheku1984/Resource_Planning.git
 cd Resource_Planning
 npm ci
 npm start         # http://localhost:4000
@@ -24,8 +24,8 @@ To **update an existing installation on Windows**, stop the running server with
 
 ```powershell
 git fetch origin
-git switch arena/558e92f0-resource-planning
-git pull --ff-only origin arena/558e92f0-resource-planning
+git switch main
+git pull --ff-only origin main
 git log -1 --oneline
 npm.cmd ci
 npm.cmd start
@@ -117,7 +117,7 @@ matching placements counts once per bucket; distinct buckets can overlap.
 ### Voice mode and CRM entry
 
 1. Open the app directly on **localhost or HTTPS** in a desktop browser that
-   supports **on-device** English (US) speech recognition. Click **Start voice
+   supports **on-device** English speech recognition. Click **Start voice
    mode** and allow the microphone. If offered, **Install English speech pack**
    is a separate, optional browser download. No audio is uploaded. For spoken
    replies, install a local English system voice as well. If the app is embedded
@@ -135,6 +135,36 @@ matching placements counts once per bucket; distinct buckets can overlap.
    must be reopened; there is no automatic overwrite or voice autosave.
 5. Say **“Close CRM”** to return to questions, or **“Stop listening”** to turn
    off the microphone. Closing Ask, hiding the tab or signing out also stops it.
+
+### If Start voice mode says English is not ready
+
+This is a **browser speech setup** message, not an employee-data or CRM error.
+Open the app in its **own tab** (on the server PC: <http://localhost:4000>),
+preferably in an up-to-date desktop Chrome browser. An embedded page can be
+blocked by its host’s permissions policy even on HTTPS.
+
+* **Install English speech pack:** click it to allow the browser’s one-time
+  language download. Ask checks your preferred English variants and US, Indian,
+  British and generic English individually and prefers an already-ready pack.
+* **Downloading:** wait for the browser download to finish, then click **Check
+  again**. Checking does not install anything or turn on a cloud service.
+* **No local English pack available:** this site cannot install a pack that
+  the browser does not offer. Changing microphone permissions alone will not
+  fix a missing speech service. If the browser specifically reports microphone
+  access denied, allow it for this site and check the Windows microphone setting.
+* **Use voice on Windows 11 without a browser pack:** open **Start → Voice
+  access** (or **Settings → Accessibility → Speech → Voice access**). Finish its
+  one-time English language setup. Back in Ask, focus the message box, dictate
+  your question, then say **“Press Enter”**. This also works for **“Open CRM”**,
+  **“Review changes”** and **“Confirm save”**. For offline use, choose **Voice
+  access**, not the separate online **Win+H** voice typing feature. Windows
+  controls its microphone; stop Voice access in Windows when done. Under
+  **Voice setup and device dictation**, **Read last reply** uses a local English
+  system voice if one is installed (use headphones to avoid audio feedback).
+
+No database reset, reinstall of the app, or workbook re-import is needed for
+speech setup. If you still need help, note the browser name/version, Windows
+version, whether it is a standalone tab, and the exact status shown in Ask.
 
 ### The approval step
 

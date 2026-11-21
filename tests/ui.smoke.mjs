@@ -947,16 +947,22 @@ test('Directory cards and row count switch together on filter, clear, failure an
   assert.deepEqual(core.state.totals, { employees: 88888, assignments: 90000 });
 });
 
+function replaceForTest(t, object, key, value) {
+  const previous = Object.getOwnPropertyDescriptor(object, key);
+  Object.defineProperty(object, key, { configurable: true, value });
+  t.after(() => previous ? Object.defineProperty(object, key, previous) : delete object[key]);
+}
+
 test('hands-free Ask: speech → scoped question → open CRM → dictate → review → confirm, without an automatic write', async (t) => {
   const { createAssistant } = await import('../public/js/views/assistant.js');
   let mic, listening = false, packInstalled = false;
   const heard = [], asks = [], saves = [];
-  const define = (key, value) => { const old = Object.getOwnPropertyDescriptor(window, key); Object.defineProperty(window, key, { configurable: true, value }); t.after(() => old ? Object.defineProperty(window, key, old) : delete window[key]); };
+  const define = (key, value) => replaceForTest(t, window, key, value);
   class Recognition {
     processLocally = false;
-    static available = async (o) => { assert.equal(o.processLocally, true); return packInstalled ? 'available' : 'downloadable'; };
-    static install = async () => (packInstalled = true);
-    start() { assert.equal(this.processLocally, true); assert.equal(listening, false); mic = this; listening = true; }
+    static available = async (o) => { assert.ok(o.processLocally && o.langs.length === 1); return o.langs[0] !== 'en-IN' ? 'unavailable' : packInstalled ? 'available' : 'downloadable'; };
+    static install = async (o) => { assert.deepEqual(o, { langs: ['en-IN'], processLocally: true }); return (packInstalled = true); };
+    start() { assert.equal(this.lang, 'en-IN'); assert.equal(this.processLocally, true); assert.equal(listening, false); mic = this; listening = true; }
     stop() { listening = false; this.onend(); }
     abort() { listening = false; this.onend?.(); }
   }
@@ -1020,4 +1026,74 @@ test('voice does not fall back to a cloud-only recognizer or require a mic for t
     const voice = createLocalVoice({ onCommand: () => assert.fail('must not capture audio'), onState: (s) => { state = s; } });
     await voice.toggle(); assert.equal(started, false); assert.equal(state.active, false); assert.match(state.text, /type instead/);
   } finally { delete window.SpeechRecognition; delete window.isSecureContext; }
+});
+
+function setupPacks(t, available, install) {
+  const starts = [], states = [];
+  class LocalMic {
+    processLocally = false;
+    start() { assert.equal(this.processLocally, true); starts.push(this.lang); }
+    abort() {}
+  }
+  LocalMic.available = ({ langs, processLocally }) => {
+    assert.ok(processLocally && langs.length === 1, 'never query remote speech or require every locale together');
+    return available(langs[0]);
+  };
+  if (install) LocalMic.install = install;
+  replaceForTest(t, window, 'SpeechRecognition', LocalMic);
+  replaceForTest(t, window, 'isSecureContext', true);
+  return { starts, states, options: { onState: (s) => states.push(s), onCommand: () => assert.fail('unexpected speech result') } };
+}
+
+test('voice setup prefers a ready English variant, or rechecks an in-progress download without reinstalling', async (t) => {
+  const { createLocalVoice } = await import('../public/js/voice.js');
+  let ready = false;
+  const { starts, states, options } = setupPacks(t, (lang) => lang === 'en-IN' ? ready ? 'available' : 'downloading' : 'downloadable',
+    () => assert.fail('a pack already downloading or ready must not be installed again'));
+  const voice = createLocalVoice(options);
+  await voice.toggle(); assert.equal(states.at(-1).action, 'retry'); assert.match(states.at(-1).text, /en-IN.*downloading/);
+  assert.deepEqual(starts, []); assert.equal(voice.isActive(), false);
+  ready = true; await voice.toggle(); assert.deepEqual(starts, ['en-IN']); voice.stop();
+});
+
+test('voice setup explains missing installer/policy and ignores an install that finishes after Stop', async (t) => {
+  const { createLocalVoice } = await import('../public/js/voice.js');
+  const { starts, states, options } = setupPacks(t, () => 'downloadable');
+  const voice = createLocalVoice(options);
+  await voice.toggle(); assert.match(states.at(-1).text, /cannot install/); assert.equal(states.at(-1).help, true);
+  let finish;
+  window.SpeechRecognition.install = () => new Promise((r) => { finish = r; });
+  await voice.toggle(); assert.equal(states.at(-1).action, 'install');
+  const pending = voice.toggle(); voice.stop(); finish(true); await pending;
+  assert.equal(states.at(-1).action, 'start'); assert.equal(voice.isActive(), false);
+  replaceForTest(t, document, 'featurePolicy', { features: () => ['on-device-speech-recognition'], allowsFeature: () => false });
+  await voice.toggle(); assert.match(states.at(-1).text, /permissions policy/); assert.deepEqual(starts, []);
+});
+
+test('unavailable English pack: show Windows dictation steps, accept explicitly sent text and read only with a local voice', async (t) => {
+  const { createAssistant } = await import('../public/js/views/assistant.js');
+  const { starts } = setupPacks(t, () => 'unavailable', () => assert.fail('no installable pack'));
+  const spoken = [], messages = []; let local = false, cancelled = false;
+  replaceForTest(t, window, 'SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
+  replaceForTest(t, window, 'speechSynthesis', { getVoices: () => [{ lang: 'en-US', localService: false }, ...(local ? [{ lang: 'en-IN', localService: true }] : [])],
+    speak(u) { assert.ok(u.voice.localService); spoken.push(u.text); }, cancel() { cancelled = true; } });
+  core.state.user = { isAdmin: false };
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url === '/api/agent/projects') return jsonResponse({ projectNames: ['Summer Project'] });
+    assert.equal(url, '/api/agent/ask'); messages.push(JSON.parse(opts.body));
+    return jsonResponse({ kind: 'count', projectName: 'Summer Project', reply: '3 people in Summer Project.' });
+  });
+  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
+  button(a.el, 'Start voice mode').click(); await settleClicks();
+  const help = a.el.querySelector('.voice-help');
+  assert.ok(help.open && !help.classList.contains('hidden')); assert.match(flatten(help).join(' '), /Windows 11.*Voice access/);
+  assert.match(flatten(a.el).join(' '), /No local English speech pack is available/);
+  button(help, 'Focus message box').click(); const input = document.activeElement; assert.equal(input, a.el.querySelector('.assistant-input'));
+  input.value = 'How many people?'; input.dispatchEvent({ type: 'input' }); assert.equal(messages.length, 0);
+  input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
+  assert.deepEqual(messages, [{ message: 'How many people?', projectName: 'Summer Project' }]);
+  const read = button(help, 'Read last reply'); assert.equal(read.disabled, false);
+  read.click(); assert.deepEqual(spoken, []); assert.match(flatten(a.el).join(' '), /No local English read-aloud/);
+  local = true; read.click(); assert.deepEqual(spoken, ['3 people in Summer Project.']);
+  a.toggle(false); assert.ok(cancelled); assert.deepEqual(starts, []);
 });
