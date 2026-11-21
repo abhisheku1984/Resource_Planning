@@ -84,10 +84,20 @@ function ensureSeeded() {
 if (require.main === module) {
   ensureSeeded();
   app.listen(PORT, HOST, () => {
-    const where = HOST === '127.0.0.1' || HOST === 'localhost'
-      ? `http://localhost:${PORT}  (this computer only)`
-      : `http://${HOST}:${PORT}  (reachable from your network)`;
-    console.log(`Resource Planning platform listening on ${where}`);
+    const local = HOST === '127.0.0.1' || HOST === 'localhost';
+    console.log('');
+    console.log('  Resource Planning is running.');
+    console.log(`  Open:   http://localhost:${PORT}`);
+    console.log(`  Bound:  ${HOST}:${PORT}  ${local ? '(this computer only)' : '(reachable from your network)'}`);
+    if (!local) {
+      console.log('');
+      console.log('  WARNING: HOST is set to ' + HOST + ', so other machines on your');
+      console.log('           network can open this app. Unset HOST to restrict it.');
+    }
+    console.log('');
+    console.log('  Sign in: priya.nair@resourceplanning.io / Super@12345');
+    console.log('  Stop:    Ctrl+C');
+    console.log('');
   });
 }
 
