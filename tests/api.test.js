@@ -587,3 +587,63 @@ test('access control on submit: read-only grants and other projects are refused'
   const foreignSubmit = await intruder('POST', `/employees/${row.assignmentId}/submit`, { changes: { pid: 'X' } });
   assert.equal(foreignSubmit.status, 403);
 });
+
+/* ------------------------------------------------- assistant (§25) */
+const agent = require('../server/agent');
+
+test('assistant answers counts from the database and scopes them to the user', async () => {
+  const priya = { id: 1, name: 'Priya', isAdmin: false, projects: [{ id: q.get("SELECT id FROM projects WHERE code='NEXUS'").id }] };
+  const nexus = q.get("SELECT id FROM projects WHERE code='NEXUS'");
+  const bench = q.get("SELECT id FROM fields WHERE key='bench_category'");
+
+  const expected = q.get(
+    `SELECT COUNT(*) c FROM assignment_values v JOIN assignments a ON a.id = v.assignment_id
+      WHERE a.active = 1 AND a.project_id = ? AND v.field_id = ? AND v.value = 'Bench'`,
+    nexus.id, bench.id
+  ).c;
+
+  const plan = agent.understand(priya, 'how many people are on bench in nexus?');
+  assert.equal(plan.kind, 'count');
+  assert.equal(plan.data.count, expected, 'the assistant must report the real count, not a guess');
+  assert.match(plan.reply, new RegExp(String(expected)));
+});
+
+test('assistant refuses to report on a project the user cannot see', () => {
+  const priya = { id: 1, name: 'Priya', isAdmin: false, projects: [{ id: q.get("SELECT id FROM projects WHERE code='NEXUS'").id }] };
+  const plan = agent.understand(priya, 'how many are on bench in ATLAS');
+  assert.equal(plan.kind, 'denied');
+  assert.match(plan.reply, /do not have access/i);
+  assert.ok(!plan.data, 'no numbers are returned for an unauthorized project');
+});
+
+test('assistant never writes: it only raises a proposal an admin must approve', async () => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const sup = client(await login('priya.nair@resourceplanning.io'));
+  const row = (await sup('GET', '/employees?pageSize=1')).data.rows[0];
+  const field = q.get("SELECT id FROM fields WHERE key='block_status'");
+  const before = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', row.assignmentId, field.id);
+
+  const res = await sup('POST', '/agent/ask', { message: `set ${row.values.emp_code} to hard block` });
+  assert.equal(res.status, 200);
+  assert.ok(res.data.proposal, 'a change request becomes a proposal');
+  assert.equal(res.data.proposal.status, 'pending');
+
+  // the record is untouched until approval
+  const still = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', row.assignmentId, field.id);
+  assert.equal(still?.value ?? null, before?.value ?? null, 'nothing is written before approval');
+
+  // a supervisor cannot approve their own proposal
+  const selfApprove = await sup('POST', `/agent/proposals/${res.data.proposal.id}/approve`, {});
+  assert.equal(selfApprove.status, 403);
+
+  // the administrator can
+  const approved = await admin('POST', `/agent/proposals/${res.data.proposal.id}/approve`, {});
+  assert.equal(approved.status, 200);
+  const after = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', row.assignmentId, field.id);
+  assert.equal(after.value, 'Hard Block');
+
+  // and the approval is attributed in the audit trail
+  const auditRow = q.get("SELECT * FROM audit_log WHERE action = 'agent_approve' ORDER BY id DESC LIMIT 1");
+  assert.equal(auditRow.actor_name, 'Ananya Deshmukh');
+  assert.match(auditRow.meta, /Priya Nair/);
+});

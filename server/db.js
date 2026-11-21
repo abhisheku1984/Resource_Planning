@@ -200,6 +200,28 @@ CREATE TABLE IF NOT EXISTS audit_log (
   meta       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity, entity_id);
+
+-- Proposed changes raised by the assistant. Nothing reaches the master data
+-- until a human approves: the row records exactly what would change, so the
+-- approval is a review of a concrete diff rather than a re-run of the parser.
+CREATE TABLE IF NOT EXISTS agent_actions (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind         TEXT NOT NULL,            -- update_assignment
+  assignment_id INTEGER,
+  summary      TEXT NOT NULL,            -- one line the approver reads
+  before_json  TEXT NOT NULL,            -- field key -> value at proposal time
+  after_json   TEXT NOT NULL,            -- field key -> proposed value
+  status       TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected | failed | stale
+  requested_by INTEGER REFERENCES users(id),
+  requested_by_name TEXT,
+  decided_by   INTEGER REFERENCES users(id),
+  decided_by_name TEXT,
+  decided_at   TEXT,
+  decision_note TEXT,
+  result_json  TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_status ON agent_actions(status, id);
 CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at);
 
 -- Project level delegation. A supervisor sees only rows they are granted.

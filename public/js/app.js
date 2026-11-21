@@ -12,6 +12,7 @@ import { renderDirectory } from './views/directory.js';
 import { renderDataHub } from './views/datahub.js';
 import { renderAdmin } from './views/admin.js';
 import { renderAudit } from './views/audit.js';
+import { createAssistant } from './views/assistant.js';
 
 const root = document.getElementById('root');
 
@@ -47,6 +48,14 @@ const counts = () => {
 };
 
 async function boot() {
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      document.dispatchEvent(new Event('rp:assistant'));
+    }
+  });
+  // an approved assistant change must show up in the table immediately
+  document.addEventListener('rp:data-changed', () => { refreshAll().catch(() => {}); });
   setRouteFromHash();
   if (!state.token) return renderLogin(root, onAuthed);
   try {
@@ -95,7 +104,8 @@ function buildShell() {
   const topbar = h('header', { class: 'topbar' });
   const content = h('div', { id: 'content' });
   main.append(topbar, content);
-  mount(root, h('div', { class: 'app' }, sidebar, main));
+  const assistant = createAssistant();
+  mount(root, h('div', { class: 'app' }, sidebar, main, assistant.el));
   shellBuilt = true;
   renderSidebar();
   renderTopbar();
@@ -165,6 +175,11 @@ function renderTopbar() {
     }, icon('menu', 18)),
     h('div', { class: 'crumbs grow', id: 'crumbs' }),
     h('div', { class: 'row', style: { gap: '8px' } },
+      h('button', {
+        class: 'btn btn-ghost assistant-launch',
+        title: 'Ask the assistant (Ctrl+K)',
+        onclick: () => document.dispatchEvent(new Event('rp:assistant')),
+      }, icon('sparkles', 15), h('span', { class: 'hide-sm' }, 'Ask')),
       h('button', {
         class: 'btn btn-ghost btn-icon',
         title: 'Refresh data',

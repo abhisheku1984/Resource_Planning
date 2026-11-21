@@ -142,6 +142,26 @@ These are the controls actually implemented (each has a test):
 
 ---
 
+## 5a. The in-app assistant
+
+The assistant raises an obvious question — "does this thing send our data
+somewhere?" Answer: **no.** It is a rules-based parser running inside the same
+Node process, not a language model and not a cloud service.
+
+| Concern | Reality |
+|---|---|
+| Does it call an AI provider? | No. There is no API key, no SDK, no HTTP client for it. `server/agent.js` is plain string matching plus SQL against the local database. |
+| Can it send data off the machine? | No. Section 4's "zero outbound connections" claim still holds, and you can confirm it the same way — watch the machine's connections while asking it questions. |
+| Can it change records on its own? | No. It cannot write. A request creates a row in `agent_actions` describing the change; `server/agentstore.js` only writes to master data when an administrator approves. |
+| Can it leak another project's data? | No. Every query is scoped to the asking user's project grants, and asking about a project you cannot see returns an explicit refusal rather than a number. |
+| Does it weaken the audit trail? | It strengthens it. Proposals and approvals are both logged in `audit_log` with the requester and the approver named. |
+| What if it mis-parses? | The damage is bounded: a wrong proposal needs a human to approve it, and approval is refused if the record changed in the meantime (`stale`). |
+
+One honest limitation: because it is pattern matching, it will not understand
+unusual phrasing. It says so plainly ("I did not understand that yet") instead of
+guessing. Adding a real language model later would mean accepting outbound calls
+and an API key — that trade is deliberately *not* made here.
+
 ## 6. Known limitations — read before using real data
 
 I would rather you know these than discover them later.

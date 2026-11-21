@@ -5,6 +5,8 @@ const auth = require('./auth');
 const schema = require('./schema');
 const emp = require('./employees');
 const query = require('./query');
+const agent = require('./agent');
+const agentstore = require('./agentstore');
 const excel = require('./excel');
 const { record, historyFor, recentActivity } = require('./audit');
 
@@ -622,6 +624,52 @@ router.post('/duplicates/:id/resolve', requireAuth, requireAdmin, wrap((req, res
     record({ entity: 'duplicate_review', entityId: id, ref: review.emp_code, action: 'resolve', newValue: action, actor: req.user });
     res.json({ ok: true, action, employeeId: linked });
   });
+}));
+
+
+// ---------------------------------------------------------------------------
+// In-app assistant (§25). Rules-based, offline, propose-only.
+// ---------------------------------------------------------------------------
+/**
+ * Ask a question or request a change. Questions are answered from the database
+ * within the caller's project scope; change requests become proposals that an
+ * administrator must approve. This endpoint never writes master data.
+ */
+router.post('/agent/ask', requireAuth, wrap((req, res) => {
+  const message = String(req.body?.message || '').slice(0, 500);
+  const plan = agent.understand(req.user, message);
+  let proposal = null;
+  if (plan.proposal) {
+    // raising a proposal needs the ability to edit at all; approving it is admin-only
+    if (!auth.can(req.user, 'employee.edit') && !req.user.isAdmin) {
+      return res.status(403).json({ error: 'You do not have permission to request changes.' });
+    }
+    query.assertProjectAccess(req.user, query.getAssignment(plan.proposal.assignmentId).projectId);
+    proposal = agentstore.raiseProposal(req.user, plan.proposal, message);
+  }
+  res.json({
+    reply: plan.reply,
+    understood: !!plan.understood,
+    kind: plan.kind || 'answer',
+    table: plan.table || null,
+    data: plan.data || null,
+    suggestions: plan.suggestions || [],
+    proposal,
+  });
+}));
+
+router.get('/agent/proposals', requireAuth, wrap((req, res) => {
+  const status = req.query.status ? String(req.query.status) : null;
+  res.json({ proposals: agentstore.listProposals(status), pending: agentstore.pendingCount() });
+}));
+
+router.post('/agent/proposals/:id/approve', requireAuth, requireAdmin, wrap((req, res) => {
+  const out = agentstore.approve(req.user, Number(req.params.id), req.body?.note || null);
+  res.json({ ...out, message: 'Approved and saved to the database.' });
+}));
+
+router.post('/agent/proposals/:id/reject', requireAuth, requireAdmin, wrap((req, res) => {
+  res.json({ proposal: agentstore.reject(req.user, Number(req.params.id), req.body?.note || null), message: 'Rejected. Nothing was changed.' });
 }));
 
 // ---------------------------------------------------------------------------

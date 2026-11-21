@@ -5,6 +5,11 @@ import/export only, supervisors update records in the app.
 
 ## Quick start (Node 22.5 or newer — nothing else)
 
+> **This is a Node.js application, not a Python one.** No `pip`, no virtualenv,
+> no `requirements.txt`. `node:sqlite` is built into Node 22.5+, so nothing is
+> compiled and there are no native modules. `package.json` pulls two pure-JS
+> packages (Express and ExcelJS).
+
 ```bash
 git clone https://github.com/abhisheku1984/Resource_Planning.git
 cd Resource_Planning
@@ -35,97 +40,46 @@ Windows: `start-windows.bat` does the install, demo build and start in one step.
 ### Tests
 
 ```bash
-npm test          # 28 integration + UI smoke tests
+npm test          # 31 integration + UI smoke tests
 ```
 
-## Quick start
+## The assistant (in-app, offline, propose-only)
 
-> **This is a Node.js application, not a Python one.** There is no `pip`, no
-> virtualenv and no `requirements.txt`. The only prerequisite is Node.js 22.5 or
-> newer — `node:sqlite` is built into Node, so there is nothing to compile and no
-> native modules to install. `package.json` is used only to fetch two pure-JS
-> packages (Express and ExcelJS).
+Press **Ctrl+K** or the **Ask** button in the top bar. It is not a chatbot
+connected to a language model — it is a rules-based parser inside this app.
 
-```bash
-npm install
-npm start            # http://localhost:4000  (binds 0.0.0.0)
-```
+- **It never touches the internet.** No API key, no outbound call. That keeps the
+  "zero network traffic" promise in `SECURITY.md` true.
+- **It never invents numbers.** Every count is a real SQL query, scoped to the
+  projects the asking user may see. Ask about another project and it says it has
+  no access instead of quietly answering for a different one.
+- **It never writes.** A change request becomes a *proposal* holding the exact
+  before/after values. Nothing reaches the master data until an administrator
+  clicks **Approve & save**.
 
-The first run creates `data/resource_planning.db` and seeds a demo dataset
-(4 projects, 15 categories, 170 people, 231 placements, 7 users).
+| You type | What happens |
+|---|---|
+| `how many people are on bench in NEXUS?` | Count, plus a breakdown table |
+| `how many are hard block in nexus` | Count by block status |
+| `who is on bench in NEXUS?` | First 25 matching people |
+| `set EMP-10001 to hard block` | A proposal awaiting approval |
+| `mark EMP-10001 as bench` | A proposal awaiting approval |
 
-```bash
-npm run seed         # rebuild the demo dataset from scratch
-npm test             # 24 integration + UI tests
-```
+Anything outside those patterns gets "I did not understand that" plus examples —
+never a guess.
 
-Environment variables: `PORT`, `HOST`, `DATA_DIR`, `DB_FILE`.
+### The approval step
 
-> **Privacy default:** the server binds to `127.0.0.1`, so only this computer can
-> reach it. Set `HOST=0.0.0.0` (or run `start-windows.bat --lan`) to share it on a
-> trusted network. The app makes **no outbound requests** at runtime — no CDNs, no
-> web fonts, no telemetry. See [SECURITY.md](SECURITY.md).
+1. A supervisor asks for a change; it is stored in `agent_actions` as pending.
+2. An administrator sees it pinned at the top of the assistant panel, old value
+   struck through, new value beside it.
+3. If the record still holds the old value, **Approve** writes it and records
+   both the approver and the requester in the audit trail.
+4. If someone else changed the record meanwhile, approval is refused as `stale`
+   rather than overwriting their work.
 
-### Windows
-
-1. Install **Node.js 22 LTS or newer** from <https://nodejs.org> — pick the
-   Windows Installer (`.msi`) and accept the defaults. Verify in a *new*
-   PowerShell or Command Prompt window:
-
-   ```powershell
-   node -v      # must print v22.5.0 or higher
-   npm -v
-   ```
-
-2. Clone and enter the repository (any parent folder works):
-
-   ```powershell
-   git clone https://github.com/abhisheku1984/Resource_Planning.git
-   cd Resource_Planning
-   git checkout arena/bd816d6f-resource-planning
-   ```
-
-3. **Double-click `start-windows.bat`.** It checks your Node version, runs
-   `npm install` on first launch, starts the server and opens
-   <http://localhost:4000> automatically. Keep the console window open while you
-   work; press `Ctrl+C` there to stop.
-
-   Or do it manually:
-
-   ```powershell
-   npm install
-   npm start
-   ```
-
-4. Double-click `run-tests.bat` to run the test suite.
-
-Notes for Windows:
-
-* If PowerShell blocks `npm` with a script-execution error, use Command Prompt
-  instead, or run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
-* `data\resource_planning.db` is created on first start — delete that file (or
-  run `npm run seed`) to reset the demo data.
-* The launcher is a `.bat` file, so no WSL is required. WSL2 works too if you
-  prefer a Linux shell.
-* Windows Firewall may ask for permission the first time; allow it on private
-  networks. For access from another machine on your LAN, open port 4000 (the
-  server already binds `0.0.0.0`).
-
-### Demo accounts
-
-| Email | Password | Role |
-| --- | --- | --- |
-| `admin@resourceplanning.io` | `Admin@12345` | Administrator — all projects |
-| `priya.nair@resourceplanning.io` | `Super@12345` | Supervisor — Nexus only |
-| `rohit.verma@resourceplanning.io` | `Super@12345` | Supervisor — Atlas only |
-| `meera.iyer@resourceplanning.io` | `Super@12345` | Supervisor — Orbit + Vertex |
-| `sameer.khan@resourceplanning.io` | `Super@12345` | Supervisor — 3 projects, can import |
-| `kavita.rao@resourceplanning.io` | `Super@12345` | Read-only reviewer |
-| `arun.pillai@resourceplanning.io` | `Super@12345` | Supervisor — Vertex only |
-
-The sign-in screen lists them; clicking **Use** fills the form.
-
----
+Excel is unaffected: the database is the record, and the export is generated from
+it on demand, always including the approved values.
 
 ## How the model works
 

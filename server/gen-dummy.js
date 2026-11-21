@@ -304,6 +304,10 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
         const eta = ['Bench', 'Available', 'Rolling Off', 'Onboarding'].includes(profile.bench)
           ? addDays(TODAY, int(-20, 120)) : null;
 
+        const blocked = ['Allocated', 'PID Allocated', 'Shadow', 'Partially Allocated'].includes(profile.bench)
+          ? pick(['No Block', 'No Block', 'Soft Block', 'Hard Block', 'Hard Block'])
+          : 'No Block';
+
         const vals = {
           bench_category: profile.bench,
           allocation_status: profile.allocStatus,
@@ -328,7 +332,14 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
             'Rate renegotiation in progress with the vendor.',
           ]) : null,
           critical_flag: chance(0.14) ? 'Yes' : 'No',
-          risk_flag: pick(['Low', 'Low', 'Low', 'Medium', 'Medium', 'High', 'Not assessed']),
+          risk_flag: pick(['Low', 'Low', 'Low', 'Medium', 'Medium', 'High', 'Not assessed'],
+          ),
+          // Block status follows bench category: someone on the bench is by
+          // definition not blocked, which keeps the two columns consistent.
+          block_status: blocked,
+          block_reason: blocked === 'No Block' ? null
+            : pick(['Client holding for phase 2', 'Rate card under negotiation',
+              'Security clearance pending', 'Key resource - sign-off required']),
 
           grade: pick(['L1', 'L2', 'L2', 'L3', 'L3', 'L4', 'L4', 'L5', 'M1', 'M2']),
           department: pick(['Engineering', 'Data & Analytics', 'Quality Engineering', 'Cloud & Infrastructure',

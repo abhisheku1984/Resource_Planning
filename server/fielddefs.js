@@ -24,6 +24,13 @@ const BENCH_CATEGORIES = [
 
 const ALLOCATION_STATUS = ['Allocated', 'Partially Allocated', 'Unallocated', 'Rolling Off', 'Reserved'];
 
+/**
+ * How a person is held for an account. "No Block" means fully free to move.
+ * Hard block = cannot be moved without client sign-off; soft block = can move
+ * with notice. Kept separate from bench_category so the two never contradict.
+ */
+const BLOCK_STATUS = ['No Block', 'Soft Block', 'Hard Block'];
+
 const CORE = [
   { key: 'emp_code', label: 'Employee ID', type: 'text', core: true, system: true, group: 'Identity', help: 'Unique business key — used for imports and duplicate detection.' },
   { key: 'name', label: 'Employee Name', type: 'text', core: true, system: true, group: 'Identity' },
@@ -63,6 +70,11 @@ const IMPORTED = [
     options: ['Yes', 'No'], submit: true },
   { key: 'risk_flag', label: 'Attrition Risk', type: 'select', group: 'Supervisor Update',
     options: ['High', 'Medium', 'Low', 'Not assessed'], filterable: true, submit: true },
+  { key: 'block_status', label: 'Block Status', type: 'select', group: 'Supervisor Update',
+    options: BLOCK_STATUS, filterable: true, submit: true,
+    help: 'Hard Block = cannot move without client sign-off. Soft Block = can move with notice.' },
+  { key: 'block_reason', label: 'Block Reason / Account', type: 'text', group: 'Supervisor Update',
+    submit: true, help: 'Why the person is blocked, or which account holds them.' },
 
   // ---------------- Grade & organisation --------------------------------
   { key: 'grade', label: 'Grade / Band', type: 'select', group: 'Organisation',
@@ -173,4 +185,4 @@ const LEGACY = [
 
 const ALL = [...CORE, ...IMPORTED, ...LEGACY];
 
-module.exports = { BENCH_CATEGORIES, ALLOCATION_STATUS, CORE, IMPORTED, LEGACY, ALL };
+module.exports = { BENCH_CATEGORIES, ALLOCATION_STATUS, BLOCK_STATUS, CORE, IMPORTED, LEGACY, ALL };
