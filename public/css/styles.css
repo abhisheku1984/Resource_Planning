@@ -920,84 +920,106 @@ table.matrix-table tr.is-hidden-row td { color: var(--text-3); background: #fafb
 .cell-edit:focus-visible { outline: none; box-shadow: var(--focus); }
 
 /* ==========================================================================
-   Facet filter bar ("space filter")
-   One row per filterable column, chips carry the row count for that value.
+   Filter bar — one compact line of dropdowns.
+
+   Each dropdown opens a list of the real column values with the row count for
+   each. Collapsed chips were replaced by this menu because the whole page was
+   a wall of values nobody had asked to see; now the table starts at the top and
+   a value only appears once you open its dropdown.
    ========================================================================== */
 .filterbar {
   background: var(--surface);
   border: 1px solid var(--line);
   border-bottom: none;
   border-radius: var(--radius) var(--radius) 0 0;
-  padding: 10px 14px 12px;
+  padding: 9px 14px 10px;
 }
 .facet-head {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding-bottom: 8px; flex-wrap: wrap;
+  gap: 12px; padding-bottom: 7px; flex-wrap: wrap;
 }
 .facet-scope {
   font-size: 11.5px; color: var(--text-3);
   background: var(--surface-3); border-radius: 10px; padding: 1px 8px;
 }
-.facet-row {
-  display: grid;
-  grid-template-columns: 168px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  padding: 5px 0;
-  border-top: 1px solid #eef2f7;
+
+.facet-btns {
+  display: flex; flex-wrap: wrap; gap: 7px;
 }
-.facet-label {
-  display: inline-flex; align-items: center; gap: 5px;
-  border: none; background: none; cursor: pointer;
-  font-size: 12px; font-weight: 600; color: var(--text-2);
-  padding: 3px 0; text-align: left;
-  min-width: 0;
+.facet-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; max-width: 300px; padding: 0 9px 0 11px;
+  border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface); color: var(--text-2);
+  font-size: 12px; cursor: pointer;
+  transition: border-color .12s, background .12s, box-shadow .12s;
 }
-.facet-label:hover { color: var(--text); }
-.facet-label.has-active { color: var(--brand-600); }
-.facet-label span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.facet-badge {
-  flex: 0 0 auto; min-width: 16px; height: 16px; padding: 0 4px;
-  border-radius: 8px; background: var(--brand); color: #fff;
-  font-size: 10px; font-weight: 700; display: inline-grid; place-items: center;
+.facet-btn:hover { border-color: var(--brand); background: var(--brand-50); }
+.facet-btn.open { border-color: var(--brand); box-shadow: var(--focus); }
+.facet-btn.on {
+  background: var(--brand-50); border-color: var(--brand);
 }
-.facet-values { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-.facet-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 25px; padding: 0 8px;
-  border-radius: 13px; border: 1px solid var(--line-strong);
-  background: var(--surface);
-  font-size: 12px; color: var(--text-2);
-  cursor: pointer; transition: background .12s, border-color .12s, color .12s;
-  max-width: 260px;
+.facet-btn-label {
+  font-weight: 600; color: var(--text-3); white-space: nowrap;
 }
-.facet-chip:hover { border-color: var(--brand); color: var(--brand-600); background: var(--brand-50); }
-.facet-chip.on {
-  background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 600;
+.facet-btn.open .facet-btn-label, .facet-btn.on .facet-btn-label { color: var(--brand-600); }
+.facet-btn-value {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 150px; color: var(--text-2);
 }
-.facet-chip.on .facet-chip-count { background: rgba(255,255,255,0.22); color: #fff; }
-.facet-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.facet-chip-count {
-  font-size: 10.5px; font-weight: 600; color: var(--text-3);
+.facet-btn.on .facet-btn-value { color: var(--brand-600); font-weight: 600; }
+.facet-btn-count {
+  font-size: 10.5px; font-weight: 700; color: var(--text-3);
   background: var(--surface-3); border-radius: 8px; padding: 0 5px;
   font-variant-numeric: tabular-nums;
 }
-.facet-more, .facet-showall {
-  border: none; background: none; cursor: pointer;
-  font-size: 11.5px; font-weight: 600; color: var(--brand);
-  padding: 3px 6px; border-radius: 6px;
-  display: inline-flex; align-items: center; gap: 4px;
+.facet-btn.on .facet-btn-count {
+  background: var(--brand); color: #fff;
 }
-.facet-more:hover, .facet-showall:hover { background: var(--brand-50); }
-.facet-clear {
-  border: none; background: var(--surface-3); cursor: pointer;
-  width: 20px; height: 20px; border-radius: 50%;
-  display: inline-grid; place-items: center; color: var(--text-2);
+.facet-btn svg { flex: 0 0 auto; color: var(--text-3); }
+
+/* the open dropdown list */
+.facet-menu {
+  position: fixed; z-index: 240;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .16);
+  padding: 6px;
+  max-height: 340px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
 }
-.facet-clear:hover { background: var(--danger-bg); color: var(--danger); }
+.facet-menu.hidden { display: none; }
+.facet-menu-head {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text-3); padding: 3px 7px 5px;
+}
+.facet-search { height: 30px; margin: 0 2px 6px; font-size: 12px; }
+.facet-options { overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
+.facet-option {
+  display: flex; align-items: center; gap: 7px;
+  border: none; background: none; cursor: pointer; text-align: left;
+  padding: 6px 7px; border-radius: 7px;
+  font-size: 12.5px; color: var(--text-2); width: 100%;
+}
+.facet-option:hover { background: var(--brand-50); color: var(--brand-600); }
+.facet-option.on { background: var(--brand-50); color: var(--brand-600); font-weight: 600; }
+.facet-check { width: 14px; flex: 0 0 auto; display: inline-flex; color: var(--brand-600); }
+.facet-option-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.facet-option-count {
+  flex: 0 0 auto; font-size: 10.5px; font-weight: 600; color: var(--text-3);
+  background: var(--surface-3); border-radius: 8px; padding: 0 5px;
+  font-variant-numeric: tabular-nums;
+}
+.facet-option.on .facet-option-count { background: var(--brand); color: #fff; }
+.facet-empty {
+  font-size: 11.5px; color: var(--text-3); padding: 8px 7px;
+}
 
 @media (max-width: 820px) {
-  .facet-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .facet-btn { max-width: 100%; }
+  .facet-btn-value { max-width: 90px; }
 }
 
 /* ==========================================================================
@@ -1161,27 +1183,9 @@ table.mini tr:last-child td { border-bottom: none; }
 .proposal-to { color: var(--success, #067647); font-weight: 650; }
 
 /* ==========================================================================
-   Quick filters — one dropdown per column, counts in the option labels
+   The filter bar sits between the toolbar and the rows. The table scrolls in
+   its own box, so the bar never leaves the screen, and the dropdown menus are
+   position: fixed so the card cannot clip them.
    ========================================================================== */
-.quick-filters {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 14px 10px;
-  background: var(--surface);
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-.quick-filters .select {
-  flex: 0 0 auto;
-  height: 30px;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  background-image: none;
-  padding-right: 8px;
-}
-.quick-filters .select:disabled { opacity: .55; cursor: not-allowed; }
-.quick-filters .btn { flex: 0 0 auto; height: 30px; }
-@media (max-width: 900px) {
-  .quick-filters { padding-inline: 10px; gap: 6px; }
-}
+.filters-sticky { position: relative; }
+.facet-more-btn { height: 30px; font-size: 12px; }

@@ -245,6 +245,20 @@ globalThis.fetch = async (url, opts = {}) => {
         { key: 'remarks', label: 'Remarks', type: 'textarea', editable: true },
       ],
       scope: { project: { id: 1, name: 'Nexus' }, category: { id: 4, name: 'Training Cohort' } },
+      facets: [
+        { key: 'billing_status', label: 'Billing Status', type: 'select', total: 60,
+          values: [{ value: 'Billable', count: 40 }, { value: 'Non-Billable', count: 20 }] },
+        { key: 'bench_category', label: 'Bench Category', type: 'select', total: 60,
+          values: [{ value: 'Allocated', count: 45 }, { value: 'Bench', count: 15 }] },
+        { key: 'bl_status', label: 'BL Status', type: 'select', total: 60,
+          values: [{ value: 'BL-1', count: 60 }] },
+        { key: 'offsite_onsite', label: 'Offsite / Onsite', type: 'select', total: 60,
+          values: [{ value: 'Onsite', count: 35 }, { value: 'Offsite', count: 25 }] },
+        { key: 'giga_project_name', label: 'Giga Project Name', type: 'select', total: 10,
+          values: [{ value: 'Giga One', count: 10 }] },
+        { key: 'capability', label: 'Capability', type: 'select', total: 60,
+          values: [{ value: 'Tech', count: 60 }] },
+      ],
     });
   }
   if (/^\/employees\/\d+$/.test(path)) {
@@ -530,4 +544,42 @@ test('the assistant opens from the Ask event and answers a question', async () =
   const walk = (n) => (n.children || []).map((c) => (c.textContent || '') + walk(c)).join(' ');
   const text = walk(assistant.el);
   assert.match(text, /446 people/, 'the answer is rendered in the panel');
+});
+
+test('the filter bar is five dropdowns, and picking a value narrows the rows', async () => {
+  const { createFilterBar } = await import('../public/js/views/filterbar.js');
+  const seen = [];
+  const bar = createFilterBar({ onChange: (next) => seen.push(next) });
+  bar.setFacets([
+    { key: 'billing_status', label: 'Billing Status', total: 60, values: [{ value: 'Billable', count: 40 }, { value: 'Non-Billable', count: 20 }] },
+    { key: 'bench_category', label: 'Bench Category', total: 60, values: [{ value: 'Bench', count: 15 }] },
+    { key: 'bl_status', label: 'BL Status', total: 60, values: [{ value: 'BL-1', count: 60 }] },
+    { key: 'offsite_onsite', label: 'Offsite / Onsite', total: 60, values: [{ value: 'Onsite', count: 35 }] },
+    { key: 'giga_project_name', label: 'Giga Project Name', total: 10, values: [{ value: 'Giga One', count: 10 }] },
+    { key: 'capability', label: 'Capability', total: 60, values: [{ value: 'Tech', count: 60 }] },
+  ], 'Nexus');
+
+  const barButtons = bar.el.querySelectorAll('.facet-btn');
+  assert.equal(barButtons.length, 5, 'the bar shows the five dimensions, not a wall of chips');
+  // nothing is expanded on the page: no value is rendered until a dropdown opens
+  assert.equal(bar.el.querySelectorAll('.facet-option').length, 0);
+
+  // opening one lists its real values with counts
+  bar.openFor('bench_category');
+  const options = bar.menu.querySelectorAll('.facet-option');
+  assert.ok(options.length >= 2, 'All + the real values');
+
+  // the shim does not aggregate text from children, so walk the tree
+  const text = (node) => [node._text || '', ...node.children.map((c) => (c instanceof El ? text(c) : String(c._text ?? '')))].join(' ');
+
+  // choosing a value is reported as a filter and the button shows it
+  options[1].click();
+  assert.deepEqual(seen.at(-1), { bench_category: ['Bench'] });
+  assert.ok(text(bar.el).includes('Bench'), 'the button shows the chosen value');
+
+  // the option count is the row count the table will show
+  assert.ok(text(bar.menu).includes('15'));
+
+  bar.clearAll();
+  assert.deepEqual(seen.at(-1), {});
 });

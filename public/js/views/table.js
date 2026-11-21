@@ -62,9 +62,13 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
         q.page = 1;
         load();
       },
-      getActive: () => facetFilters,
     })
     : null;
+
+  // The dropdowns float above the page, so they live next to the table view
+  // rather than inside it, and the bar sticks to the top as you scroll rows.
+  const filtersHost = h('div', { class: 'filters-sticky' },
+    ...(filterBar ? [filterBar.el, filterBar.menu] : []));
 
   const searchInput = h('input', {
     class: 'input',
@@ -73,42 +77,6 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     'aria-label': 'Search employees',
     oninput: debounce((e) => { q.search = e.target.value; q.page = 1; load(); }, 280),
   });
-
-  /**
-   * The five value dropdowns. Options come from the facet payload the server
-   * already returns, so the lists are the real values in the current scope and
-   * the counts are the rows you would get by choosing them.
-   */
-  const QUICK_FILTERS = [
-    { key: 'billing_status', label: 'Billing status', width: '168px' },
-    { key: 'bench_category', label: 'Bench category', width: '168px' },
-    { key: 'bl_status', label: 'BL status', width: '132px' },
-    { key: 'offsite_onsite', label: 'Offsite / Onsite', width: '150px' },
-    { key: 'giga_project_name', label: 'Giga project', width: '168px' },
-  ];
-  const quickSelects = new Map();
-  const quickFilterRow = h('div', { class: 'quick-filters' },
-    ...QUICK_FILTERS.map((f) => {
-      const sel = h('select', {
-        class: 'select', style: { width: f.width }, 'aria-label': `Filter by ${f.label}`,
-        dataset: { key: f.key },
-        onchange: (e) => { setQuick(f.key, e.target.value); },
-      }, h('option', { value: '' }, `All ${f.label.toLowerCase()}`));
-      quickSelects.set(f.key, sel);
-      return sel;
-    }),
-    h('button', {
-      class: 'btn btn-sm btn-ghost', title: 'Clear every filter', onclick: () => clearFilters(),
-    }, icon('x', 13), 'Clear'),
-  );
-
-  function setQuick(key, value) {
-    if (value) facetFilters[key] = [value];
-    else delete facetFilters[key];
-    if (filterBar) filterBar.setActive(facetFilters);
-    q.page = 1;
-    load();
-  }
 
   const pageSizeSelect = h('select', {
     class: 'select', style: { width: '96px' }, 'aria-label': 'Rows per page',
@@ -148,7 +116,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   const bodyHost = h('div', { id: 'table-host' });
   const chipsHost = h('div', { class: 'row', style: { padding: '0 14px 10px', gap: '6px', flexWrap: 'wrap', background: 'var(--surface)' } });
 
-  mount(el, head, ...(filterBar ? [filterBar.el] : []), toolbar, quickFilterRow, chipsHost, bodyHost, foot);
+  mount(el, head, toolbar, ...(filterBar ? [filtersHost] : []), chipsHost, bodyHost, foot);
 
   /* ------------------------------------------------------------- loading */
   async function load({ silent = false } = {}) {
@@ -210,7 +178,6 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   /* ------------------------------------------------------------- render */
   function render() {
     renderChips();
-    renderQuickFilters();
     const countEl = el.querySelector('#row-count');
     if (countEl) countEl.textContent = fmtNum(data.total);
 
@@ -275,36 +242,6 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     renderFoot();
   }
 
-  /**
-   * Rebuild each dropdown from the latest facet counts. Labels carry the count
-   * so you can see the effect before selecting, and the chosen value is kept
-   * even when it is not in the list (e.g. after the data changes).
-   */
-  function renderQuickFilters() {
-    for (const f of QUICK_FILTERS) {
-      const sel = quickSelects.get(f.key);
-      if (!sel) continue;
-      const chosen = (facetFilters[f.key] || [])[0] || '';
-      const facet = (facets || []).find((x) => x.key === f.key);
-      const values = facet ? facet.values : [];
-      const total = facet ? facet.total : 0;
-      const opts = [h('option', { value: '' }, `All ${f.label.toLowerCase()} (${fmtNum(total)})`)];
-      for (const v of values) {
-        opts.push(h('option', { value: v.value, selected: String(v.value) === String(chosen) },
-          `${v.value} (${fmtNum(v.count)})`));
-      }
-      if (chosen && !values.some((v) => String(v.value) === String(chosen))) {
-        opts.push(h('option', { value: chosen, selected: true }, `${chosen} (0)`));
-      }
-      sel.replaceChildren(...opts);
-      sel.value = chosen;
-      sel.disabled = !facet || !values.length;
-      sel.title = sel.disabled
-        ? `No ${f.label.toLowerCase()} values in this selection`
-        : `${values.length} ${f.label.toLowerCase()} values`;
-    }
-  }
-
   function renderChips() {
     const chips = [];
     const add = (label, clear) => chips.push(h('span', { class: 'filter-chip' }, label,
@@ -343,7 +280,6 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     if (filterBar) filterBar.setActive({});
     q.page = 1;
     searchInput.value = '';
-    renderQuickFilters();
     load();
   }
 
