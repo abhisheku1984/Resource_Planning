@@ -154,7 +154,9 @@ test('scenario 3 + 4: different categories expose different dynamic columns', as
   // column that is neither a facet nor a supervisor field
   assert.ok(!tCols.includes('bench_subcategory'));
   assert.ok(bCols.includes('billing_status') && bCols.includes('build_status') && bCols.includes('billing_start_date'));
-  assert.ok(!bCols.includes('giga_project_name'));
+  // giga_project_name is now a facet, so it resolves everywhere; use a column
+  // that is neither shown, a facet, nor a supervisor field
+  assert.ok(!bCols.includes('leader_input_this_week'));
   assert.notDeepEqual(tCols, bCols);
   assert.ok(dCols.includes('status'));
   assert.ok(dCols.includes('block_status'), 'Delivery Status tracks hard/soft block');
@@ -462,20 +464,32 @@ test('per-category column configuration round-trips and validates required field
   assert.equal(detail.status, 200);
 
   const remark = detail.data.fields.find((f) => f.key === 'remarks');
-  const payload = detail.data.fields.map((f) => ({
+  const original = detail.data.fields;
+  const toPayload = (f, visible) => ({
     field_id: f.id,
-    visible: f.key === 'remarks' ? false : f.visible,
+    visible,
     editable: f.editable,
     required: f.required,
-  }));
+    filterable: !!f.filterable,
+    submit_field: !!f.submit_field,
+    sort_order: f.sort_order,
+  });
+  const payload = original.map((f) => toPayload(f, f.key === 'remarks' ? false : f.visible));
   const put = await admin('PUT', `/categories/${cat.id}/columns`, { fields: payload });
   assert.equal(put.status, 200);
 
-  // the hidden column disappears from the table for supervisors
-  const sup = client(await login('priya.nair@resourceplanning.io'));
-  const cols = (await sup('GET', `/employees?categoryId=${cat.id}`)).data.columns.map((c) => c.key);
-  assert.ok(!cols.includes('remarks'), 'hidden columns must not be returned at all');
-  assert.ok(cols.includes(remark.key) === false);
+  try {
+    // the hidden column disappears from the table for supervisors
+    const sup = client(await login('priya.nair@resourceplanning.io'));
+    const cols = (await sup('GET', `/employees?categoryId=${cat.id}`)).data.columns.map((c) => c.key);
+    assert.ok(!cols.includes('remarks'), 'hidden columns must not be returned at all');
+  } finally {
+    // PUT replaces the whole layout, so restore it. Later tests read this
+    // category and must not inherit a half-configured column set.
+    await admin('PUT', `/categories/${cat.id}/columns`, {
+      fields: original.map((f) => toPayload(f, f.visible)),
+    });
+  }
 });
 
 test('server-side sort, search, filter and pagination', async () => {
@@ -655,4 +669,41 @@ test('assistant never writes: it only raises a proposal an admin must approve', 
   const auditRow = q.get("SELECT * FROM audit_log WHERE action = 'agent_approve' ORDER BY id DESC LIMIT 1");
   assert.equal(auditRow.actor_name, 'Ananya Deshmukh');
   assert.match(auditRow.meta, /Priya Nair/);
+});
+
+/* ------------------------------------- filter dropdowns (contextual counts) */
+test('filter dropdowns list real values with counts, and the count follows the selection', async () => {
+  const api = client(await login('priya.nair@resourceplanning.io'));
+  const base = await api('GET', '/employees?pageSize=1');
+  const projectId = base.data.rows[0].projectId;
+
+  const unfiltered = await api('GET', `/employees?projectId=${projectId}&pageSize=1`);
+  const want = ['billing_status', 'bench_category', 'bl_status', 'offsite_onsite', 'giga_project_name'];
+  for (const key of want) {
+    const facet = unfiltered.data.facets.find((f) => f.key === key);
+    assert.ok(facet, `${key} must be available as a filter`);
+    assert.ok(facet.values.length >= 1, `${key} must list its real values`);
+    assert.ok(facet.values.every((v) => v.count > 0), `${key} option counts must be positive`);
+  }
+
+  // pick a value in one column: the row total must equal that option's count
+  const bench = unfiltered.data.facets.find((f) => f.key === 'bench_category');
+  const pickValue = bench.values.find((v) => v.count > 1);
+  const filtered = await api('GET', `/employees?projectId=${projectId}&pageSize=1&f_bench_category=${encodeURIComponent(pickValue.value)}`);
+  assert.equal(filtered.data.total, pickValue.count, 'the count shown in the dropdown must be the exact row count after selecting it');
+
+  // the selected column keeps listing its siblings instead of collapsing
+  const benchAfter = filtered.data.facets.find((f) => f.key === 'bench_category');
+  assert.equal(benchAfter.values.length, bench.values.length, 'a filtered column must still offer every value');
+
+  // every other column is re-counted within the new selection
+  const billingAfter = filtered.data.facets.find((f) => f.key === 'billing_status');
+  const sum = billingAfter.values.reduce((a, v) => a + v.count, 0);
+  assert.equal(sum, filtered.data.total, 'other dropdowns must add up to the filtered total');
+
+  // and a second filter narrows both the rows and the numbers
+  const billingPick = billingAfter.values[0];
+  const two = await api('GET',
+    `/employees?projectId=${projectId}&pageSize=1&f_bench_category=${encodeURIComponent(pickValue.value)}&f_billing_status=${encodeURIComponent(billingPick.value)}`);
+  assert.equal(two.data.total, billingPick.count, 'stacked filters must agree with the counts shown');
 });

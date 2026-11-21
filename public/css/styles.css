@@ -1159,3 +1159,29 @@ table.mini tr:last-child td { border-bottom: none; }
 .proposal-from { color: var(--text-3); text-decoration: line-through; }
 .proposal-arrow { color: var(--text-3); }
 .proposal-to { color: var(--success, #067647); font-weight: 650; }
+
+/* ==========================================================================
+   Quick filters — one dropdown per column, counts in the option labels
+   ========================================================================== */
+.quick-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 10px;
+  background: var(--surface);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.quick-filters .select {
+  flex: 0 0 auto;
+  height: 30px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  background-image: none;
+  padding-right: 8px;
+}
+.quick-filters .select:disabled { opacity: .55; cursor: not-allowed; }
+.quick-filters .btn { flex: 0 0 auto; height: 30px; }
+@media (max-width: 900px) {
+  .quick-filters { padding-inline: 10px; gap: 6px; }
+}

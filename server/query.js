@@ -306,6 +306,17 @@ function listEmployees(user, params = {}) {
   // ---- phase 2: hydrate ----
   const rows = hydrate(ids, columns, scope);
 
+  // Contextual counts: `plain` ignores the value filters (scope + search only),
+  // `narrow` applies everything. A dropdown showing its own siblings uses plain.
+  const plainWhere = buildWhere({
+    scope, allowed, filters: { mapped: [], valued: [] }, search: params.search, columns, params: { status: params.status },
+  });
+  // mapped filters carry `.key`; value filters carry it on `.field.key`
+  const activeKeys = [
+    ...filters.mapped.map((f) => f.key),
+    ...filters.valued.map((f) => f.field.key),
+  ];
+
   return {
     rows,
     columns: columns.map(publicColumn),
@@ -314,7 +325,9 @@ function listEmployees(user, params = {}) {
     pageSize,
     totalPages: Math.max(1, Math.ceil(total / pageSize)),
     scope: schema.scopeLabels(scope),
-    facets: facetsFor(scope, columns),
+    facets: facetsFor(scope, columns, {
+      plain: plainWhere, narrow: { where, args }, activeKeys,
+    }),
     canEdit: user.isAdmin || !!user.projects.find((p) => p.id === scope.projectId)?.can_edit,
   };
 }
@@ -397,65 +410,90 @@ function hydrate(ids, columns, scope) {
  * Filter facets: for each filterable column in this scope, the distinct values
  * with counts. This is what drives the "space filter" chips.
  */
-function facetsFor(scope, columns) {
+/**
+ * Value counts for the filter dropdowns.
+ *
+ * `ctx` carries two prepared WHERE clauses:
+ *   plain  - scope + search only            (counts as if nothing were filtered)
+ *   narrow - scope + search + every active filter
+ *
+ * A column that already has a selection is counted with `plain`, so its
+ * dropdown keeps listing its siblings instead of collapsing to the one value
+ * you just picked. Every other column uses `narrow`, so its numbers reflect the
+ * filters you have applied. Two grouped queries per context, four in total.
+ */
+function facetsFor(scope, columns, ctx = null) {
   if (!scope.projectId) return [];
-  const projectFilter = scope.subprojectId ? 'a.subproject_id = ?' : 'a.project_id = ?';
-  const scopeArg = scope.subprojectId || scope.projectId;
-  const catFilter = scope.categoryId ? ' AND a.category_id = ?' : '';
-  const catArg = scope.categoryId ? [scope.categoryId] : [];
-
   const filterable = columns.filter((c) => c.filterable);
-  const mapped = filterable.filter((c) => MAPPED[c.key]);
-  const valued = filterable.filter((c) => !MAPPED[c.key]);
+  const contexts = ctx && ctx.plain
+    ? { plain: ctx.plain, narrow: ctx.narrow || ctx.plain }
+    : null;
+  const activeKeys = new Set(ctx && ctx.activeKeys ? ctx.activeKeys : []);
 
-  // One round trip per storage location instead of one per column: 12 facet
-  // queries became 2, which is the difference between ~250 ms and ~25 ms.
-  const grouped = new Map();   // key -> [{value, count}]
+  // Collect grouped counts for one WHERE clause. Keyed by column key.
+  function collect(whereSql, whereArgs) {
+    const buckets = new Map();   // key -> Map(value -> count)
+    const mapped = filterable.filter((c) => MAPPED[c.key]);
+    const valued = filterable.filter((c) => !MAPPED[c.key]);
 
-  if (mapped.length) {
-    const selects = mapped.map((c) => `'${c.key.replace(/'/g, "''")}', ifnull(${MAPPED[c.key].sql}, '')`).join(', ');
-    for (const r of q.all(
-      `SELECT ${selects}, COUNT(*) c FROM assignments a
-         JOIN employees e ON e.id = a.employee_id
-         LEFT JOIN suppliers sup ON sup.id = a.supplier_id
-        WHERE a.active = 1 AND ${projectFilter}${catFilter}
-        GROUP BY ${mapped.map((c) => `ifnull(${MAPPED[c.key].sql}, '')`).join(', ')}`,
-      scopeArg, ...catArg
-    )) {
-      mapped.forEach((c) => {
-        const value = r[`'${c.key}'`] ?? r[c.key];
-        if (value === '' || value === null || value === undefined) return;
-        if (!grouped.has(c.key)) grouped.set(c.key, new Map());
-        const bucket = grouped.get(c.key);
-        bucket.set(value, (bucket.get(value) || 0) + r.c);
-      });
+    if (mapped.length) {
+      const selects = mapped.map((c) => `'${c.key.replace(/'/g, "''")}', ifnull(${MAPPED[c.key].sql}, '')`).join(', ');
+      const groups = mapped.map((c) => `ifnull(${MAPPED[c.key].sql}, '')`).join(', ');
+      for (const r of q.all(
+        `SELECT ${selects}, COUNT(*) c FROM assignments a
+           JOIN employees e ON e.id = a.employee_id
+           LEFT JOIN suppliers sup ON sup.id = a.supplier_id
+          WHERE ${whereSql}
+          GROUP BY ${groups}`,
+        ...whereArgs
+      )) {
+        for (const c of mapped) {
+          const value = r[`'${c.key}'`] ?? r[c.key];
+          if (value === '' || value === null || value === undefined) continue;
+          if (!buckets.has(c.key)) buckets.set(c.key, new Map());
+          const b = buckets.get(c.key);
+          b.set(value, (b.get(value) || 0) + r.c);
+        }
+      }
     }
+
+    if (valued.length) {
+      const ph = valued.map(() => '?').join(',');
+      for (const r of q.all(
+        `SELECT av.field_id, av.value v, COUNT(*) c FROM assignment_values av
+           JOIN assignments a ON a.id = av.assignment_id
+           JOIN employees e ON e.id = a.employee_id
+           LEFT JOIN suppliers sup ON sup.id = a.supplier_id
+          WHERE ${whereSql} AND av.field_id IN (${ph})
+            AND av.value IS NOT NULL AND av.value <> ''
+          GROUP BY av.field_id, av.value`,
+        ...whereArgs, ...valued.map((f) => f.id)
+      )) {
+        if (!buckets.has(r.field_id)) buckets.set(r.field_id, new Map());
+        buckets.get(r.field_id).set(r.v, r.c);
+      }
+    }
+    return buckets;
   }
 
-  if (valued.length) {
-    const ph = valued.map(() => '?').join(',');
-    for (const r of q.all(
-      `SELECT av.field_id, av.value v, COUNT(*) c FROM assignment_values av
-         JOIN assignments a ON a.id = av.assignment_id
-        WHERE a.active = 1 AND av.field_id IN (${ph}) AND ${projectFilter}${catFilter}
-          AND av.value IS NOT NULL AND av.value <> ''
-        GROUP BY av.field_id, av.value
-        ORDER BY c DESC`,
-      ...valued.map((f) => f.id), scopeArg, ...catArg
-    )) {
-      if (!grouped.has(r.field_id)) grouped.set(r.field_id, new Map());
-      grouped.get(r.field_id).set(r.v, r.c);
-    }
-  }
+  const plain = contexts ? collect(contexts.plain.where, contexts.plain.args) : null;
+  const narrow = contexts ? collect(contexts.narrow.where, contexts.narrow.args) : null;
 
   const out = [];
   for (const col of filterable) {
-    const bucket = grouped.get(col.key) || grouped.get(col.id);
+    // an already-filtered column is counted against the unfiltered context
+    const useOwn = activeKeys.has(col.key);
+    const buckets = contexts
+      ? (useOwn ? plain : narrow)
+      : (plain || null);
+    const bucket = buckets
+      ? (buckets.get(col.key) || buckets.get(col.id))
+      : null;
     if (!bucket || !bucket.size) continue;
     const values = [...bucket.entries()]
       .map(([value, count]) => ({ value, count }))
       .sort((a, b) => b.count - a.count || String(a.value).localeCompare(String(b.value)))
-      .slice(0, 40);
+      .slice(0, 60);
     out.push({
       key: col.key,
       label: col.label,

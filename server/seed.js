@@ -134,7 +134,7 @@ const BENCH_CATEGORIES = ['Allocated', 'Bench', 'PID Allocated', 'Available', 'N
   'Shadow', 'Partially Allocated', 'Rolling Off', 'Onboarding'];
 const FILTER_KEYS = ['bench_category', 'status', 'allocation_percentage', 'account', 'block_status',
   'billing_status', 'build_status', 'capability', 'management_level', 'bench_aging_category',
-  'vertical', 'account_name', 'country'];
+  'vertical', 'account_name', 'country', 'bl_status', 'offsite_onsite', 'giga_project_name'];
 const SUBMIT_KEYS = fielddefs.SUBMIT_KEYS || fielddefs.ALL.filter((f) => f.submit).map((f) => f.key);
 const ACCOUNTS = ['Northwind Bank', 'Helios Retail', 'Vertex Insurance', 'Cobalt Telecom'];
 const SKILLS = ['Java', 'Salesforce', 'SAP', 'Data Engineering', 'Testing', 'DevOps', 'Oracle Fusion', 'UI/UX'];
@@ -251,7 +251,9 @@ function run({ reset = false, quiet = false } = {}) {
             const submitField = SUBMIT_KEYS.includes(f.key);
             // a supervisor field does not have to be a table column, but it
             // must be resolvable so the Submit form can render it
-            const visible = layout.show.includes(f.key) || submitField;
+            // facets and supervisor fields must resolve in every category, or
+            // the dropdowns and the Update panel come up empty
+            const visible = layout.show.includes(f.key) || submitField || filterable;
             q.run(
               `INSERT INTO category_fields
                  (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order)
@@ -413,6 +415,9 @@ function run({ reset = false, quiet = false } = {}) {
       setValue('management_level', pick(['1', '2', '3', '4A', '4B', '5B']));
       setValue('build_status', pick(['Billed', 'Partially Billed', 'Unbilled', 'Not Available']));
       setValue('bench_aging_category', pick(['0-30 days', '31-60 days', '61-90 days', '90+ days']));
+      setValue('bl_status', pick(['BL-1', 'BL-2', 'BL-3']));
+      setValue('offsite_onsite', pick(['Offsite', 'Offsite', 'Offsite-Onsite', 'Onsite']));
+      if (R() < 0.25) setValue('giga_project_name', pick(['Giga One', 'Giga Two', 'Giga Three']));
       setValue('billing_status', pick(['Billable', 'Non-Billable', 'Shadow', 'T&M', 'Fixed Price']));
 
       // category-specific extras, using the workbook's own columns

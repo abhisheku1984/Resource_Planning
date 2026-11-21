@@ -117,19 +117,24 @@ function columnsForCategory(categoryId) {
   const config = new Map(
     q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId).map((r) => [r.field_id, r])
   );
+  // (kept for readability of the fallback above)
   const configured = config.size > 0;
+  void configured;
   const out = [];
   for (const f of fields) {
     const c = config.get(f.id);
-    const visible = c ? !!c.visible : (!configured || f.core || f.key === 'status' || f.key === 'remarks');
+    // A category with no stored layout (e.g. auto-created by an import) falls
+    // back to the catalogue defaults, so its supervisor fields and facets still
+    // work instead of the record opening with an empty form.
+    const visible = c ? !!c.visible : (f.core || f.filterable || f.submit || f.key === 'remarks');
     if (!visible) continue;
     out.push({
       ...f,
       visible: true,
       editable: c ? !!c.editable : true,
       required: c ? !!c.required : false,
-      filterable: c ? !!c.filterable : false,
-      submitField: c ? !!c.submit_field : false,
+      filterable: c ? !!c.filterable : !!f.filterable,
+      submitField: c ? !!c.submit_field : !!f.submit,
       sort: c ? c.sort_order : f.id,
       section: c ? c.section : null,
     });

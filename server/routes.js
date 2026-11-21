@@ -412,6 +412,11 @@ router.get('/categories/:id/columns', requireAuth, wrap((req, res) => {
       visible: c ? !!c.visible : true,
       editable: c ? !!c.editable : true,
       required: c ? !!c.required : false,
+      // carried through so a column-config save cannot silently drop the
+      // facet/submit flags the dropdowns and the Update panel depend on
+      filterable: c ? !!c.filterable : !!f.filterable,
+      submit_field: c ? !!c.submit_field : !!f.submit,
+      sort_order: c ? c.sort_order : null,
       configured: !!c,
       canHide: !f.system,
     };
@@ -428,6 +433,8 @@ router.put('/categories/:id/columns', requireAuth, requireAdmin, wrap((req, res)
     visible: f.visible !== false,
     editable: f.editable !== false,
     required: !!f.required,
+    filterable: !!f.filterable,
+    submit_field: !!(f.submit_field || f.submitField),
     sort_order: f.sort_order,
     section: f.section,
   }));
@@ -453,11 +460,14 @@ router.get('/employees', requireAuth, wrap((req, res) => {
  * Filter facets for the bench board: for each filterable column in scope, the
  * distinct values and counts. Drives the "space filter" chips.
  */
+/** Facet values for a scope, as a standalone call (used by the directory page). */
 router.get('/employees/facets', requireAuth, wrap((req, res) => {
   const params = {
+    ...req.query,
     projectId: asInt(req.query.projectId || req.query.project_id),
     subprojectId: asInt(req.query.subprojectId || req.query.subproject_id),
     categoryId: asInt(req.query.categoryId || req.query.category_id),
+    supplierId: asInt(req.query.supplierId || req.query.supplier_id),
   };
   const { scope } = query.resolveScope(req.user, params);
   const columns = query.columnsFor(scope);

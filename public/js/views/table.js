@@ -74,15 +74,41 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     oninput: debounce((e) => { q.search = e.target.value; q.page = 1; load(); }, 280),
   });
 
-  const statusSelect = h('select', {
-    class: 'select', style: { width: '160px' }, 'aria-label': 'Filter by status',
-    onchange: (e) => { q.status = e.target.value; q.page = 1; load(); },
-  }, h('option', { value: '' }, 'All statuses'));
+  /**
+   * The five value dropdowns. Options come from the facet payload the server
+   * already returns, so the lists are the real values in the current scope and
+   * the counts are the rows you would get by choosing them.
+   */
+  const QUICK_FILTERS = [
+    { key: 'billing_status', label: 'Billing status', width: '168px' },
+    { key: 'bench_category', label: 'Bench category', width: '168px' },
+    { key: 'bl_status', label: 'BL status', width: '132px' },
+    { key: 'offsite_onsite', label: 'Offsite / Onsite', width: '150px' },
+    { key: 'giga_project_name', label: 'Giga project', width: '168px' },
+  ];
+  const quickSelects = new Map();
+  const quickFilterRow = h('div', { class: 'quick-filters' },
+    ...QUICK_FILTERS.map((f) => {
+      const sel = h('select', {
+        class: 'select', style: { width: f.width }, 'aria-label': `Filter by ${f.label}`,
+        dataset: { key: f.key },
+        onchange: (e) => { setQuick(f.key, e.target.value); },
+      }, h('option', { value: '' }, `All ${f.label.toLowerCase()}`));
+      quickSelects.set(f.key, sel);
+      return sel;
+    }),
+    h('button', {
+      class: 'btn btn-sm btn-ghost', title: 'Clear every filter', onclick: () => clearFilters(),
+    }, icon('x', 13), 'Clear'),
+  );
 
-  const supplierSelect = h('select', {
-    class: 'select', style: { width: '180px' }, 'aria-label': 'Filter by supplier',
-    onchange: (e) => { q.supplierId = e.target.value || null; q.page = 1; load(); },
-  }, h('option', { value: '' }, 'All suppliers'));
+  function setQuick(key, value) {
+    if (value) facetFilters[key] = [value];
+    else delete facetFilters[key];
+    if (filterBar) filterBar.setActive(facetFilters);
+    q.page = 1;
+    load();
+  }
 
   const pageSizeSelect = h('select', {
     class: 'select', style: { width: '96px' }, 'aria-label': 'Rows per page',
@@ -106,8 +132,6 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
 
   const toolbar = h('div', { class: 'table-toolbar' },
     h('div', { class: 'search-box' }, icon('search', 15), searchInput),
-    statusSelect,
-    supplierSelect,
     h('div', { class: 'grow' }),
     filterBtn,
     colsBtn,
@@ -124,7 +148,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   const bodyHost = h('div', { id: 'table-host' });
   const chipsHost = h('div', { class: 'row', style: { padding: '0 14px 10px', gap: '6px', flexWrap: 'wrap', background: 'var(--surface)' } });
 
-  mount(el, head, ...(filterBar ? [filterBar.el] : []), toolbar, chipsHost, bodyHost, foot);
+  mount(el, head, ...(filterBar ? [filterBar.el] : []), toolbar, quickFilterRow, chipsHost, bodyHost, foot);
 
   /* ------------------------------------------------------------- loading */
   async function load({ silent = false } = {}) {
@@ -183,18 +207,18 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   /* ------------------------------------------------------------- render */
   function render() {
     renderChips();
-    renderStatusOptions();
+    renderQuickFilters();
     const countEl = el.querySelector('#row-count');
     if (countEl) countEl.textContent = fmtNum(data.total);
 
     if (!data.rows.length) {
       mount(bodyHost, emptyState({
-        title: q.search || q.status || q.supplierId ? 'No matching employees' : 'No employees in this selection',
-        message: q.search || q.status || q.supplierId
+        title: hasAnyFilter() ? 'No matching employees' : 'No employees in this selection',
+        message: hasAnyFilter()
           ? 'Try a different search term or clear the active filters.'
           : 'Add a person from the CRM panel, or choose a different category in the drill-down.',
         iconName: 'users',
-        action: q.search || q.status || q.supplierId
+        action: hasAnyFilter()
           ? h('button', { class: 'btn btn-sm', onclick: clearFilters }, 'Clear filters')
           : null,
       }));
@@ -248,21 +272,31 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     renderFoot();
   }
 
-  function renderStatusOptions() {
-    const known = ['Active', 'On Leave', 'Training', 'Billing Hold', 'Released', 'Completed'];
-    const current = statusSelect.value;
-    statusSelect.replaceChildren(
-      h('option', { value: '' }, 'All statuses'),
-      ...known.map((s) => h('option', { value: s, selected: s === q.status }, s)),
-    );
-    statusSelect.value = current || q.status || '';
-
-    const curSup = supplierSelect.value;
-    supplierSelect.replaceChildren(
-      h('option', { value: '' }, 'All suppliers'),
-      ...(state.suppliers || []).map((s) => h('option', { value: s.id, selected: String(s.id) === String(q.supplierId) }, s.name)),
-    );
-    supplierSelect.value = curSup || (q.supplierId ? String(q.supplierId) : '');
+  /**
+   * Rebuild each dropdown from the latest facet counts. Labels carry the count
+   * so you can see the effect before selecting, and the chosen value is kept
+   * even when it is not in the list (e.g. after the data changes).
+   */
+  function renderQuickFilters() {
+    for (const f of QUICK_FILTERS) {
+      const sel = quickSelects.get(f.key);
+      if (!sel) continue;
+      const chosen = (facetFilters[f.key] || [])[0] || '';
+      const facet = (facets || []).find((x) => x.key === f.key);
+      const values = facet ? facet.values : [];
+      const total = facet ? facet.total : 0;
+      const opts = [h('option', { value: '' }, `All ${f.label.toLowerCase()} (${fmtNum(total)})`)];
+      for (const v of values) {
+        opts.push(h('option', { value: v.value, selected: String(v.value) === String(chosen) },
+          `${v.value} (${fmtNum(v.count)})`));
+      }
+      if (chosen && !values.some((v) => String(v.value) === String(chosen))) {
+        opts.push(h('option', { value: chosen, selected: true }, `${chosen} (0)`));
+      }
+      sel.replaceChildren(...opts);
+      sel.value = chosen;
+      sel.disabled = !facet || !values.length;
+    }
   }
 
   function renderChips() {
@@ -270,11 +304,6 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     const add = (label, clear) => chips.push(h('span', { class: 'filter-chip' }, label,
       h('button', { 'aria-label': `Remove ${label}`, onclick: () => { clear(); q.page = 1; load(); } }, icon('x', 11))));
     if (q.search) add(`Search: “${q.search}”`, () => { q.search = ''; searchInput.value = ''; });
-    if (q.status) add(q.status, () => { q.status = ''; });
-    if (q.supplierId) {
-      const s = (state.suppliers || []).find((x) => String(x.id) === String(q.supplierId));
-      add(`Supplier: ${s ? s.name : q.supplierId}`, () => { q.supplierId = null; });
-    }
     for (const [k, v] of Object.entries(q.filters)) {
       if (!v) continue;
       const col = data.columns.find((c) => c.key === k.slice(2));
@@ -295,6 +324,10 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     chipsHost.style.display = chips.length ? 'flex' : 'none';
   }
 
+  function hasAnyFilter() {
+    return !!(q.search || Object.keys(facetFilters).length || Object.keys(q.filters).length);
+  }
+
   function clearFilters() {
     q.search = '';
     q.status = '';
@@ -304,8 +337,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     if (filterBar) filterBar.setActive({});
     q.page = 1;
     searchInput.value = '';
-    statusSelect.value = '';
-    supplierSelect.value = '';
+    renderQuickFilters();
     load();
   }
 
@@ -644,6 +676,10 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
         subprojectId: q.subprojectId || '',
         categoryId: q.categoryId || '',
         supplierId: q.supplierId || '',
+        // the five dropdowns are value filters, so they travel as f_ params
+        ...Object.fromEntries(Object.entries(facetFilters)
+          .filter(([, vals]) => vals && vals.length)
+          .map(([k, vals]) => [`f_${k}`, vals.join('|')])),
       });
       toast('Export ready', `${res.filename} · ${fmtNum(res.rows)} rows generated from the database.`, 'success', 5000);
     } catch (err) {

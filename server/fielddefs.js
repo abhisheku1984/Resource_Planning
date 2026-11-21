@@ -105,7 +105,7 @@ const IMPORTED = [
   { key: 'bench_aging_comment', label: 'Bench Aging Comment', type: 'textarea', group: 'Bench' },
   { key: 'bench_aging_category', label: 'Bench Aging Category', type: 'select', group: 'Bench',
     options: ['0-30 days', '31-60 days', '61-90 days', '90+ days'], filterable: true },
-  { key: 'bl_status', label: 'BL Status', type: 'text', group: 'Bench' },
+  { key: 'bl_status', label: 'BL Status', type: 'text', group: 'Bench', filterable: true },
   { key: 'bench_later_issue_date', label: 'Bench Later Issue Date', type: 'date', group: 'Bench' },
   { key: 'bench_later_end_date', label: 'Bench Later End Date', type: 'date', group: 'Bench' },
 
@@ -147,7 +147,7 @@ const IMPORTED = [
   { key: 'account_name', label: 'Account Name', type: 'text', group: 'Account', filterable: true },
   { key: 'interviewed_by', label: 'Interviewed By', type: 'text', group: 'Demand' },
   { key: 'demand_number', label: 'Demand Number', type: 'text', group: 'Demand', submit: true },
-  { key: 'giga_project_name', label: 'Giga Project Name', type: 'text', group: 'Demand' },
+  { key: 'giga_project_name', label: 'Giga Project Name', type: 'text', group: 'Demand', filterable: true },
   { key: 'ard_date', label: 'ARD Date', type: 'date', group: 'Demand', submit: true },
 ];
 
