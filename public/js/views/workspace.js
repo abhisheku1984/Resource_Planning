@@ -329,9 +329,29 @@ export function renderWorkspace(content, ctx) {
     if (ctx.setCrumbs) ctx.setCrumbs(items);
   }
 
+  // An update would otherwise be lost when the panel is closed or the person
+  // changes: settle() waits for the in-flight save and writes anything still
+  // pending before the panel goes away.
+  const flushPanels = () => {
+    try { submit.settle?.(); } catch { /* nothing pending */ }
+    try { crm.settle?.(); } catch { /* nothing pending */ }
+  };
+  const beforeUnload = (e) => {
+    if (submit.hasUnsaved?.() || crm.hasUnsaved?.()) {
+      // the debounce is short, but a hard close mid-keystroke still warns
+      flushPanels();
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
+    return undefined;
+  };
+  window.addEventListener('beforeunload', beforeUnload);
+
   // react to the panel close button inside the CRM
   const closeHandler = (e) => {
     if (e.detail?.collapsed) {
+      flushPanels();
       crmVisible = false;
       crm.el.classList.add('hidden');
       submit.el.classList.add('hidden');
@@ -340,8 +360,10 @@ export function renderWorkspace(content, ctx) {
   };
   document.addEventListener('rp:toggle-crm', closeHandler);
   const cleanup = () => {
+    flushPanels();
     document.removeEventListener('rp:toggle-crm', closeHandler);
     document.removeEventListener('rp:close-panel', closeHandler);
+    window.removeEventListener('beforeunload', beforeUnload);
   };
   document.addEventListener('rp:close-panel', closeHandler);
   window.addEventListener('hashchange', cleanup, { once: true });

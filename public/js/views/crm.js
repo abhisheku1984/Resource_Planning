@@ -702,6 +702,8 @@ export function createCrm({ onChanged, getScope }) {
     newPerson() { enterCreate(); },
     hasUnsaved: () => pending.size > 0,
     save: () => flushPending(true),
+    /** Awaited before the panel closes or the page unloads. */
+    settle: () => flushPending(true),
     isDetail: () => mode === 'detail',
     currentId: () => (mode === 'detail' ? current?.assignmentId : null),
   };

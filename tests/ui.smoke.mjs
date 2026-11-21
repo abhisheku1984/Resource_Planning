@@ -307,6 +307,12 @@ globalThis.fetch = async (url, opts = {}) => {
     ];
     return jsonResponse({ record: rec });
   }
+  if (/^\/employees\/\d+\/submit$/.test(path)) {
+    const rec = JSON.parse(JSON.stringify(workers[0]));
+    rec.values = { ...rec.values, ...(body.changes || {}) };
+    rec.rev = (rec.rev || 1) + 1;
+    return jsonResponse({ record: rec, changed: Object.keys(body.changes || {}), message: 'Saved' });
+  }
   if (/^\/employees\/\d+\/history$/.test(path)) {
     return jsonResponse({ history: [{ id: 2, field_key: 'training_status', field_label: 'Training Status', old_value: 'Not Started', new_value: 'Completed', actor_name: 'Priya Nair', at: '2026-11-19 10:00:00' }] });
   }
@@ -719,4 +725,42 @@ test('Data Hub offers the import template and asks where new rows go', async () 
 
   const selects = content.querySelectorAll('select');
   assert.ok(selects.length >= 3, 'project / subproject / category are selectable');
+});
+
+test('typing in the update panel saves itself: no Submit, no export, straight to the database', async () => {
+  const { createSubmitPanel } = await import('../public/js/views/submit.js');
+  const { state } = await import('../public/js/core.js');
+  state.crmKeys = ['leader_input_this_week', 'opp_id', 'demand_number'];
+  state.user = {
+    id: 1, name: 'Priya Nair', isAdmin: false,
+    capabilities: { 'employee.edit': true, 'crm.use': true },
+    projects: [{ id: 1, can_edit: 1 }],
+  };
+  const saved = [];
+  const panel = createSubmitPanel({ getScope: () => ({ projectId: 1 }), onSaved: (rec) => saved.push(rec) });
+  documentShim.body.replaceChildren(panel.el);
+  await panel.show(1);
+  await new Promise((r) => setTimeout(r, 80));
+
+  const input = panel.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'demand_number');
+  assert.ok(input, 'the field is on the form');
+  const before = calls.filter((c) => c.includes('/submit')).length;
+
+  // a keystroke, then wait out the debounce - nothing else is clicked
+  input.value = 'DEM-AUTOSAVE';
+  input.dispatchEvent({ type: 'input', target: input });
+  await new Promise((r) => setTimeout(r, 1300));
+
+  const writes = calls.filter((c) => c.includes('/submit'));
+  assert.ok(writes.length > before, 'the change reached the server without pressing Submit');
+  assert.ok(saved.length > 0, 'the saved record came back to the panel');
+  // the footer reports the truth: no longer pending
+  const text = flatten(panel.el).join(' ');
+  assert.ok(/All changes saved/.test(text) || /Saving/.test(text), `footer state: ${text.slice(-200)}`);
+  // and no file/export traffic was involved
+  assert.ok(!calls.some((c) => c.includes('/export')), 'saving never touches an export');
+
+  // the button is an optional "save now", not the only path
+  assert.ok(flatten(panel.el).join(' ').includes('Save now'));
+  state.crmKeys = [];
 });

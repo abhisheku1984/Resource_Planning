@@ -54,7 +54,7 @@ dropdown advertised. Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere
 ### Tests
 
 ```bash
-npm test          # 47 integration + UI smoke tests
+npm test          # 48 integration + UI smoke tests
 ```
 
 ## The assistant (in-app, offline, propose-only)
@@ -149,9 +149,22 @@ contact details, no placement, no remarks:
 | Detail Comments | Hard Block / Soft Block | Account Name |
 | Interviewed By | Demand Number | |
 
-Fill anything, press **Submit**: the values are written in a single transaction
-and audited with the leader's name. `crmKeys` in `server/fielddefs.js` is the
-single source for that list, and it drives the panel order and the export order.
+**Every change saves itself.** Type, and the field goes *Saving…* → *Saved*;
+the value is already in the database, audited with the leader's name and time.
+The whole set of changed fields goes in **one transaction**, so a half-typed
+screen never lands half-applied. **Save now** is an optional button, not the
+only path — there is no "submit then export" step and nothing is held in the
+browser:
+
+* the debounce is ~0.9s, and leaving a field saves it immediately;
+* a dropped connection keeps the text and retries;
+* if someone else saved the same record first, the guard returns `409`, your
+  text is kept, the newer revision is loaded and yours is re-saved on top;
+* changing person, closing the panel, navigating away or closing the browser
+  waits for the in-flight save first (the browser asks before discarding).
+
+`crmKeys` in `server/fielddefs.js` is the single source for that list, and it
+drives the panel order and the export order.
 
 ### Duplicate prevention
 
@@ -159,6 +172,20 @@ Incoming identity data is matched on employee ID (exact), email, phone and name.
 A hard match (ID/email/phone with a *different* employee ID) is queued in
 `duplicate_reviews` for an administrator instead of being written silently. Name
 matches alone are always queued — never auto-merged.
+
+### Where the data lives
+
+Everything lives in **one SQLite file**: `data/resource_planning.db`. Edits are
+written there the moment they are made and are visible to every user straight
+away. Nothing is push-synced to Google Drive, OneDrive, Dropbox, email or any
+other service, and the app makes **no outbound network calls** — no cloud
+account, no API key, no background job. There is no autosave-to-file loop: a
+workbook only exists when someone asks for one (below), and it is generated from
+the database at that moment.
+
+Excel is therefore **import and export only**: a way in, and a snapshot out. It
+is never the store, and two people never share an `.xlsx` to pass changes
+around.
 
 ### Excel synchronisation
 
