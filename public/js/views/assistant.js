@@ -205,8 +205,11 @@ export function createAssistant() {
 
   renderHead();
   renderFoot();
-  window.addEventListener('rp:assistant', () => toggle());
-  document.addEventListener('rp:logout', () => { open = false; el.classList.add('hidden'); document.body.classList.remove('assistant-open'); });
+  // NB: dispatched on `document`, so listen there - a window listener never fires.
+  document.addEventListener('rp:assistant', () => toggle());
+  document.addEventListener('rp:logout', () => {
+    open = false; el.classList.add('hidden'); document.body.classList.remove('assistant-open');
+  });
 
   return { el, toggle, open: () => toggle(true), isOpen: () => open, refreshQueue };
 }

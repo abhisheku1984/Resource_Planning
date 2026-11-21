@@ -135,8 +135,17 @@ const documentShim = {
   querySelector: (s) => body.querySelector(s),
   querySelectorAll: (s) => body.querySelectorAll(s),
   getElementById: (id) => body.querySelector(`#${id}`),
-  addEventListener() {},
-  removeEventListener() {},
+  // A real EventTarget. This used to be a no-op, which hid a genuine bug: a
+  // panel listening on `window` that is dispatched to on `document`.
+  listeners: {},
+  addEventListener(type, fn) { (documentShim.listeners[type] ||= []).push(fn); },
+  removeEventListener(type, fn) {
+    documentShim.listeners[type] = (documentShim.listeners[type] || []).filter((f) => f !== fn);
+  },
+  dispatchEvent(event) {
+    (documentShim.listeners[event.type] || []).forEach((f) => f(event));
+    return true;
+  },
 };
 globalThis.window = globalThis;
 globalThis.document = documentShim;
@@ -475,4 +484,50 @@ test('CRM keeps values and reports "Not saved" when the network fails, then retr
   const afterRetry = flatten(crm.el).join(' ');
   assert.ok(afterRetry.includes('Saved') || !afterRetry.includes('Not saved'), 'a successful retry reports Saved');
   assert.ok(calls.filter((c) => c.startsWith('PATCH')).length >= 1);
+});
+
+test('the assistant opens from the Ask event and answers a question', async () => {
+  // Regression guard: the panel used to listen on `window` while the launch
+  // button dispatched on `document`, so clicking Ask did nothing at all.
+  const { createAssistant } = await import('../public/js/views/assistant.js');
+  const assistant = createAssistant();
+
+  assert.ok(assistant.el.classList.contains('hidden'), 'panel starts closed');
+
+  document.dispatchEvent({ type: 'rp:assistant' });
+  assert.equal(assistant.isOpen(), true, 'the Ask event must open the panel');
+  assert.ok(!assistant.el.classList.contains('hidden'), 'panel is no longer hidden');
+
+  document.dispatchEvent({ type: 'rp:assistant' });
+  assert.equal(assistant.isOpen(), false, 'the same event closes it again');
+
+  // and a question round-trips through the API layer
+  document.dispatchEvent({ type: 'rp:assistant' });
+  const payload = JSON.stringify({
+    reply: '446 people in bench category "Bench" in Nexus Digital Transformation.',
+    understood: true, kind: 'count', table: null, suggestions: [],
+  });
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /\/api\/agent\/ask/);
+    // core.api() reads res.text() and parses it itself, so the body comes back
+    // as text, exactly like the real server response.
+    return {
+      ok: true, status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => payload,
+      json: async () => JSON.parse(payload),
+    };
+  };
+  const input = assistant.el.querySelector('.assistant-input');
+  const foot = assistant.el.querySelector('.assistant-foot');
+  const sendBtn = foot.children.find((c) => c.classList && c.classList.contains('btn-primary'));
+  assert.ok(input, 'the composer is rendered');
+  assert.ok(sendBtn, 'the send button is rendered');
+  input.value = 'how many on bench in nexus?';
+  sendBtn.click();
+  await new Promise((r) => setTimeout(r, 60));
+
+  const walk = (n) => (n.children || []).map((c) => (c.textContent || '') + walk(c)).join(' ');
+  const text = walk(assistant.el);
+  assert.match(text, /446 people/, 'the answer is rendered in the panel');
 });

@@ -63,8 +63,23 @@ app.use('/api', router);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
-// static SPA
-app.use(express.static(PUBLIC_DIR, { extensions: ['html'], maxAge: 0 }));
+// Static SPA. The app is plain ES modules with no build step, so a browser that
+// caches a module will keep running old code after an update - which looks like
+// "the new feature is missing". Force a revalidation on every asset.
+app.use(express.static(PUBLIC_DIR, {
+  extensions: ['html'],
+  maxAge: 0,
+  etag: true,
+  setHeaders(res, filePath) {
+    const rel = path.relative(PUBLIC_DIR, filePath);
+    if (rel === 'index.html' || rel.endsWith('.js') || rel.endsWith('.css') || rel.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    } else {
+      // fonts and other binary assets can be cached; they change rarely
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+    }
+  },
+}));
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
