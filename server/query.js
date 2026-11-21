@@ -423,7 +423,10 @@ function hydrate(ids, columns, scope) {
  * filters you have applied. Two grouped queries per context, four in total.
  */
 function facetsFor(scope, columns, ctx = null) {
-  if (!scope.projectId) return [];
+  // NOTE: no early return when there is no project scope. The Directory page
+  // shows every project the user may see (12,000 rows) and needs the same
+  // dropdown values; the WHERE clause already carries the allowed-project list.
+  if (!scope.projectId && !(ctx && ctx.plain)) return [];
   const filterable = columns.filter((c) => c.filterable);
   const contexts = ctx && ctx.plain
     ? { plain: ctx.plain, narrow: ctx.narrow || ctx.plain }

@@ -707,3 +707,44 @@ test('filter dropdowns list real values with counts, and the count follows the s
     `/employees?projectId=${projectId}&pageSize=1&f_bench_category=${encodeURIComponent(pickValue.value)}&f_billing_status=${encodeURIComponent(billingPick.value)}`);
   assert.equal(two.data.total, billingPick.count, 'stacked filters must agree with the counts shown');
 });
+
+test('filter dropdowns work on the Directory page, where there is no project scope', async () => {
+  // Regression: facetsFor returned [] whenever scope.projectId was empty, so on
+  // the all-projects Directory every dropdown was permanently disabled with (0).
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const all = await admin('GET', '/employees?pageSize=1');
+  assert.ok(all.data.total > 1);
+  assert.ok(all.data.facets.length >= 5, 'an all-projects view must still offer filter values');
+
+  const want = ['billing_status', 'bench_category', 'bl_status', 'offsite_onsite', 'giga_project_name'];
+  for (const key of want) {
+    const facet = all.data.facets.find((f) => f.key === key);
+    assert.ok(facet, `${key} must be offered with no project selected`);
+    assert.ok(facet.values.length >= 1, `${key} must list values with no project selected`);
+    assert.ok(facet.total > 0, `${key} must have a non-zero total`);
+  }
+
+  // and filtering still works without a project scope
+  const bench = all.data.facets.find((f) => f.key === 'bench_category');
+  const pick = bench.values[0];
+  const filtered = await admin('GET', `/employees?pageSize=1&f_bench_category=${encodeURIComponent(pick.value)}`);
+  assert.equal(filtered.data.total, pick.count);
+});
+
+test('a supervisor with no project selected only counts rows they may see', async () => {
+  const priya = client(await login('priya.nair@resourceplanning.io'));
+  const page = await priya('GET', '/employees?pageSize=1');
+  const bench = page.data.facets.find((f) => f.key === 'bench_category');
+  assert.ok(bench, 'dropdown values are available');
+  // blank cells are not offered as an option, so the counts can only fall short
+  // of the total -- never exceed it, and never count rows the user cannot see.
+  assert.ok(bench.total <= page.data.total);
+  const sum = bench.values.reduce((a, v) => a + v.count, 0);
+  assert.ok(sum <= page.data.total, `${sum} counted values > ${page.data.total} visible rows`);
+  const pick = bench.values[0];
+  const filtered = await priya(
+    'GET',
+    `/employees?pageSize=1&f_bench_category=${encodeURIComponent(pick.value)}`
+  );
+  assert.equal(filtered.data.total, pick.count);
+});

@@ -322,6 +322,9 @@ function migrate() {
   // value lookups by field are the hot path for filters
   db.exec('CREATE INDEX IF NOT EXISTS idx_av_field_value ON assignment_values(field_id, value)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_assign_proj ON assignments(project_id, category_id, active)');
+  // Covers the facet grouping, so SQLite can answer a filter dropdown straight
+  // from the index without touching assignment_values rows or joining back.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_av_field_value_key ON assignment_values(field_id, value, assignment_id)');
 }
 migrate();
 

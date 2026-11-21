@@ -174,9 +174,12 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     try {
       const res = await api(`/employees?${params}`, { signal: controller.signal });
       data = res;
-      if (filterBar && res.facets) {
+      // Never blank the dropdowns on a response that lacks facets: that is what
+      // left them permanently disabled. Only replace when there is something to
+      // show, and keep the last good values otherwise.
+      if (Array.isArray(res.facets) && res.facets.length) {
         facets = res.facets;
-        filterBar.setFacets(facets, res.scope?.category?.name || res.scope?.project?.name || '');
+        if (filterBar) filterBar.setFacets(facets, res.scope?.category?.name || res.scope?.project?.name || '');
       }
       loading = false;
       render();
@@ -296,6 +299,9 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
       sel.replaceChildren(...opts);
       sel.value = chosen;
       sel.disabled = !facet || !values.length;
+      sel.title = sel.disabled
+        ? `No ${f.label.toLowerCase()} values in this selection`
+        : `${values.length} ${f.label.toLowerCase()} values`;
     }
   }
 
