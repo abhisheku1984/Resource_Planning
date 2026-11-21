@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { q } = require('./db');
+const { gigaGrant, GIGA_CAPABILITIES } = require('./access');
 
 /** scrypt password hashing — no external deps. */
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
@@ -55,14 +56,25 @@ function userFromToken(token) {
   return hydrateUser(row);
 }
 
+/** Effective capabilities in the session and in the admin access editor. */
+function capabilitiesFor(user, grant) {
+  const saved = new Map(q.all('SELECT capability, allowed FROM user_capabilities WHERE user_id = ?', user.id)
+    .map((r) => [r.capability, !!r.allowed]));
+  return Object.fromEntries(ALL_CAPABILITIES.map((key) => {
+    const allowed = grant ? !!grant.name && GIGA_CAPABILITIES.includes(key) && (key === 'project.view' || !!saved.get(key)) : !!saved.get(key);
+    return [key, user.role === 'admin' || allowed];
+  }));
+}
+
 /** Attach role, capabilities and project grants to a raw users row. */
 function hydrateUser(row) {
-  const capabilities = {};
-  for (const cap of ALL_CAPABILITIES) capabilities[cap] = row.role === 'admin';
-  for (const r of q.all('SELECT capability, allowed FROM user_capabilities WHERE user_id = ?', row.id)) {
-    capabilities[r.capability] = row.role === 'admin' ? true : !!r.allowed;
-  }
-  const projects = q.all(
+  const gigaAccess = row.role === 'admin' ? null : gigaGrant(row.id);
+  const capabilities = capabilitiesFor(row, gigaAccess);
+  const projects = gigaAccess ? q.all(
+    `SELECT id, code, name, ? AS can_edit, ? AS can_export, ? AS can_crm FROM projects
+      WHERE id IN (SELECT project_id FROM giga_assignments WHERE project_name = ?) ORDER BY name`,
+    Number(capabilities['employee.edit']), Number(capabilities['export.data']), Number(capabilities['crm.use']), gigaAccess.name
+  ) : q.all(
     `SELECT p.id, p.code, p.name, up.can_edit, up.can_export, up.can_crm
        FROM user_projects up JOIN projects p ON p.id = up.project_id
       WHERE up.user_id = ?`,
@@ -78,6 +90,7 @@ function hydrateUser(row) {
     title: row.title,
     isAdmin: row.role === 'admin',
     capabilities,
+    gigaAccess,
     projects: row.role === 'admin'
       ? q.all('SELECT id, code, name, 1 AS can_edit, 1 AS can_export, 1 AS can_crm FROM projects WHERE active = 1 ORDER BY name')
       : projects,
@@ -113,6 +126,7 @@ module.exports = {
   destroySession,
   userFromToken,
   hydrateUser,
+  capabilitiesFor,
   projectGrant,
   can,
   visibleProjectIds,

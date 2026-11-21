@@ -18,6 +18,7 @@
  */
 const { q } = require('./db');
 const schema = require('./schema');
+const { assignmentScope, assertGigaPlacement, assertAssignment } = require('./access');
 
 /**
  * Fields stored directly on the employees table.
@@ -46,7 +47,7 @@ const BASE_SELECT = `
          e.updated_at AS employee_updated_at,
          p.name AS project_name, p.code AS project_code,
          s.name AS subproject_name, c.name AS category_name,
-         sup.name AS supplier, u.name AS updated_by_name
+         sup.name AS supplier, COALESCE(u.name, a.archived_updater_name) AS updated_by_name
     FROM assignments a
     JOIN employees e ON e.id = a.employee_id
     JOIN projects p ON p.id = a.project_id
@@ -73,7 +74,7 @@ function visibleProjectIds(user) {
 }
 
 /** Resolve the scope, enforcing project access on each level. */
-function resolveScope(user, params) {
+function resolveScope(user, params, flag) {
   const scoped = { projectId: null, subprojectId: null, categoryId: null };
   const allowed = visibleProjectIds(user);
 
@@ -106,6 +107,8 @@ function resolveScope(user, params) {
     scoped.subprojectId = scoped.subprojectId || cat.subproject_id;
     scoped.projectId = scoped.projectId || cat.project_id;
   }
+  assertGigaPlacement(user, scoped);
+  scoped.acl = assignmentScope(user, flag);
   return { scope: scoped, allowed };
 }
 
@@ -116,10 +119,10 @@ function resolveScope(user, params) {
  * allocation %, location…) even though they are not all displayed in the table,
  * so this merges the compact display set with the project's filterable set.
  */
-function columnsFor(scope) {
-  if (scope.categoryId) return schema.columnsForCategory(scope.categoryId);
+function columnsFor(scope, user) {
+  if (scope.categoryId) return schema.columnsForCategory(scope.categoryId, user);
 
-  const fields = schema.listFields();
+  const fields = schema.listFields(user);
   const byKey = new Map(fields.map((f) => [f.key, f]));
   const seen = new Set();
   const out = [];
@@ -140,7 +143,11 @@ function columnsFor(scope) {
 
   // union of the filterable flags across the categories in scope
   let cats;
-  if (scope.subprojectId) cats = q.all('SELECT id FROM categories WHERE subproject_id = ?', scope.subprojectId);
+  if (user.gigaAccess) {
+    cats = q.all(`SELECT DISTINCT category_id AS id FROM giga_assignments WHERE project_name = ?
+                  AND (? IS NULL OR project_id = ?) AND (? IS NULL OR subproject_id = ?)`,
+      user.gigaAccess.name, scope.projectId, scope.projectId, scope.subprojectId, scope.subprojectId);
+  } else if (scope.subprojectId) cats = q.all('SELECT id FROM categories WHERE subproject_id = ?', scope.subprojectId);
   else if (scope.projectId) {
     cats = q.all('SELECT c.id FROM categories c JOIN subprojects s ON s.id = c.subproject_id WHERE s.project_id = ?', scope.projectId);
   } else cats = q.all('SELECT id FROM categories LIMIT 1');
@@ -152,7 +159,7 @@ function columnsFor(scope) {
     }
   }
   for (const f of fields) {
-    if (facetIds.has(f.id)) push(f, { filterable: true });
+    if (facetIds.has(f.id)) push(f, { filterable: true, editable: !(user.gigaAccess && f.key === 'giga_project_name') });
   }
   return out;
 }
@@ -184,7 +191,8 @@ function collectFilters(params, columns) {
   for (const [key, raw] of Object.entries(params)) {
     if (!key.startsWith('f_')) continue;
     const fieldKey = key.slice(2);
-    const values = String(raw).split('|').filter((v) => v !== '');
+    // Array parameters preserve a literal | inside a workbook value.
+    const values = (Array.isArray(raw) ? raw.map(String) : String(raw).split('|')).filter((v) => v !== '');
     if (!values.length) continue;
     if (MAPPED[fieldKey]) {
       mapped.push({ key: fieldKey, values });
@@ -202,19 +210,15 @@ function collectFilters(params, columns) {
  * Filters on configuration columns are pushed down as EXISTS so SQLite can use
  * idx_av_field_value instead of materialising every value.
  */
-function buildWhere({ scope, allowed, filters, search, columns, params = {} }) {
-  const where = ['a.active = 1', 'e.active = 1'];
-  const args = [];
-
+function buildWhere({ scope, filters, search, columns, params = {} }) {
+  const where = ['a.active = 1', 'e.active = 1', scope.acl.sql];
+  const args = [...scope.acl.args];
   if (scope.subprojectId) { where.push('a.subproject_id = ?'); args.push(scope.subprojectId); }
-  else if (scope.projectId) { where.push('a.project_id = ?'); args.push(scope.projectId); }
-  else {
-    where.push(`a.project_id IN (${allowed.map(() => '?').join(',') || 'NULL'})`);
-    args.push(...allowed);
-  }
+  if (scope.projectId) { where.push('a.project_id = ?'); args.push(scope.projectId); }
   if (scope.categoryId) { where.push('a.category_id = ?'); args.push(scope.categoryId); }
   // legacy ?status= (assignment status) — distinct from the mapped `status` column
   if (params.status) { where.push('a.status = ?'); args.push(String(params.status)); }
+  if (params.supplierId) { where.push('a.supplier_id = ?'); args.push(Number(params.supplierId)); }
 
   for (const f of filters.mapped) {
     const m = MAPPED[f.key];
@@ -265,30 +269,56 @@ const SORTS = {
   updated_at: 'a.updated_at',
 };
 
-/**
- * The supervisor table.
- * Returns rows + the column configuration + the filter facets for this scope.
- */
+// The table, facet endpoint and Excel export must start with the same row
+// restriction. A display filter may narrow the grant but can never clear it.
+function prepareEmployeeQuery(user, params, flag) {
+  const { scope } = resolveScope(user, params, flag);
+  const columns = columnsFor(scope, user);
+  const filters = collectFilters(params, columns);
+  const prepare = (filters) => buildWhere({ scope, columns, params, search: params.search, filters });
+  const narrow = prepare(filters);
+  const active = new Set([...filters.mapped.map((f) => f.key), ...filters.valued.map((f) => f.field.key)]);
+  function except(key) {
+    return prepare({ mapped: filters.mapped.filter((f) => f.key !== key), valued: filters.valued.filter((f) => f.field.key !== key) });
+  }
+  return { scope, columns, narrow, active, except };
+}
+
+const COUNT_FROM = `FROM assignments a JOIN employees e ON e.id = a.employee_id
+                    LEFT JOIN suppliers sup ON sup.id = a.supplier_id`;
+
+function countRows({ where, args }) {
+  return q.get(`SELECT COUNT(*) c ${COUNT_FROM} WHERE ${where}`, ...args).c;
+}
+
+// Directory cards summarize the exact working set used for the table, before
+// pagination. A review belongs to the view if either person in it matches;
+// counting reviews separately avoids multiplying placements or review tickets.
+function directorySummary(user, { where, args }) {
+  const reviews = user.isAdmin ? `(SELECT COUNT(*) FROM duplicate_reviews d WHERE d.status = 'pending'
+    AND (d.candidate_employee_id IN (SELECT employee_id FROM matching)
+      OR d.emp_code COLLATE NOCASE IN (SELECT emp_code FROM matching)))` : 'NULL';
+  return q.get(`WITH matching AS (
+                  SELECT a.id, a.employee_id, a.project_id, e.emp_code ${COUNT_FROM} WHERE ${where}
+                )
+                SELECT COUNT(*) AS placements, COUNT(DISTINCT m.employee_id) AS people,
+                       COUNT(DISTINCT m.project_id) AS hierarchyProjects,
+                       COUNT(DISTINCT g.project_name) AS gigaProjects, ${reviews} AS pendingReviews
+                  FROM matching m LEFT JOIN giga_assignments g ON g.assignment_id = m.id`, ...args);
+}
+
 function listEmployees(user, params = {}) {
   const page = Math.max(1, Number(params.page) || 1);
   const pageSize = Math.min(200, Math.max(5, Number(params.pageSize) || 25));
-
-  const { scope, allowed } = resolveScope(user, params);
-  const columns = columnsFor(scope);
-  const filters = collectFilters(params, columns);
-  const { where, args } = buildWhere({ scope, allowed, filters, search: params.search, columns, params });
+  const ctx = prepareEmployeeQuery(user, params);
+  const { scope, columns, narrow: { where, args } } = ctx;
 
   const sortExpr = SORTS[params.sort] || 'e.name COLLATE NOCASE';
   const dir = String(params.dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC';
 
-  // ---- phase 1: count + page of ids ----
-  const total = Number(q.get(
-    `SELECT COUNT(*) c FROM assignments a
-       JOIN employees e ON e.id = a.employee_id
-       LEFT JOIN suppliers sup ON sup.id = a.supplier_id
-      WHERE ${where}`,
-    ...args
-  ).c);
+  // Other consumers of this table don't need the Directory's extra aggregates.
+  const summary = params.includeSummary === '1' ? directorySummary(user, ctx.narrow) : null;
+  const total = summary?.placements ?? countRows(ctx.narrow);
 
   const ids = q.all(
     `SELECT a.id FROM assignments a
@@ -310,11 +340,12 @@ function listEmployees(user, params = {}) {
     rows,
     columns: columns.map(publicColumn),
     total,
+    ...(summary && { summary }),
     page,
     pageSize,
     totalPages: Math.max(1, Math.ceil(total / pageSize)),
     scope: schema.scopeLabels(scope),
-    facets: facetsFor(scope, columns),
+    facets: facetsFor(ctx, total),
     canEdit: user.isAdmin || !!user.projects.find((p) => p.id === scope.projectId)?.can_edit,
   };
 }
@@ -393,73 +424,71 @@ function hydrate(ids, columns, scope) {
   }).filter(Boolean);
 }
 
-/**
- * Filter facets: for each filterable column in this scope, the distinct values
- * with counts. This is what drives the "space filter" chips.
- */
-function facetsFor(scope, columns) {
-  if (!scope.projectId) return [];
-  const projectFilter = scope.subprojectId ? 'a.subproject_id = ?' : 'a.project_id = ?';
-  const scopeArg = scope.subprojectId || scope.projectId;
-  const catFilter = scope.categoryId ? ' AND a.category_id = ?' : '';
-  const catArg = scope.categoryId ? [scope.categoryId] : [];
+/** Counts for a dropdown include every active condition *except its own
+ *  selection*. This preserves the row grant even when choosing a sibling. */
+function facetsFor(ctx, total = countRows(ctx.narrow)) {
+  const filterable = ctx.columns.filter((c) => c.filterable);
+  function collect({ where, args }, cols) {
+    const buckets = new Map();
+    const mapped = cols.filter((c) => MAPPED[c.key]);
+    const valued = cols.filter((c) => !MAPPED[c.key]);
 
-  const filterable = columns.filter((c) => c.filterable);
-  const mapped = filterable.filter((c) => MAPPED[c.key]);
-  const valued = filterable.filter((c) => !MAPPED[c.key]);
-
-  // One round trip per storage location instead of one per column: 12 facet
-  // queries became 2, which is the difference between ~250 ms and ~25 ms.
-  const grouped = new Map();   // key -> [{value, count}]
-
-  if (mapped.length) {
-    const selects = mapped.map((c) => `'${c.key.replace(/'/g, "''")}', ifnull(${MAPPED[c.key].sql}, '')`).join(', ');
-    for (const r of q.all(
-      `SELECT ${selects}, COUNT(*) c FROM assignments a
-         JOIN employees e ON e.id = a.employee_id
-         LEFT JOIN suppliers sup ON sup.id = a.supplier_id
-        WHERE a.active = 1 AND ${projectFilter}${catFilter}
-        GROUP BY ${mapped.map((c) => `ifnull(${MAPPED[c.key].sql}, '')`).join(', ')}`,
-      scopeArg, ...catArg
-    )) {
-      mapped.forEach((c) => {
-        const value = r[`'${c.key}'`] ?? r[c.key];
-        if (value === '' || value === null || value === undefined) return;
-        if (!grouped.has(c.key)) grouped.set(c.key, new Map());
-        const bucket = grouped.get(c.key);
-        bucket.set(value, (bucket.get(value) || 0) + r.c);
-      });
+    if (mapped.length) {
+      const selects = mapped.map((c, i) => `ifnull(${MAPPED[c.key].sql}, '') AS facet_${i}`).join(', ');
+      const groups = mapped.map((c) => `ifnull(${MAPPED[c.key].sql}, '')`).join(', ');
+      for (const r of q.all(
+        `SELECT ${selects}, COUNT(*) c FROM assignments a
+           JOIN employees e ON e.id = a.employee_id
+           LEFT JOIN suppliers sup ON sup.id = a.supplier_id
+          WHERE ${where}
+          GROUP BY ${groups}`,
+        ...args
+      )) {
+        for (const [i, c] of mapped.entries()) {
+          const value = r[`facet_${i}`];
+          if (value === '' || value === null || value === undefined) continue;
+          if (!buckets.has(c.key)) buckets.set(c.key, new Map());
+          const b = buckets.get(c.key);
+          b.set(value, (b.get(value) || 0) + r.c);
+        }
+      }
     }
+
+    if (valued.length) {
+      const ph = valued.map(() => '?').join(',');
+      for (const r of q.all(
+        `SELECT av.field_id, av.value v, COUNT(*) c FROM assignment_values av
+           JOIN assignments a ON a.id = av.assignment_id
+           JOIN employees e ON e.id = a.employee_id
+           LEFT JOIN suppliers sup ON sup.id = a.supplier_id
+          WHERE ${where} AND av.field_id IN (${ph})
+            AND av.value IS NOT NULL AND av.value <> ''
+          GROUP BY av.field_id, av.value`,
+        ...args, ...valued.map((f) => f.id)
+      )) {
+        if (!buckets.has(r.field_id)) buckets.set(r.field_id, new Map());
+        buckets.get(r.field_id).set(r.v, r.c);
+      }
+    }
+    return buckets;
   }
 
-  if (valued.length) {
-    const ph = valued.map(() => '?').join(',');
-    for (const r of q.all(
-      `SELECT av.field_id, av.value v, COUNT(*) c FROM assignment_values av
-         JOIN assignments a ON a.id = av.assignment_id
-        WHERE a.active = 1 AND av.field_id IN (${ph}) AND ${projectFilter}${catFilter}
-          AND av.value IS NOT NULL AND av.value <> ''
-        GROUP BY av.field_id, av.value
-        ORDER BY c DESC`,
-      ...valued.map((f) => f.id), scopeArg, ...catArg
-    )) {
-      if (!grouped.has(r.field_id)) grouped.set(r.field_id, new Map());
-      grouped.get(r.field_id).set(r.v, r.c);
-    }
-  }
-
+  const shared = collect(ctx.narrow, filterable.filter((c) => !ctx.active.has(c.key)));
   const out = [];
   for (const col of filterable) {
-    const bucket = grouped.get(col.key) || grouped.get(col.id);
-    if (!bucket || !bucket.size) continue;
+    const others = ctx.active.has(col.key) ? ctx.except(col.key) : null;
+    const buckets = others ? collect(others, [col]) : shared;
+    const bucket = buckets.get(col.key) || buckets.get(col.id) || new Map();
+    if (!bucket.size && !others) continue; // keep an active, zero-match selection clearable
     const values = [...bucket.entries()]
       .map(([value, count]) => ({ value, count }))
       .sort((a, b) => b.count - a.count || String(a.value).localeCompare(String(b.value)))
-      .slice(0, 40);
+      .slice(0, 60);
     out.push({
       key: col.key,
       label: col.label,
       type: col.type,
+      allCount: others ? countRows(others) : total, // includes blank rows when clearing this filter
       total: [...bucket.values()].reduce((a, n) => a + n, 0),
       values,
     });
@@ -468,7 +497,8 @@ function facetsFor(scope, columns) {
 }
 
 /** One record with every field (used by the CRM panel and the submit form). */
-function getAssignment(id) {
+function getAssignment(user, id, flag) {
+  assertAssignment(user, id, flag);
   const meta = q.get(
     `SELECT a.*, e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone, e.id AS employee_id
        FROM assignments a JOIN employees e ON e.id = a.employee_id WHERE a.id = ?`,
@@ -476,7 +506,7 @@ function getAssignment(id) {
   );
   if (!meta) return null;
 
-  const fields = schema.listFields();
+  const fields = schema.listFields(user);
   const stored = new Map(
     q.all('SELECT field_id, value FROM assignment_values WHERE assignment_id = ?', meta.id).map((r) => [r.field_id, r.value])
   );
@@ -520,7 +550,7 @@ function getAssignment(id) {
     rev: meta.rev,
     values,
     lockedFields: fields.filter((f) => locked.has(f.id)).map((f) => f.key),
-    columns: schema.columnsForCategory(meta.category_id).map((c) => ({
+    columns: schema.columnsForCategory(meta.category_id, user).map((c) => ({
       ...publicColumn(c), locked: locked.has(c.id),
     })),
     allFields: fields,
@@ -530,6 +560,7 @@ function getAssignment(id) {
 module.exports = {
   MAPPED,
   DEFAULT_KEYS,
+  prepareEmployeeQuery,
   listEmployees,
   getAssignment,
   hydrate,

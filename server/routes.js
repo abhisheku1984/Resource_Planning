@@ -2,13 +2,15 @@
 const express = require('express');
 const { q, tx } = require('./db');
 const auth = require('./auth');
+const access = require('./access');
 const schema = require('./schema');
 const emp = require('./employees');
 const query = require('./query');
 const agent = require('./agent');
+const { checkCrmSubmit } = require('./assistant-crm');
 const agentstore = require('./agentstore');
 const excel = require('./excel');
-const { record, historyFor, recentActivity } = require('./audit');
+const { record, auditScope, recentActivity } = require('./audit');
 
 const router = express.Router();
 
@@ -70,124 +72,65 @@ router.post('/auth/password', requireAuth, wrap((req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/bootstrap', requireAuth, wrap((req, res) => {
   const tree = schema.hierarchy(req.user);
-  const fields = schema.listFields();
+  const fields = schema.listFields(req.user);
   res.json({
     user: req.user,
     tree,
     fields,
-    suppliers: q.all('SELECT * FROM suppliers WHERE active = 1 ORDER BY name'),
+    suppliers: access.suppliersFor(req.user, true),
+    // the columns the CRM / Update panel shows, in order
+    crmKeys: schema.crmKeys(),
     statusCounts: statusCounts(req.user),
     totals: totals(req.user),
   });
 }));
 
-function visibleProjectIds(user) {
-  return user.isAdmin ? q.all('SELECT id FROM projects').map((r) => r.id) : user.projects.map((p) => p.id);
-}
-
 function totals(user) {
-  const ids = visibleProjectIds(user);
-  if (!ids.length) return { employees: 0, assignments: 0, projects: 0, suppliers: 0, pendingReviews: 0 };
-  const ph = ids.map(() => '?').join(',');
-  const employees = Number(q.get(
-    `SELECT COUNT(DISTINCT employee_id) c FROM assignments WHERE active = 1 AND project_id IN (${ph})`, ...ids
-  ).c);
-  const assignments = Number(q.get(
-    `SELECT COUNT(*) c FROM assignments WHERE active = 1 AND project_id IN (${ph})`, ...ids
-  ).c);
+  const acl = access.assignmentScope(user);
+  const counts = q.get(`SELECT COUNT(DISTINCT employee_id) employees, COUNT(*) assignments
+                         FROM assignments a WHERE a.active = 1 AND ${acl.sql}`, ...acl.args);
   return {
-    employees,
-    assignments,
-    projects: treeCount(user),
-    suppliers: Number(q.get('SELECT COUNT(*) c FROM suppliers WHERE active = 1').c),
+    ...counts,
+    projects: auth.visibleProjectIds(user).length,
+    suppliers: access.suppliersFor(user, true).length,
     pendingReviews: user.isAdmin ? Number(q.get("SELECT COUNT(*) c FROM duplicate_reviews WHERE status = 'pending'").c) : 0,
   };
 }
 
-function treeCount(user) {
-  const ids = visibleProjectIds(user);
-  return ids.length;
-}
-
 function statusCounts(user) {
-  const ids = visibleProjectIds(user);
-  if (!ids.length) return [];
-  const ph = ids.map(() => '?').join(',');
-  return q.all(
-    `SELECT status, COUNT(*) c FROM assignments WHERE active = 1 AND project_id IN (${ph}) GROUP BY status ORDER BY c DESC`,
-    ...ids
-  );
+  const acl = access.assignmentScope(user);
+  return q.all(`SELECT status, COUNT(*) c FROM assignments a WHERE a.active = 1 AND ${acl.sql} GROUP BY status ORDER BY c DESC`, ...acl.args);
 }
 
 // ---------------------------------------------------------------------------
 // dashboard
 // ---------------------------------------------------------------------------
 router.get('/dashboard', requireAuth, wrap((req, res) => {
-  const ids = visibleProjectIds(req.user);
-  if (!ids.length) {
-    return res.json({ totals: totals(req.user), byProject: [], byStatus: [], bySupplier: [], byCategory: [], activity: [], attention: [] });
-  }
-  const ph = ids.map(() => '?').join(',');
-
+  const acl = access.assignmentScope(req.user);
   const byProject = q.all(
-    `SELECT p.id, p.name, p.code, COUNT(a.id) c,
-            SUM(CASE WHEN a.status = 'Active' THEN 1 ELSE 0 END) active
-       FROM projects p LEFT JOIN assignments a ON a.project_id = p.id AND a.active = 1
-      WHERE p.id IN (${ph}) GROUP BY p.id ORDER BY c DESC`,
-    ...ids
-  );
-
-  const byStatus = q.all(
-    `SELECT status, COUNT(*) c FROM assignments WHERE active = 1 AND project_id IN (${ph}) GROUP BY status ORDER BY c DESC`,
-    ...ids
-  );
-
+    `SELECT p.id, p.name, p.code, COUNT(a.id) c, SUM(a.status = 'Active') active
+       FROM assignments a JOIN projects p ON a.project_id = p.id
+      WHERE a.active = 1 AND ${acl.sql} GROUP BY p.id ORDER BY c DESC`, ...acl.args);
   const bySupplier = q.all(
     `SELECT ifnull(sup.name, 'Unassigned') name, COUNT(*) c
        FROM assignments a LEFT JOIN suppliers sup ON sup.id = a.supplier_id
-      WHERE a.active = 1 AND a.project_id IN (${ph})
-      GROUP BY sup.id ORDER BY c DESC LIMIT 8`,
-    ...ids
-  );
-
+      WHERE a.active = 1 AND ${acl.sql} GROUP BY sup.id ORDER BY c DESC LIMIT 8`, ...acl.args);
   const byCategory = q.all(
-    `SELECT c.name, COUNT(a.id) c FROM categories c
-       JOIN subprojects s ON s.id = c.subproject_id
-       LEFT JOIN assignments a ON a.category_id = c.id AND a.active = 1
-      WHERE s.project_id IN (${ph})
-      GROUP BY c.id ORDER BY c DESC LIMIT 10`,
-    ...ids
-  );
-
+    `SELECT c.name, COUNT(*) c FROM assignments a JOIN categories c ON a.category_id = c.id
+      WHERE a.active = 1 AND ${acl.sql} GROUP BY c.id ORDER BY c DESC LIMIT 10`, ...acl.args);
   const attention = q.all(
     `SELECT a.id assignment_id, e.emp_code, e.name, a.status, a.updated_at,
             p.name project_name, s.name subproject_name, c.name category_name
-       FROM assignments a
-       JOIN employees e ON e.id = a.employee_id
-       JOIN projects p ON p.id = a.project_id
-       JOIN subprojects s ON s.id = a.subproject_id
-       JOIN categories c ON c.id = a.category_id
-      WHERE a.active = 1 AND a.project_id IN (${ph})
-        AND (a.status IN ('On Leave', 'Billing Hold', 'Released') OR a.supplier_id IS NULL)
-      ORDER BY a.updated_at DESC LIMIT 8`,
-    ...ids
-  );
-
-  const trend = q.all(
-    `SELECT substr(at, 1, 10) day, COUNT(*) c FROM audit_log
-      WHERE at >= date('now', '-13 day') GROUP BY day ORDER BY day`,
-  );
-
-  res.json({
-    totals: totals(req.user),
-    byProject,
-    byStatus,
-    bySupplier,
-    byCategory,
-    activity: recentActivity({ projectIds: req.user.isAdmin ? null : ids, limit: 12 }),
-    attention,
-    trend,
-  });
+       FROM assignments a JOIN employees e ON e.id = a.employee_id
+       JOIN projects p ON p.id = a.project_id JOIN subprojects s ON s.id = a.subproject_id JOIN categories c ON c.id = a.category_id
+      WHERE a.active = 1 AND ${acl.sql} AND (a.status IN ('On Leave', 'Billing Hold', 'Released') OR a.supplier_id IS NULL)
+      ORDER BY a.updated_at DESC LIMIT 8`, ...acl.args);
+  const audit = auditScope(req.user);
+  const canAudit = auth.can(req.user, 'audit.view');
+  const trend = canAudit ? q.all(`SELECT substr(at, 1, 10) day, COUNT(*) c FROM audit_log l
+                       WHERE at >= date('now', '-13 day') AND ${audit.sql} GROUP BY day ORDER BY day`, ...audit.args) : [];
+  res.json({ totals: totals(req.user), byProject, byStatus: statusCounts(req.user), bySupplier, byCategory,
+    activity: canAudit ? recentActivity(req.user, {limit: 12}) : [], attention, trend });
 }));
 
 // ---------------------------------------------------------------------------
@@ -286,7 +229,7 @@ router.patch('/categories/:id', requireAuth, requireAdmin, wrap((req, res) => {
 }));
 
 router.get('/suppliers', requireAuth, wrap((req, res) => {
-  res.json({ suppliers: q.all('SELECT * FROM suppliers ORDER BY name') });
+  res.json({ suppliers: access.suppliersFor(req.user) });
 }));
 
 router.post('/suppliers', requireAuth, requireAdmin, wrap((req, res) => {
@@ -316,6 +259,8 @@ router.patch('/suppliers/:id', requireAuth, requireAdmin, wrap((req, res) => {
 }));
 
 router.get('/groups', requireAuth, wrap((req, res) => {
+  // Groups are global registers, not Giga-scoped workforce records.
+  if (req.user.gigaAccess) return res.json({ groups: [] });
   const groups = q.all('SELECT * FROM employee_groups ORDER BY name').map((g) => ({
     ...g,
     members: q.all(
@@ -357,7 +302,7 @@ router.put('/groups/:id/members', requireAuth, requireAdmin, wrap((req, res) => 
 // dynamic field catalogue & per-category configuration
 // ---------------------------------------------------------------------------
 router.get('/fields', requireAuth, wrap((req, res) => {
-  res.json({ fields: schema.listFields() });
+  res.json({ fields: schema.listFields(req.user) });
 }));
 
 router.post('/fields', requireAuth, requireAdmin, wrap((req, res) => {
@@ -403,20 +348,9 @@ router.get('/categories/:id/columns', requireAuth, wrap((req, res) => {
   );
   if (!cat) return res.status(404).json({ error: 'Category not found.' });
   emp.assertProjectAccess(req.user, cat.project_id);
-  const configured = q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId);
-  const configuredMap = new Map(configured.map((c) => [c.field_id, c]));
-  const all = schema.listFields().map((f) => {
-    const c = configuredMap.get(f.id);
-    return {
-      ...f,
-      visible: c ? !!c.visible : true,
-      editable: c ? !!c.editable : true,
-      required: c ? !!c.required : false,
-      configured: !!c,
-      canHide: !f.system,
-    };
-  });
-  res.json({ category: cat, fields: all, isConfigured: configured.length > 0 });
+  access.assertGigaPlacement(req.user, { categoryId });
+  const fields = schema.categoryLayout(categoryId, req.user);
+  res.json({ category: cat, fields, isConfigured: fields.some((f) => f.configured) });
 }));
 
 router.put('/categories/:id/columns', requireAuth, requireAdmin, wrap((req, res) => {
@@ -428,6 +362,8 @@ router.put('/categories/:id/columns', requireAuth, requireAdmin, wrap((req, res)
     visible: f.visible !== false,
     editable: f.editable !== false,
     required: !!f.required,
+    filterable: f.filterable,
+    submit_field: f.submit_field ?? f.submitField,
     sort_order: f.sort_order,
     section: f.section,
   }));
@@ -453,15 +389,17 @@ router.get('/employees', requireAuth, wrap((req, res) => {
  * Filter facets for the bench board: for each filterable column in scope, the
  * distinct values and counts. Drives the "space filter" chips.
  */
+/** Facet values for a scope, as a standalone call (used by the directory page). */
 router.get('/employees/facets', requireAuth, wrap((req, res) => {
   const params = {
+    ...req.query,
     projectId: asInt(req.query.projectId || req.query.project_id),
     subprojectId: asInt(req.query.subprojectId || req.query.subproject_id),
     categoryId: asInt(req.query.categoryId || req.query.category_id),
+    supplierId: asInt(req.query.supplierId || req.query.supplier_id),
   };
-  const { scope } = query.resolveScope(req.user, params);
-  const columns = query.columnsFor(scope);
-  res.json({ facets: query.facetsFor(scope, columns), scope: schema.scopeLabels(scope) });
+  const ctx = query.prepareEmployeeQuery(req.user, params);
+  res.json({ facets: query.facetsFor(ctx), scope: schema.scopeLabels(ctx.scope) });
 }));
 
 /**
@@ -474,16 +412,15 @@ router.post('/employees/:id/submit', requireAuth, wrap((req, res) => {
     return res.status(403).json({ error: 'You do not have permission to update employee records.' });
   }
   const id = Number(req.params.id);
-  const before = query.getAssignment(id);
+  if (Object.hasOwn(req.body, 'crmProjectName')) checkCrmSubmit(req.user, id, req.body);
+  const before = query.getAssignment(req.user, id, 'can_edit');
   if (!before) return res.status(404).json({ error: 'Employee record not found.' });
-  // §23: scope is enforced on the server, not only by which projects we render.
-  query.assertProjectAccess(req.user, before.projectId);
 
   emp.updateAssignment(req.user, id, req.body.changes || {}, {
     expectedRev: req.body.rev || null,
     reason: req.body.reason || 'Supervisor submit',
   });
-  const after = query.getAssignment(id);
+  const after = query.getAssignment(req.user, id);
 
   const changedKeys = Object.keys(req.body.changes || {}).filter((k) => {
     const a = before.values[k];
@@ -502,9 +439,8 @@ router.post('/employees/:id/submit', requireAuth, wrap((req, res) => {
 }));
 
 router.get('/employees/:id', requireAuth, wrap((req, res) => {
-  const data = query.getAssignment(Number(req.params.id));
+  const data = query.getAssignment(req.user, Number(req.params.id));
   if (!data) return res.status(404).json({ error: 'Employee record not found.' });
-  query.assertProjectAccess(req.user, data.projectId);
   res.json({ record: data });
 }));
 
@@ -520,11 +456,10 @@ router.patch('/employees/:id', requireAuth, wrap((req, res) => {
 }));
 
 router.get('/employees/:id/history', requireAuth, wrap((req, res) => {
-  const data = emp.getAssignment(Number(req.params.id));
+  const data = query.getAssignment(req.user, Number(req.params.id));
   if (!data) return res.status(404).json({ error: 'Employee record not found.' });
-  emp.assertProjectAccess(req.user, data.projectId);
-  const employeeHistory = historyFor('employee', data.employeeId, 50);
-  const assignmentHistory = historyFor('assignment', Number(req.params.id), 100);
+  const employeeHistory = recentActivity(req.user, {entity: 'employee', entityId: data.employeeId, limit: 50});
+  const assignmentHistory = recentActivity(req.user, {entity: 'assignment', entityId: Number(req.params.id), limit: 100});
   const labels = new Map(schema.listFields().map((f) => [f.key, f.label]));
   const merged = [...employeeHistory, ...assignmentHistory]
     .sort((a, b) => b.id - a.id)
@@ -541,32 +476,25 @@ router.post('/employees', requireAuth, wrap((req, res) => {
 }));
 
 // CRM search across the people directory (respects project visibility)
-router.get('/people', requireAuth, wrap((req, res) => {
+router.get('/people', requireAuth, requireCap('crm.use'), wrap((req, res) => {
   const term = String(req.query.q || '').trim().toLowerCase();
-  const ids = visibleProjectIds(req.user);
-  if (!ids.length) return res.json({ people: [] });
-  const ph = ids.map(() => '?').join(',');
+  const acl = access.assignmentScope(req.user, 'can_crm');
   const like = `%${term}%`;
   const rows = q.all(
-    `SELECT DISTINCT e.id, e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone,
-            (SELECT COUNT(*) FROM assignments a2 WHERE a2.employee_id = e.id AND a2.active = 1 AND a2.project_id IN (${ph})) placements
-       FROM employees e
-       JOIN assignments a ON a.employee_id = e.id AND a.active = 1
-      WHERE a.project_id IN (${ph}) AND e.active = 1
+    `SELECT e.id, e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone, COUNT(a.id) placements
+       FROM employees e JOIN assignments a ON a.employee_id = e.id AND a.active = 1
+      WHERE ${acl.sql} AND e.active = 1
         AND (lower(e.emp_code) LIKE ? OR lower(e.name) LIKE ? OR lower(ifnull(e.email,'')) LIKE ? OR ifnull(e.phone,'') LIKE ?)
-      ORDER BY e.name LIMIT 25`,
-    ...ids, ...ids, like, like, like, like
-  );
+      GROUP BY e.id ORDER BY e.name LIMIT 25`, ...acl.args, like, like, like, like);
   res.json({ people: rows });
 }));
 
-router.get('/people/:id', requireAuth, wrap((req, res) => {
+router.get('/people/:id', requireAuth, requireCap('crm.use'), wrap((req, res) => {
   const id = Number(req.params.id);
   const employee = q.get('SELECT * FROM employees WHERE id = ?', id);
   if (!employee) return res.status(404).json({ error: 'Person not found.' });
-  const ids = visibleProjectIds(req.user);
-  const placements = ids.length
-    ? q.all(
+  const acl = access.assignmentScope(req.user, 'can_crm');
+  const placements = q.all(
         `SELECT a.id assignment_id, a.project_id, a.subproject_id, a.category_id, a.status, a.updated_at,
                 p.name project_name, s.name subproject_name, c.name category_name, sup.name supplier
            FROM assignments a
@@ -574,11 +502,10 @@ router.get('/people/:id', requireAuth, wrap((req, res) => {
            JOIN subprojects s ON s.id = a.subproject_id
            JOIN categories c ON c.id = a.category_id
            LEFT JOIN suppliers sup ON sup.id = a.supplier_id
-          WHERE a.employee_id = ? AND a.active = 1 AND a.project_id IN (${ids.map(() => '?').join(',')})
+          WHERE a.employee_id = ? AND a.active = 1 AND ${acl.sql}
           ORDER BY p.name`,
-        id, ...ids
-      )
-    : [];
+        id, ...acl.args
+      );
   if (!placements.length && !req.user.isAdmin) {
     return res.status(403).json({ error: 'You do not have access to this person.' });
   }
@@ -635,21 +562,28 @@ router.post('/duplicates/:id/resolve', requireAuth, requireAdmin, wrap((req, res
  * within the caller's project scope; change requests become proposals that an
  * administrator must approve. This endpoint never writes master data.
  */
+router.get('/agent/projects', requireAuth, wrap((req, res) => {
+  res.json({ projectNames: agent.visibleProjectNames(req.user) });
+}));
+
 router.post('/agent/ask', requireAuth, wrap((req, res) => {
-  const message = String(req.body?.message || '').slice(0, 500);
-  const plan = agent.understand(req.user, message);
+  const message = String(req.body?.message || '').trim();
+  if (message.length > 1000) return res.status(422).json({ error: 'Keep your question under 1,000 characters.' });
+  const plan = agent.understand(req.user, message, req.body?.projectName);
   let proposal = null;
   if (plan.proposal) {
     // raising a proposal needs the ability to edit at all; approving it is admin-only
     if (!auth.can(req.user, 'employee.edit') && !req.user.isAdmin) {
       return res.status(403).json({ error: 'You do not have permission to request changes.' });
     }
-    query.assertProjectAccess(req.user, query.getAssignment(plan.proposal.assignmentId).projectId);
+    access.assertAssignment(req.user, plan.proposal.assignmentId, 'can_edit');
     proposal = agentstore.raiseProposal(req.user, plan.proposal, message);
   }
   res.json({
     reply: plan.reply,
     understood: !!plan.understood,
+    projectName: plan.projectName || null,
+    crm: plan.crm || null,
     kind: plan.kind || 'answer',
     table: plan.table || null,
     data: plan.data || null,
@@ -660,7 +594,8 @@ router.post('/agent/ask', requireAuth, wrap((req, res) => {
 
 router.get('/agent/proposals', requireAuth, wrap((req, res) => {
   const status = req.query.status ? String(req.query.status) : null;
-  res.json({ proposals: agentstore.listProposals(status), pending: agentstore.pendingCount() });
+  const name = req.query.projectName ? String(req.query.projectName) : null;
+  res.json({ proposals: agentstore.listProposals(req.user, status, name), pending: agentstore.pendingCount(req.user, name) });
 }));
 
 router.post('/agent/proposals/:id/approve', requireAuth, requireAdmin, wrap((req, res) => {
@@ -673,10 +608,32 @@ router.post('/agent/proposals/:id/reject', requireAuth, requireAdmin, wrap((req,
 }));
 
 // ---------------------------------------------------------------------------
+// CRM panel configuration
+// ---------------------------------------------------------------------------
+/**
+ * Which columns the CRM / Update panel offers. Read by every role (the panel has
+ * to render), written only by an administrator.
+ */
+router.get('/settings/crm-fields', requireAuth, wrap((req, res) => {
+  const keys = schema.crmKeys();
+  res.json({
+    keys,
+    fields: schema.listFields(req.user).filter((f) => keys.includes(f.key)),
+    available: schema.listFields().map((f) => ({ key: f.key, label: f.label, type: f.type, group: f.group })),
+  });
+}));
+
+router.put('/settings/crm-fields', requireAuth, requireCap('schema.manage'), wrap((req, res) => {
+  const keys = schema.setCrmKeys(req.body?.keys || [], req.user);
+  res.json({ keys, fields: schema.listFields().filter((f) => keys.includes(f.key)) });
+}));
+
+// ---------------------------------------------------------------------------
 // exports
 // ---------------------------------------------------------------------------
 router.get('/export', requireAuth, requireCap('export.data'), wrap(async (req, res) => {
   const scope = {
+    ...Object.fromEntries(Object.entries(req.query).filter(([k]) => k.startsWith('f_') || k === 'search' || k === 'status')),
     projectId: asInt(req.query.projectId),
     subprojectId: asInt(req.query.subprojectId),
     categoryId: asInt(req.query.categoryId),
@@ -702,14 +659,32 @@ router.get('/export', requireAuth, requireCap('export.data'), wrap(async (req, r
 // import & synchronization
 // ---------------------------------------------------------------------------
 router.post('/import', requireAuth, requireCap('import.data'), wrap(async (req, res) => {
-  const { filename, content, force, dryRun } = req.body || {};
+  const { filename, content, force, dryRun, projectId, subprojectId, categoryId } = req.body || {};
   if (!content) return res.status(422).json({ error: 'Choose an Excel (.xlsx) file to upload.' });
   const buffer = Buffer.from(String(content).split(',').pop(), 'base64');
-  const result = await excel.importWorkbook(req.user, buffer, { filename: filename || 'upload.xlsx', force: !!force, dryRun: !!dryRun });
+  // Your HR master workbook carries no Project / Subproject / Category column.
+  // The chosen placement (or the database's single category) files the people.
+  const defaultPlacement = Number(categoryId) && Number(subprojectId) && Number(projectId)
+    ? { projectId: Number(projectId), subprojectId: Number(subprojectId), categoryId: Number(categoryId) }
+    : null;
+  const result = await excel.importWorkbook(req.user, buffer, {
+    filename: filename || 'upload.xlsx', force: !!force, dryRun: !!dryRun, defaultPlacement,
+  });
   res.json({ result });
 }));
 
+// the file you fill in: your own 65 headers plus the 3 placement columns
+router.get('/import/template', requireAuth, requireCap('import.data'), wrap(async (req, res) => {
+  const wb = await excel.buildTemplateWorkbook({});
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="resource-planning-import-template.xlsx"');
+  await wb.xlsx.write(res);
+  res.end();
+}));
+
 router.get('/imports', requireAuth, wrap((req, res) => {
+  // One master upload can contain many unrelated Giga projects.
+  if (req.user.gigaAccess) return res.json({ imports: [] });
   res.json({
     imports: q.all(
       `SELECT i.*, u.name uploaded_by_name FROM imports i LEFT JOIN users u ON u.id = i.uploaded_by ORDER BY i.id DESC LIMIT 20`
@@ -722,38 +697,114 @@ router.get('/imports', requireAuth, wrap((req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/users', requireAuth, requireAdmin, wrap((req, res) => {
   const users = q.all('SELECT id, email, name, role, title, active, created_at FROM users ORDER BY role, name')
-    .map((u) => ({
-      ...u,
-      // Admins implicitly hold every grant; expose the full list so the UI can
-      // render them consistently with supervisors.
-      projects: u.role === 'admin'
-        ? q.all('SELECT id AS project_id, name, 1 AS can_edit, 1 AS can_export, 1 AS can_crm FROM projects ORDER BY name')
-        : q.all(
-            `SELECT up.project_id, p.name, up.can_edit, up.can_export, up.can_crm
-               FROM user_projects up JOIN projects p ON p.id = up.project_id WHERE up.user_id = ?`,
-            u.id
-          ),
-      capabilities: Object.fromEntries(
-        q.all('SELECT capability, allowed FROM user_capabilities WHERE user_id = ?', u.id).map((c) => [c.capability, !!c.allowed])
-      ),
-    }));
-  res.json({ users, capabilities: auth.ALL_CAPABILITIES });
+    .map((u) => {
+      const gigaAccess = u.role === 'admin' ? null : access.gigaGrant(u.id);
+      return { ...u, gigaAccess,
+        // Admins implicitly hold every grant; expose the full list so the UI can
+        // render them consistently with supervisors.
+        projects: u.role === 'admin'
+          ? q.all('SELECT id AS project_id, name, 1 AS can_edit, 1 AS can_export, 1 AS can_crm FROM projects ORDER BY name')
+          : q.all(
+              `SELECT up.project_id, p.name, up.can_edit, up.can_export, up.can_crm
+                 FROM user_projects up JOIN projects p ON p.id = up.project_id WHERE up.user_id = ?`,
+              u.id
+            ),
+        capabilities: auth.capabilitiesFor(u, gigaAccess),
+      };
+    });
+  res.json({ users, capabilities: auth.ALL_CAPABILITIES, gigaCapabilities: access.GIGA_CAPABILITIES, gigaProjectNames: access.gigaNames() });
 }));
 
-router.post('/users', requireAuth, requireAdmin, wrap((req, res) => {
-  const { email, name, role, password, title } = req.body || {};
-  if (!email || !name) return res.status(422).json({ error: 'Name and email are required.' });
-  if (q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email)) {
-    return res.status(422).json({ error: 'A user with that email already exists.' });
+// Called inside the account transaction. A stale grant must fail the whole
+// write, not leave a sign-in behind which the administrator cannot retry.
+function writeUserAccess(id, { projects, capabilities, gigaProjectName }) {
+  const current = access.gigaGrant(id);
+  if (gigaProjectName !== undefined || current) {
+    if (projects !== undefined) throw access.invalid('Choose either a Giga project or hierarchy grants, not both.');
+    if (gigaProjectName !== undefined) access.setGigaGrant(id, gigaProjectName);
+    // Changing from hierarchy to Giga must not carry over master-data privileges.
+    q.run(`DELETE FROM user_capabilities WHERE user_id = ? AND capability NOT IN (${access.GIGA_CAPABILITIES.map(() => '?').join(',')})`,
+      id, ...access.GIGA_CAPABILITIES);
   }
-  if (String(password || '').length < 8) return res.status(422).json({ error: 'Use a password of at least 8 characters.' });
-  const r = q.run(
-    'INSERT INTO users (email, name, role, title, password_hash) VALUES (?, ?, ?, ?, ?)',
-    email, name, role === 'admin' ? 'admin' : 'supervisor', title || null, auth.hashPassword(password)
-  );
-  const id = Number(r.lastInsertRowid);
-  record({ entity: 'user', entityId: id, ref: email, action: 'create', newValue: `${name} (${role})`, actor: req.user });
-  res.json({ user: q.get('SELECT id, email, name, role, title FROM users WHERE id = ?', id) });
+  if (projects !== undefined) {
+    if (!Array.isArray(projects)) throw Object.assign(new Error('Expected a list of project grants.'), { status: 422 });
+    q.run('DELETE FROM user_projects WHERE user_id = ?', id);
+    const seen = new Set();
+    const flag = (v) => v === undefined || v === true || v === 1 ? 1 : 0;
+    for (const grant of projects) {
+      const pid = Number(grant?.project_id ?? grant?.id);
+      if (!Number.isSafeInteger(pid) || seen.has(pid) || !q.get('SELECT id FROM projects WHERE id = ?', pid)) {
+        throw Object.assign(new Error('A project grant is invalid or duplicated. Refresh the project list and try again.'), { status: 422 });
+      }
+      seen.add(pid);
+      q.run('INSERT INTO user_projects (user_id, project_id, can_edit, can_export, can_crm) VALUES (?, ?, ?, ?, ?)',
+        id, pid, flag(grant.can_edit), flag(grant.can_export), flag(grant.can_crm));
+    }
+  }
+  if (capabilities !== undefined) {
+    if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) {
+      throw Object.assign(new Error('Expected a set of capabilities.'), { status: 422 });
+    }
+    for (const [cap, allowed] of Object.entries(capabilities)) {
+      if (!auth.ALL_CAPABILITIES.includes(cap)) throw access.invalid(`Unknown capability: ${cap}`);
+      if ((current || gigaProjectName !== undefined) && !access.GIGA_CAPABILITIES.includes(cap)) {
+        if (allowed) throw access.invalid('Global capabilities cannot be granted to a Giga-scoped account.');
+        continue;
+      }
+      q.run(`INSERT INTO user_capabilities (user_id, capability, allowed) VALUES (?, ?, ?)
+             ON CONFLICT(user_id, capability) DO UPDATE SET allowed = excluded.allowed`,
+        id, cap, allowed === true || allowed === 1 ? 1 : 0);
+    }
+  }
+}
+
+router.post('/users', requireAuth, requireAdmin, wrap((req, res) => {
+  const body = req.body || {};
+  const email = String(body.email || '').trim();
+  const name = String(body.name || '').trim();
+  const role = body.role === 'admin' ? 'admin' : 'supervisor';
+  if (role === 'admin' && body.gigaProjectName !== undefined) throw access.invalid('Administrator accounts cannot be restricted to a Giga project.');
+  if (!email || !name) return res.status(422).json({ error: 'Name and email are required.' });
+  if (typeof body.password !== 'string' || body.password.length < 8) return res.status(422).json({ error: 'Use a password of at least 8 characters.' });
+  const user = tx(() => {
+    if (q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email)) {
+      throw Object.assign(new Error('A user with that email already exists.'), { status: 422 });
+    }
+    const r = q.run('INSERT INTO users (email, name, role, title, password_hash) VALUES (?, ?, ?, ?, ?)',
+      email, name, role, body.title || null, auth.hashPassword(body.password));
+    const id = Number(r.lastInsertRowid);
+    if (role !== 'admin') writeUserAccess(id, body);
+    record({ entity: 'user', entityId: id, ref: email, action: 'create', newValue: `${name} (${role})`, actor: req.user });
+    return q.get('SELECT id, email, name, role, title FROM users WHERE id = ?', id);
+  });
+  res.json({ user });
+}));
+
+router.delete('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
+  const id = Number(req.params.id);
+  if (id === req.user.id) return res.status(422).json({ error: 'You cannot delete your own account.' });
+  tx(() => {
+    const target = q.get('SELECT email, name, role, active FROM users WHERE id = ?', id);
+    if (!target) throw Object.assign(new Error('User not found.'), { status: 404 });
+    if (target.role === 'admin' && target.active && !q.get("SELECT id FROM users WHERE role = 'admin' AND active = 1 AND id <> ?", id)) {
+      throw Object.assign(new Error('At least one administrator must remain.'), { status: 422 });
+    }
+    // Keep the work. These nullable author references in existing databases
+    // do not cascade. Audit and proposal rows already carry author names;
+    // retain the assignment's Last Updated By for the table and export too.
+    q.run('UPDATE employees SET created_by = NULL WHERE created_by = ?', id);
+    q.run('UPDATE employees SET updated_by = NULL WHERE updated_by = ?', id);
+    q.run('UPDATE assignments SET archived_updater_name = ?, updated_by = NULL WHERE updated_by = ?', target.name, id);
+    q.run('UPDATE assignment_values SET updated_by = NULL WHERE updated_by = ?', id);
+    q.run('UPDATE imports SET uploaded_by = NULL WHERE uploaded_by = ?', id);
+    q.run('UPDATE import_jobs SET user_id = NULL WHERE user_id = ?', id);
+    q.run('UPDATE agent_actions SET requested_by = NULL WHERE requested_by = ?', id);
+    q.run('UPDATE agent_actions SET decided_by = NULL WHERE decided_by = ?', id);
+    // Only credentials, sessions and access grants are removed.
+    q.run('DELETE FROM users WHERE id = ?', id);
+    record({ entity: 'user', entityId: id, ref: target.email, action: 'delete', oldValue: `${target.name} (${target.role})`, actor: req.user });
+  });
+  res.json({ ok: true });
 }));
 
 router.patch('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
@@ -777,51 +828,30 @@ router.patch('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
 
 router.put('/users/:id/access', requireAuth, requireAdmin, wrap((req, res) => {
   const id = Number(req.params.id);
-  const { projects, capabilities } = req.body || {};
-  return tx(() => {
-    if (Array.isArray(projects)) {
-      q.run('DELETE FROM user_projects WHERE user_id = ?', id);
-      for (const p of projects) {
-        q.run(
-          `INSERT INTO user_projects (user_id, project_id, can_edit, can_export, can_crm) VALUES (?, ?, ?, ?, ?)`,
-          id, Number(p.project_id ?? p.id), p.can_edit === false ? 0 : 1, p.can_export === false ? 0 : 1, p.can_crm === false ? 0 : 1
-        );
-      }
-    }
-    if (capabilities && typeof capabilities === 'object') {
-      for (const [cap, allowed] of Object.entries(capabilities)) {
-        q.run(
-          `INSERT INTO user_capabilities (user_id, capability, allowed) VALUES (?, ?, ?)
-           ON CONFLICT(user_id, capability) DO UPDATE SET allowed = excluded.allowed`,
-          id, cap, allowed ? 1 : 0
-        );
-      }
-    }
-    record({ entity: 'user', entityId: id, action: 'update', fieldKey: 'access', newValue: 'access policy updated', actor: req.user });
-    res.json({ ok: true });
+  const target = q.get('SELECT role, email FROM users WHERE id = ?', id);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (target.role === 'admin' && req.body?.gigaProjectName !== undefined) throw access.invalid('Administrators have full access.');
+  tx(() => {
+    const before = access.gigaGrant(id);
+    writeUserAccess(id, req.body || {});
+    const after = access.gigaGrant(id);
+    const label = (grant) => grant ? grant.name || 'No project access' : 'Hierarchy grants';
+    record({ entity: 'user', entityId: id, ref: target.email, action: 'update', fieldKey: 'access',
+      oldValue: label(before), newValue: label(after), actor: req.user });
   });
+  res.json({ ok: true });
 }));
 
 // ---------------------------------------------------------------------------
 // audit trail
 // ---------------------------------------------------------------------------
-router.get('/audit', requireAuth, wrap((req, res) => {
-  const ids = visibleProjectIds(req.user);
-  const limit = Math.min(200, Number(req.query.limit) || 50);
-  const entity = req.query.entity;
-  const rows = entity
-    ? q.all('SELECT * FROM audit_log WHERE entity = ? ORDER BY id DESC LIMIT ?', entity, limit)
-    : recentActivity({ projectIds: req.user.isAdmin ? null : ids, limit });
-  if (!req.user.isAdmin) {
-    // supervisors only see activity tied to their projects
-    const visible = rows.filter((r) => !r.project_id || ids.includes(r.project_id));
-    return res.json({ activity: visible });
-  }
-  res.json({ activity: rows });
+router.get('/audit', requireAuth, requireCap('audit.view'), wrap((req, res) => {
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+  res.json({ activity: recentActivity(req.user, { limit, entity: req.query.entity || undefined }) });
 }));
 
-router.get('/audit/:entity/:id', requireAuth, wrap((req, res) => {
-  res.json({ history: historyFor(req.params.entity, Number(req.params.id), 200) });
+router.get('/audit/:entity/:id', requireAuth, requireCap('audit.view'), wrap((req, res) => {
+  res.json({ history: recentActivity(req.user, { entity: req.params.entity, entityId: Number(req.params.id), limit: 200 }) });
 }));
 
 // ---------------------------------------------------------------------------
@@ -838,4 +868,4 @@ router.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   });
 });
 
-module.exports = { router, visibleProjectIds };
+module.exports = { router, visibleProjectIds: auth.visibleProjectIds };

@@ -1,16 +1,14 @@
 /* =========================================================================
    The assistant panel.
-   A docked chat on the right of every screen. Totally offline: it calls the
-   app's own /api/agent endpoints and nothing else. Anything it wants to change
-   becomes a proposal card that an administrator approves or rejects.
+   Project-scoped reporting and proposals, plus an explicitly opened CRM form.
+   All app requests are same-origin; recognition and read-back are on-device.
    ========================================================================= */
-import { h, mount, icon, api, state, toast, spinner, fmtRelative } from '../core.js';
+import { h, mount, icon, api, state, toast, fmtRelative } from '../core.js';
 
-const EXAMPLES = [
-  'How many are on bench in NEXUS?',
-  'How many are hard block in NEXUS?',
-  'Who is on bench in NEXUS?',
-];
+import { createLocalVoice } from '../voice.js';
+import { createAssistantCrm } from './assistant-crm.js';
+
+const EXAMPLES = ['How many are on bench?', 'Break down bench category', 'Who is on bench?', 'Open CRM'];
 
 export function createAssistant() {
   const el = h('div', { class: 'assistant hidden', 'aria-label': 'Assistant' });
@@ -18,11 +16,21 @@ export function createAssistant() {
   const log = h('div', { class: 'assistant-log' });
   const foot = h('div', { class: 'assistant-foot' });
   const queueHost = h('div', { class: 'assistant-queue' });
-  mount(el, head, queueHost, log, foot);
+  const scopeHost = h('div', { class: 'assistant-scope' });
+  const crmHost = h('section', { class: 'assistant-crm', 'aria-label': 'Employee CRM form' });
+  const voiceText = h('span', { class: 'subtle', role: 'status' }, 'On-device English · no audio uploaded');
+  const voiceBtn = h('button', { class: 'btn btn-sm', 'aria-pressed': 'false', onclick: () => voice.toggle() }, 'Start voice mode');
+  const voice = createLocalVoice({ onCommand: send, onState({ text, active, needsPack }) {
+    voiceText.textContent = text; voiceBtn.textContent = needsPack ? 'Install English speech pack' : active ? 'Stop voice' : 'Start voice mode';
+    voiceBtn.setAttribute('aria-pressed', String(active));
+  } });
+  const crm = createAssistantCrm(crmHost, send);
+  mount(el, head, scopeHost, queueHost, crmHost, log, h('div', { class: 'assistant-voice' }, voiceBtn, voiceText), foot);
 
   let open = false;
   let busy = false;
-  let proposals = [];
+  let proposals = [], names = [], selected = null;
+  let epoch = 0, pendingQuestion = '', waitingPerson = false;
 
   function renderHead() {
     const pending = proposals.filter((p) => p.status === 'pending').length;
@@ -31,7 +39,7 @@ export function createAssistant() {
         h('span', { class: 'assistant-avatar' }, icon('sparkles', 15)),
         h('div', { class: 'col', style: { minWidth: '0' } },
           h('div', { style: { fontWeight: '650', fontSize: '13px' } }, 'Assistant'),
-          h('div', { class: 'subtle', style: { fontSize: '11px' } }, 'Works offline · answers from your database'),
+          h('div', { class: 'subtle', style: { fontSize: '11px' } }, 'Workbook projects · local database'),
         ),
       ),
       h('div', { class: 'row', style: { gap: '4px' } },
@@ -105,14 +113,10 @@ export function createAssistant() {
   }
 
   async function decide(id, action) {
-    const box = queueHost;
     try {
       const res = await api('/agent/proposals/' + id + '/' + action, { method: 'POST', body: {} });
       toast(action === 'approve' ? 'Approved and saved' : 'Rejected',
         res.message || '', action === 'approve' ? 'success' : 'info', 4200);
-      if (action === 'approve' && res.proposal) {
-        mount(box, proposalCard(res.proposal), ...proposals.filter((p) => p.id !== id && p.status === 'pending').map(proposalCard));
-      }
       await refreshQueue();
       // the table behind the panel should show the new value straight away
       document.dispatchEvent(new CustomEvent('rp:data-changed'));
@@ -123,93 +127,132 @@ export function createAssistant() {
   }
 
   async function refreshQueue() {
-    if (!state.user) return;
+    const project = selected, id = epoch;
+    if (!open || !state.user?.isAdmin || !project) return;
     try {
-      const res = await api('/agent/proposals');
+      const res = await api('/agent/proposals?status=pending&projectName=' + encodeURIComponent(project));
+      if (id !== epoch || selected !== project) return;
       proposals = res.proposals || [];
-      const pending = proposals.filter((p) => p.status === 'pending' && state.user.isAdmin);
-      mount(queueHost, ...pending.slice(0, 4).map(proposalCard));
-      renderHead();
-    } catch { /* the assistant must never block the page */ }
+      mount(queueHost, ...proposals.slice(0, 4).map(proposalCard)); renderHead();
+    } catch { /* reporting doesn't depend on the approval queue */ }
   }
 
+  function setProject(name) {
+    if (selected !== name) {
+      selected = name; waitingPerson = false; proposals = []; mount(queueHost); renderHead(); refreshQueue();
+    }
+    renderScope();
+  }
+  function renderScope() {
+    const picker = h('select', { class: 'select', 'aria-label': 'Giga Project Name', disabled: busy || crm.isOpen(),
+      onchange: (e) => {
+        setProject(e.target.value || null);
+        if (pendingQuestion && selected) { const ask = pendingQuestion; pendingQuestion = ''; send(ask); }
+      },
+    }, h('option', { value: '' }, 'Say or select a project'), ...names.map((name) => h('option', { value: name }, name)));
+    picker.value = selected || '';
+    mount(scopeHost, h('label', null, h('span', { class: 'field-label' }, 'Giga Project Name'), picker));
+  }
+  async function refreshProjects() {
+    const id = epoch;
+    try {
+      const res = await api('/agent/projects');
+      if (id !== epoch) return;
+      names = res.projectNames;
+      if (selected && !names.includes(selected)) { crm.clear(); pendingQuestion = ''; }
+      setProject(names.includes(selected) ? selected : names.length === 1 ? names[0] : null);
+    } catch { /* a typed project is still verified by /ask */ }
+  }
+
+  function addSuggestions(items) {
+    if (items?.length) log.appendChild(h('div', { class: 'msg agent suggestions' },
+      ...items.map((s) => h('button', { class: 'chip', onclick: () => send(s) }, s))));
+  }
+  const ask = (message, projectName) => api('/agent/ask', { method: 'POST', body: { message, projectName } });
   async function send(text) {
     const message = String(text || '').trim();
-    if (!message || busy) return;
-    busy = true;
-    mount(log, ...log.children, bubble('user', message));
-    const thinking = h('div', { class: 'msg agent' },
-      h('span', { class: 'assistant-avatar sm' }, icon('sparkles', 12)),
-      h('div', { class: 'msg-body' }, spinner(), ' Checking the database…'),
-    );
-    log.appendChild(thinking);
+    if (!message || !open || busy) return '';
+    const id = epoch;
+    busy = true; renderScope(); log.appendChild(bubble('user', message));
+    const thinking = bubble('agent', 'Checking…'); log.appendChild(thinking);
     log.scrollTop = log.scrollHeight;
     try {
-      const res = await api('/agent/ask', { method: 'POST', body: { message } });
-      thinking.remove();
+      if (crm.isOpen()) {
+        const reply = await crm.command(message);
+        if (id !== epoch) return '';
+        log.appendChild(bubble('agent', reply));
+        if (crm.reviewReady()) addSuggestions(['Confirm save', 'Discard changes']);
+        return reply;
+      }
+      const lookup = waitingPerson && !/^(open|show|select|switch|use|how|who|list|count|break|set)\b/i.test(message);
+      let res = await ask(lookup ? 'Open CRM for ' + message : message, selected);
+      if (id !== epoch) return '';
+      if (res.kind === 'project' && pendingQuestion) {
+        res = await ask(pendingQuestion, res.projectName);
+        if (id !== epoch) return '';
+      }
+      pendingQuestion = res.kind === 'choose_project' ? message : '';
+      if (res.projectName) {
+        if (!names.includes(res.projectName)) names.push(res.projectName);
+        setProject(res.projectName);
+      } else if (res.kind === 'denied') { setProject(null); refreshProjects(); }
+      waitingPerson = res.kind === 'crm_lookup';
+      if (res.crm) crm.show(res.crm);
       log.appendChild(bubble('agent', res.reply));
       const t = dataTable(res.table);
-      if (t) log.appendChild(h('div', { class: 'msg agent' }, h('span', { class: 'assistant-avatar sm' }, icon('sparkles', 12)), h('div', { class: 'msg-body wide' }, t)));
+      if (t) log.appendChild(h('div', { class: 'msg agent' }, h('div', { class: 'msg-body wide' }, t)));
       if (res.proposal) {
-        log.appendChild(h('div', { class: 'msg agent' }, h('span', { class: 'assistant-avatar sm' }, icon('sparkles', 12)),
-          h('div', { class: 'msg-body wide' }, proposalCard(res.proposal))));
+        log.appendChild(h('div', { class: 'msg agent' }, h('div', { class: 'msg-body wide' }, proposalCard(res.proposal))));
         await refreshQueue();
       }
-      if (res.suggestions && res.suggestions.length) {
-        log.appendChild(h('div', { class: 'msg agent suggestions' },
-          ...res.suggestions.map((s) => h('button', { class: 'chip', onclick: () => send(s) }, s))));
-      }
-      log.scrollTop = log.scrollHeight;
+      if (!crm.isOpen() && !waitingPerson) addSuggestions(res.suggestions);
+      const readTable = res.kind === 'list' || res.kind === 'crm_lookup' || res.kind === 'breakdown';
+      return res.reply + (readTable && res.table?.rows?.length ? ' ' + res.table.rows.slice(0, 8).map((r) => r.join(', ')).join('; ') : '');
     } catch (err) {
-      thinking.remove();
-      log.appendChild(bubble('agent', 'I could not reach the server: ' + err.message));
+      if (id !== epoch) return '';
+      const reply = 'Request not completed. ' + err.message;
+      log.appendChild(bubble('agent', reply)); return reply;
     } finally {
-      busy = false;
+      thinking.remove();
+      if (id === epoch) { busy = false; renderScope(); log.scrollTop = log.scrollHeight; }
     }
   }
 
   function renderFoot() {
-    const input = h('textarea', {
-      class: 'assistant-input', rows: 1, placeholder: 'Ask a question, or say "set EMP-10001 to hard block"',
-      onkeydown: (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(input.value); input.value = ''; }
-      },
+    const submit = () => { if (!busy && input.value.trim()) { send(input.value); input.value = ''; } };
+    const input = h('textarea', { class: 'assistant-input', rows: 1, 'aria-label': 'Ask or enter a CRM command',
+      placeholder: 'Ask about a project or say “open CRM”',
+      onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } },
     });
-    mount(foot,
-      input,
-      h('button', { class: 'btn btn-primary btn-icon', title: 'Send', onclick: () => { send(input.value); input.value = ''; } }, icon('arrowRight', 15)),
-    );
-    return input;
+    mount(foot, input, h('button', { class: 'btn btn-primary btn-icon', 'aria-label': 'Send message', onclick: submit }, icon('arrowRight', 15)));
   }
-
   function seed() {
-    mount(log,
-      bubble('agent', 'Hello. I answer only from this database, and I only see the projects you are allowed to see. Ask me a count, or ask me to change a record — changes wait for approval.'),
-      h('div', { class: 'msg agent suggestions' },
-        ...EXAMPLES.map((s) => h('button', { class: 'chip', onclick: () => send(s) }, s))),
-    );
+    mount(log, bubble('agent', 'Name the workbook project you want to ask about. I can report on its people or open CRM for an employee. In voice mode, say “open CRM”, dictate fields, then review and confirm before saving.'));
+    addSuggestions(EXAMPLES);
   }
-
   function toggle(next) {
     open = next === undefined ? !open : next;
-    el.classList.toggle('hidden', !open);
-    document.body.classList.toggle('assistant-open', open);
+    el.classList.toggle('hidden', !open); document.body.classList.toggle('assistant-open', open);
     document.querySelectorAll('.assistant-launch').forEach((b) => b.classList.toggle('active', open));
     if (open) {
       if (!log.children.length) seed();
-      renderFoot();
-      refreshQueue();
-      el.querySelector('.assistant-input')?.focus();
+      renderFoot(); refreshProjects(); refreshQueue(); el.querySelector('.assistant-input')?.focus();
+    } else {
+      epoch++; busy = false; voice.stop(); waitingPerson = false; pendingQuestion = '';
     }
   }
-
-  renderHead();
-  renderFoot();
-  // NB: dispatched on `document`, so listen there - a window listener never fires.
-  document.addEventListener('rp:assistant', () => toggle());
+  renderHead(); renderScope(); renderFoot();
+  const launch = () => toggle();
+  const suspend = () => { if (voice.isActive()) voice.stop(); };
+  const visibility = () => { if (document.hidden) suspend(); };
+  document.addEventListener('rp:assistant', launch);
+  window.addEventListener('pagehide', suspend);
+  document.addEventListener('visibilitychange', visibility);
   document.addEventListener('rp:logout', () => {
-    open = false; el.classList.add('hidden'); document.body.classList.remove('assistant-open');
-  });
-
+    toggle(false); crm.clear(); mount(log); mount(queueHost); names = []; selected = null;
+    document.removeEventListener('rp:assistant', launch);
+    document.removeEventListener('visibilitychange', visibility);
+    window.removeEventListener('pagehide', suspend);
+  }, { once: true });
   return { el, toggle, open: () => toggle(true), isOpen: () => open, refreshQueue };
 }

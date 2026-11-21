@@ -1,372 +1,158 @@
 'use strict';
-/**
- * The in-app assistant - a rules-based intent parser, entirely offline.
- *
- * Deliberate constraints:
- *  - No language model, no network call, no API key. The app never talks to the
- *    internet at runtime, which is what the security note promises.
- *  - It never writes. Every change it works out becomes a PROPOSAL that a human
- *    approves, so a mis-parse can never corrupt the master data.
- *  - Every number it reports comes from a real SQL query scoped to projects the
- *    asking user is allowed to see. It cannot invent a count.
- */
-
+// Offline, deterministic workbook questions. The same named-assignment relation
+// drives the project picker, counts, breakdowns, lists, CRM and proposals.
+// An explicit but unknown project must NEVER fall back to a broader scope.
 const { q } = require('./db');
+const { assignmentScope } = require('./access');
+const { can } = require('./auth');
 const schema = require('./schema');
-const fielddefs = require('./fielddefs');
+const { crmForm } = require('./assistant-crm');
 
-const BENCH = fielddefs.BENCH_CATEGORIES;
-const BLOCK = fielddefs.BLOCK_STATUS;
-
-const norm = (s) => String(s || '')
-  .toLowerCase()
-  .replace(/[\u2019']/g, "'")
-  .replace(/\s+/g, ' ')
-  .trim();
-
-const NUM_WORDS = {
-  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
-  eleven: 11, twelve: 12, fifteen: 15, twenty: 20, thirty: 30, fifty: 50, hundred: 100,
-};
-
-function parseNumber(text) {
-  const m = text.match(/(\d[\d,]*)\s*(k|thousand)?/);
-  if (m) {
-    const n = Number(m[1].replace(/,/g, ''));
-    return m[2] ? n * 1000 : n;
-  }
-  for (const [word, value] of Object.entries(NUM_WORDS)) {
-    if (new RegExp('\\b' + word + '\\b').test(text)) return value;
-  }
-  return null;
+const FROM = `FROM giga_assignments g JOIN assignments a ON a.id = g.assignment_id JOIN employees e ON e.id = g.employee_id`;
+function visibleProjectNames(user) {
+  const acl = assignmentScope(user);
+  return q.all(`SELECT DISTINCT g.project_name ${FROM} WHERE ${acl.sql} ORDER BY g.project_name COLLATE NOCASE, g.project_name`, ...acl.args).map((r) => r.project_name);
 }
-
-function visibleProjects(user) {
-  if (user.isAdmin) return q.all('SELECT id, code, name FROM projects ORDER BY name');
-  const ids = (user.projects || []).map((p) => p.id);
-  if (!ids.length) return [];
-  return q.all(
-    'SELECT id, code, name FROM projects WHERE id IN (' + ids.map(() => '?').join(',') + ') ORDER BY name',
-    ...ids
-  );
+function scopeFor(user, name, flag) {
+  const acl = assignmentScope(user, flag);
+  return { sql: `g.project_name = ? AND ${acl.sql}`, args: [name, ...acl.args] };
 }
-
-/** A token that looks like a project code but is not one the user may see. */
-function unknownProjectNamed(user, text) {
-  const visible = new Set(visibleProjects(user).map((p) => norm(p.code)));
-  const tokens = String(text).match(/\b[A-Z][A-Z0-9]{3,11}\b/g) || [];
-  for (const token of tokens) {
-    const t = norm(token);
-    if (visible.has(t)) continue;
-    if (/^(pid|opid|emp)$/.test(t)) continue;
-    if (q.get('SELECT 1 x FROM projects WHERE lower(code) = ?', t)) return token;
-  }
-  return null;
+const norm = (s) => s.toLowerCase().replace(/’/g, "'").replace(/\s+/g, ' ').trim();
+const numbers = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+const spoken = (s) => norm(s).replace(/\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (w) => String(numbers.indexOf(w)));
+const choose = (names) => ({ understood: false, kind: 'choose_project', reply: 'Which Giga Project Name? Say or select one of your workbook projects: ' + names.slice(0, 8).join(', ') + '.', suggestions: names.slice(0, 8) });
+const unavailable = () => ({ understood: false, kind: 'denied', reply: 'That Giga Project Name is not available in your access. Choose an exact workbook project name; I have not searched any other project.' });
+function nameMatches(raw, names) {
+  const name = raw.trim();
+  if (names.includes(name)) return [name];
+  const same = names.filter((s) => norm(s) === norm(name));
+  return same.length ? same : names.filter((s) => spoken(s) === spoken(name));
 }
-
-function findProject(user, text) {
-  const projects = visibleProjects(user);
-  const t = norm(text);
-  let best = null;
-  for (const p of projects) {
-    const code = norm(p.code);
-    const name = norm(p.name);
-    if (t.includes(code)) return p;
-    const words = name.split(' ').filter((w) => w.length > 3 && ['project', 'programme', 'platform'].indexOf(w) === -1);
-    if (words.some((w) => t.includes(w))) {
-      if (!best || words.length < best.words) best = Object.assign({}, p, { words: words.length });
+function resolve(user, message, selected) {
+  const names = visibleProjectNames(user);
+  if (!names.length) return { error: { kind: 'denied', reply: 'There are no named workbook placements in your access. Ask an administrator about your Giga project.' } };
+  // A project name can itself contain prepositions or punctuation. Test entire
+  // clauses, not any matching word or prefix (e.g. Alpha vs Alpha East).
+  const text = message.trim().replace(/[.?!]+$/, '').trim();
+  let ask = text, explicit = null;
+  const select = text.match(/^(?:select|switch to|use)\s+(?:project\s+)?(.+)$/i);
+  const prefix = text.match(/^(?:in|for|within)\s+(.+?)[,:]?\s+((?:how many|who|what|list|show|count|break ?down|open|set|mark)\b.*)$/i);
+  if (select || nameMatches(text, names).length) { explicit = select ? select[1] : text; ask = ''; }
+  else if (prefix) { explicit = prefix[1]; ask = prefix[2]; }
+  else {
+    const clauses = [...text.matchAll(/\s+(?:in|within|under|from|for|across)\s+/gi)].filter((m) =>
+      m[0].trim().toLowerCase() !== 'for' || !/^(?:open|show)\s+(?:the\s+)?c\.?\s*r\.?\s*m\.?$/i.test(text.slice(0, m.index)));
+    // Only skip the employee delimiter in "Open CRM for <person>".
+    if (clauses.length) {
+      const tail = (m) => text.slice(m.index + m[0].length);
+      const clause = clauses.find((m) => nameMatches(tail(m), names).length) || clauses.at(-1);
+      explicit = tail(clause); ask = text.slice(0, clause.index);
+      // Also accept “how many people in <exact name> are on bench?” without
+      // treating a longer unseen project name as a shorter, visible sibling.
+      const predicate = explicit.match(/^(.+?)\s+(?:are|is)\s+(.+)$/i);
+      if (!nameMatches(explicit, names).length && predicate && nameMatches(predicate[1], names).length) {
+        explicit = predicate[1]; ask += ' ' + predicate[2];
+      }
+      if (/^(?:(?:my|this|that|the selected) (?:giga )?projects?)$/i.test(explicit)) explicit = null;
     }
   }
-  return best;
+  if (explicit !== null) {
+    let hits = nameMatches(explicit, names);
+    if (!hits.length) hits = nameMatches(explicit.replace(/^(?:the )?(?:giga )?project(?: name)?\s+/i, ''), names);
+    if (hits.length !== 1) return { error: hits.length ? choose(hits) : unavailable() };
+    return { name: hits[0], ask };
+  }
+  if (selected != null && selected !== '') return names.includes(selected) ? { name: selected, ask } : { error: unavailable() };
+  return names.length === 1 ? { name: names[0], ask } : { error: choose(names) };
 }
 
-function findValue(text, options) {
-  const t = norm(text);
-  const sorted = options.slice().sort((a, b) => b.length - a.length);
-  for (const opt of sorted) {
-    if (t.includes(norm(opt))) return opt;
+const examples = (name) => [`How many are on bench in ${name}?`, `Break down bench category in ${name}`, `Who is on bench in ${name}?`];
+const fmt = (n) => n.toLocaleString('en-IN');
+const metricText = (s) => norm(s).replace(/[-/]/g, ' ').replace(/\s+/g, ' ').trim();
+const METRICS = ['bench_category', 'block_status', 'billing_status', 'offsite_onsite', 'bl_status'];
+function report(user, name, ask) {
+  const t = norm(ask);
+  const group = /^(?:break ?down(?: by| of)?|show (?:the )?breakdown(?: by| of)?|group by)\s+/;
+  const list = /^(?:who(?: is| are)?|list|show(?: me)?|which people|names of)\b\s*/;
+  const count = /^(?:how many|count(?: of)?|(?:what is (?:the )?)?(?:number of|total(?: number of)?|headcount))\b\s*/;
+  const verb = [group, list, count].find((r) => r.test(t));
+  if (!verb) return null;
+  const metric = metricText(t.replace(verb, '').replace(/\b(?:people|employees|associates|resources|are|is|we|do|have|there|currently|on|with|the|our|by)\b/g, ' '));
+  const fields = schema.listFields(user).filter((f) => METRICS.includes(f.key));
+  const matches = [];
+  for (const f of fields) {
+    const labels = [metricText(f.label), metricText(f.key.replace(/_/g, ' '))];
+    if (labels.includes(metric)) { matches.push({ field: f, value: null }); continue; }
+    const val = (f.options || []).find((v) => [metricText(v), ...labels.map((l) => l + ' ' + metricText(v))].includes(metric));
+    if (val) matches.push({ field: f, value: val });
+    if (f.key === 'bl_status' && /^bl ?\d+$/.test(metric)) matches.push({ field: f, value: 'BL-' + metric.match(/\d+/)[0] });
+  }
+  if (matches.length > 1) return { kind: 'clarify', reply: `Which field in ${name}: ${matches.map((m) => m.field.label).join(' or ')}? Include the field name in your question.` };
+  if (!matches.length && metric) return null; // don't answer an unrecognised filter with headcount
+  const { field, value } = matches[0] || { field: fields.find((f) => f.key === 'bench_category'), value: null };
+  const scope = scopeFor(user, name);
+  const vjoin = ' JOIN assignment_values v ON v.assignment_id = a.id AND v.field_id = ?';
+  const from = `${FROM}${value ? vjoin : ''} WHERE ${scope.sql}${value ? ' AND v.value = ?' : ''}`;
+  const args = value ? [field.id, ...scope.args, value] : scope.args;
+  const subject = value ? ` (${field.label}: ${value})` : '';
+  const total = q.get(`SELECT COUNT(DISTINCT e.id) c ${from}`, ...args).c;
+  const reply = `${fmt(total)} ${total === 1 ? 'person' : 'people'}${subject} in ${name}.`;
+  const data = { count: total, project: name, field: field.key, value };
+  if (verb === list) {
+    const people = q.all(`SELECT DISTINCT e.emp_code, e.name ${from} ORDER BY e.name, e.emp_code LIMIT 25`, ...args);
+    return { kind: 'list', reply: reply + (total > 25 ? ' Showing the first 25.' : ''), data,
+      table: { title: 'People · ' + name, columns: ['Employee ID', 'Name', 'Giga Project Name'], rows: people.map((r) => [r.emp_code, r.name, name]) } };
+  }
+  const buckets = q.all(`SELECT v.value, COUNT(DISTINCT e.id) c ${FROM}${vjoin} WHERE ${scope.sql} AND v.value <> '' GROUP BY v.value ORDER BY c DESC, v.value`, field.id, ...scope.args);
+  return { kind: verb === group ? 'breakdown' : 'count', reply, data, table: { title: `${field.label} · ${name}`, columns: [field.label, 'People'], rows: buckets.map((r) => [r.value, fmt(r.c)]) } };
+}
+
+function findPlacement(user, name, raw, crm) {
+  const scope = scopeFor(user, name, crm ? 'can_crm' : 'can_edit');
+  const who = raw.trim().replace(/^employee(?: id)?\s+/i, '');
+  const placement = who.match(/^placement\s+(\d+)$/i);
+  // Spoken "E M P dash 01042" or "EMP 01042" as well as a literal workbook ID or full name.
+  const code = who.replace(/\b(?:dash|hyphen)\b/i, '-').match(/^([a-z](?:\s*[a-z])*)[\s-]+([\d ]+)$/i);
+  const rows = q.all(`SELECT a.id, e.name, e.emp_code ${FROM} WHERE ${scope.sql} AND ` + (placement ? 'a.id = ?' :
+    '(e.emp_code = ? COLLATE NOCASE OR e.emp_code = ? COLLATE NOCASE OR e.name = ? COLLATE NOCASE)') + ' ORDER BY a.id LIMIT 11',
+    ...scope.args, ...(placement ? [Number(placement[1])] : [who, code ? code[1].replace(/\s/g, '') + '-' + code[2].replace(/\s/g, '') : who, who]));
+  if (rows.length === 1) return { person: rows[0] };
+  const kind = crm ? 'crm_lookup' : 'clarify';
+  if (!rows.length) return { error: { kind, reply: `No matching accessible placement in ${name}. Give the employee ID or exact full name.` } };
+  return { error: { kind, reply: `More than one placement matches in ${name}. Use “placement” and the placement number instead of the name.`,
+    table: { title: 'Matching placements · ' + name, columns: ['Placement', 'Employee ID', 'Name'], rows: rows.slice(0, 10).map((r) => [r.id, r.emp_code, r.name]) } } };
+}
+
+function action(user, name, ask) {
+  const crm = ask.match(/^(?:open|show)\s+(?:the\s+)?c\.?\s*r\.?\s*m\.?(?:\s+(?:for\s+)?(.+))?$/i);
+  const change = !crm && ask.match(/^(?:set|change|mark|move|put)\s+(.+?)\s+(?:to|as|on)\s+(.+)$/i);
+  if (!crm && !change) return null;
+  if (!can(user, crm ? 'crm.use' : 'employee.edit')) return { kind: 'denied', reply: `You do not have ${crm ? 'CRM' : 'edit'} permission in ${name}.` };
+  if (crm && !crm[1]) return { kind: 'crm_lookup', reply: `Whose CRM record in ${name}? Say the employee ID or full name.` };
+  const { person, error } = findPlacement(user, name, (crm || change)[1], !!crm);
+  if (error) return error;
+  const ref = `${person.name} (${person.emp_code}) in ${name}`;
+  if (crm) {
+    const form = crmForm(user, person.id, name);
+    return { kind: 'crm', crm: form, reply: `CRM open for ${ref}. ` + (form.fields.some((f) => f.editable)
+      ? 'Say “list fields” or “set Detail Comments to” followed by your note. Then say “review changes”.' : 'This CRM record is read-only.') };
+  }
+  for (const field of schema.listFields(user).filter((f) => ['bench_category', 'block_status'].includes(f.key))) {
+    const to = (field.options || []).find((v) => norm(v) === norm(change[2]));
+    if (!to) continue;
+    const from = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', person.id, field.id)?.value ?? null;
+    if (to === from) return { kind: 'change', reply: `${ref} is already ${to}. Nothing to approve.` };
+    return { kind: 'change', reply: `Proposed ${field.label}: ${to} for ${ref}. An administrator must approve before anything is saved.`,
+      proposal: { kind: 'update_assignment', assignmentId: person.id, projectName: name, ref: person.emp_code, summary: `${ref} · ${field.label}: ${from ?? '(empty)'} → ${to}`,
+        changes: { [field.key]: { label: field.label, from, to } } } };
   }
   return null;
 }
-
-function findPeople(user, text) {
-  const t = norm(text);
-  const scope = visibleProjects(user).map((p) => p.id);
-  if (!scope.length) return [];
-  const ph = scope.map(() => '?').join(',');
-
-  const codeMatch = text.match(/\b([A-Z]{2,5}-\d{3,6})\b/i);
-  if (codeMatch) {
-    return q.all(
-      'SELECT a.id AS assignmentId, e.emp_code, e.name, a.project_id, p.name AS projectName' +
-      ' FROM assignments a JOIN employees e ON e.id = a.employee_id' +
-      ' JOIN projects p ON p.id = a.project_id' +
-      ' WHERE a.active = 1 AND upper(e.emp_code) = upper(?) AND a.project_id IN (' + ph + ')',
-      codeMatch[1], ...scope
-    );
-  }
-
-  const words = t.replace(/[^a-z\s]/g, ' ').split(' ').filter((w) => w.length > 2);
-  for (let take = Math.min(3, words.length); take >= 2; take--) {
-    for (let i = 0; i + take <= words.length; i++) {
-      const phrase = words.slice(i, i + take).join(' ');
-      const rows = q.all(
-        'SELECT a.id AS assignmentId, e.emp_code, e.name, a.project_id, p.name AS projectName' +
-        ' FROM assignments a JOIN employees e ON e.id = a.employee_id' +
-        ' JOIN projects p ON p.id = a.project_id' +
-        ' WHERE a.active = 1 AND lower(e.name) LIKE ? AND a.project_id IN (' + ph + ') LIMIT 25',
-        '%' + phrase + '%', ...scope
-      );
-      const unique = Array.from(new Map(rows.map((r) => [r.assignmentId, r])).values());
-      if (unique.length) return unique;
-    }
-  }
-  return [];
+function understand(user, message, selected = null) {
+  const { name, ask, error } = resolve(user, String(message || ''), selected);
+  if (error) return error;
+  const answer = !ask ? { kind: 'project', reply: `Selected Giga project: ${name}.` }
+    : action(user, name, ask) || report(user, name, ask) || { kind: 'help', understood: false, reply: `For ${name}, I can count or list people, break down a status, propose a bench or block change, or open an employee’s CRM. Try one of the examples.` };
+  return { understood: true, projectName: name, suggestions: examples(name), ...answer };
 }
-
-function label(key) {
-  const f = schema.listFields().find((x) => x.key === key);
-  return f ? f.label : key;
-}
-
-function breakdown(user, project, fieldKey) {
-  const field = schema.listFields().find((f) => f.key === fieldKey);
-  if (!field) return [];
-  const ids = project ? [project.id] : (user.isAdmin
-    ? q.all('SELECT id FROM projects').map((r) => r.id)
-    : (user.projects || []).map((p) => p.id));
-  if (!ids.length) return [];
-  const ph = ids.map(() => '?').join(',');
-  return q.all(
-    'SELECT v.value AS a, COUNT(*) AS b FROM assignment_values v' +
-    ' JOIN assignments a ON a.id = v.assignment_id' +
-    ' WHERE a.active = 1 AND v.field_id = ? AND a.project_id IN (' + ph + ')' +
-    " AND v.value IS NOT NULL AND v.value <> ''" +
-    ' GROUP BY v.value ORDER BY b DESC LIMIT 12',
-    field.id, ...ids
-  ).map((r) => [r.a, Number(r.b).toLocaleString('en-IN')]);
-}
-
-function followUps(user, project) {
-  const where = project ? project.code : 'my projects';
-  return [
-    'How many are on bench in ' + where + '?',
-    'Break down bench category in ' + where,
-    'How many are hard block in ' + where + '?',
-  ];
-}
-
-function answerCount(user, text) {
-  const hidden = unknownProjectNamed(user, text);
-  if (hidden) {
-    return {
-      understood: true, kind: 'denied',
-      reply: 'You do not have access to ' + hidden + ', so I cannot report on it. Your projects: ' +
-        (visibleProjects(user).map((p) => p.code).join(', ') || 'none assigned') + '.',
-      suggestions: followUps(user, null),
-    };
-  }
-  const t = norm(text);
-  const project = findProject(user, text);
-  const benchValue = findValue(t, BENCH);
-  const blockValue = findValue(t, BLOCK);
-  const fieldKey = blockValue ? 'block_status' : (benchValue ? 'bench_category' : null);
-
-  const where = ['a.active = 1', 'e.active = 1'];
-  const args = [];
-
-  if (project) { where.push('a.project_id = ?'); args.push(project.id); }
-  else if (!user.isAdmin) {
-    const ids = (user.projects || []).map((p) => p.id);
-    where.push('a.project_id IN (' + (ids.map(() => '?').join(',') || 'NULL') + ')');
-    args.push(...ids);
-  }
-
-  if (fieldKey) {
-    const field = schema.listFields().find((f) => f.key === fieldKey);
-    where.push('EXISTS (SELECT 1 FROM assignment_values v WHERE v.assignment_id = a.id' +
-      ' AND v.field_id = ? AND v.value = ?)');
-    args.push(field.id, blockValue || benchValue);
-  }
-
-  const row = q.get(
-    'SELECT COUNT(*) c FROM assignments a JOIN employees e ON e.id = a.employee_id WHERE ' + where.join(' AND '),
-    ...args
-  );
-
-  const whereText = project ? 'in ' + project.name : 'across your projects';
-  const what = blockValue ? 'with block status "' + blockValue + '"'
-    : benchValue ? 'in bench category "' + benchValue + '"'
-      : 'on the bench board';
-
-  const splitField = fieldKey || 'bench_category';
-  const split = breakdown(user, project, splitField);
-
-  return {
-    understood: true,
-    kind: 'count',
-    reply: Number(row.c).toLocaleString('en-IN') + ' people ' + what + ' ' + whereText + '.',
-    data: { count: row.c, project: project ? project.code : 'ALL', field: fieldKey, value: blockValue || benchValue },
-    table: split.length ? { title: 'Breakdown by ' + label(splitField), columns: [label(splitField), 'People'], rows: split } : null,
-    suggestions: followUps(user, project),
-  };
-}
-
-function answerList(user, text) {
-  const project = findProject(user, text);
-  const benchValue = findValue(text, BENCH) || 'Bench';
-  const field = schema.listFields().find((f) => f.key === 'bench_category');
-  const ids = project ? [project.id] : (user.isAdmin
-    ? q.all('SELECT id FROM projects').map((r) => r.id)
-    : (user.projects || []).map((p) => p.id));
-  if (!ids.length) return { understood: true, kind: 'list', reply: 'You do not have any projects assigned.', table: null };
-
-  const rows = q.all(
-    'SELECT e.emp_code, e.name, p.code AS project, v.value AS bench_category' +
-    ' FROM assignment_values v JOIN assignments a ON a.id = v.assignment_id' +
-    ' JOIN employees e ON e.id = a.employee_id JOIN projects p ON p.id = a.project_id' +
-    ' WHERE a.active = 1 AND v.field_id = ? AND v.value = ?' +
-    ' AND a.project_id IN (' + ids.map(() => '?').join(',') + ')' +
-    ' ORDER BY e.name LIMIT 25',
-    field.id, benchValue, ...ids
-  );
-
-  return {
-    understood: true,
-    kind: 'list',
-    reply: rows.length
-      ? 'Showing the first ' + rows.length + ' people in "' + benchValue + '"' + (project ? ' in ' + project.name : '') + '.'
-      : 'Nobody is in "' + benchValue + '"' + (project ? ' in ' + project.name : '') + '.',
-    table: rows.length ? {
-      title: benchValue + (project ? ' - ' + project.name : ''),
-      columns: ['Employee ID', 'Name', 'Project', 'Bench Category'],
-      rows: rows.map((r) => [r.emp_code, r.name, r.project, r.bench_category]),
-    } : null,
-    suggestions: followUps(user, project),
-  };
-}
-
-function valueOf(assignmentId, fieldId) {
-  const row = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', assignmentId, fieldId);
-  return row ? row.value : null;
-}
-
-function proposeChange(user, text) {
-  const hidden = unknownProjectNamed(user, text);
-  if (hidden) {
-    return {
-      understood: true, kind: 'denied',
-      reply: 'You do not have access to ' + hidden + ', so I cannot propose a change there.',
-    };
-  }
-  const blockValue = findValue(text, BLOCK);
-  const benchValue = findValue(text, BENCH);
-  if (!blockValue && !benchValue) return null;
-
-  const people = findPeople(user, text);
-  if (!people.length) {
-    return {
-      understood: true,
-      kind: 'change',
-      reply: 'I could not match that to an employee in your projects. Include the employee ID (for example EMP-01042) or the full name.',
-      suggestions: ['Set EMP-01042 to hard block', 'How many are on bench in NEXUS?'],
-    };
-  }
-  if (people.length > 1) {
-    return {
-      understood: true,
-      kind: 'change',
-      reply: 'That could be any of ' + people.length + ' people. Add the employee ID so I propose the right one.',
-      table: {
-        title: 'Possible matches',
-        columns: ['Employee ID', 'Name', 'Project'],
-        rows: people.slice(0, 10).map((p) => [p.emp_code, p.name, p.projectName]),
-      },
-    };
-  }
-
-  const person = people[0];
-  const fields = schema.listFields();
-  const changes = {};
-  if (blockValue) {
-    const f = fields.find((x) => x.key === 'block_status');
-    changes[f.key] = { label: f.label, from: valueOf(person.assignmentId, f.id), to: blockValue };
-  }
-  if (benchValue) {
-    const f = fields.find((x) => x.key === 'bench_category');
-    changes[f.key] = { label: f.label, from: valueOf(person.assignmentId, f.id), to: benchValue };
-  }
-
-  const noop = Object.keys(changes).every((k) =>
-    String(changes[k].from === null || changes[k].from === undefined ? '' : changes[k].from) === String(changes[k].to));
-  if (noop) {
-    return {
-      understood: true,
-      kind: 'change',
-      reply: person.name + ' (' + person.emp_code + ') is already ' +
-        Object.keys(changes).map((k) => changes[k].label.toLowerCase() + ' "' + changes[k].to + '"').join(' and ') +
-        '. Nothing to approve.',
-      suggestions: ['How many are hard block in that project?'],
-    };
-  }
-
-  const summary = Object.keys(changes)
-    .map((k) => changes[k].label + ': ' + (changes[k].from === null ? '(empty)' : changes[k].from) + ' \u2192 ' + changes[k].to)
-    .join(', ');
-
-  return {
-    understood: true,
-    kind: 'change',
-    reply: 'Proposed change for ' + person.name + ' (' + person.emp_code + ') in ' + person.projectName +
-      '. Nothing is saved until an administrator approves it.',
-    proposal: {
-      kind: 'update_assignment',
-      assignmentId: person.assignmentId,
-      ref: person.emp_code,
-      name: person.name,
-      projectName: person.projectName,
-      summary,
-      changes,
-    },
-    suggestions: ['How many are hard block in that project?'],
-  };
-}
-
-const GREETINGS = /^(hi|hello|hey|good morning|good evening|help|what can you do)\b/;
-
-function understand(user, message) {
-  const text = String(message || '').trim();
-  if (!text) return { understood: false, reply: 'Ask me something, for example "how many are on bench in NEXUS?"' };
-  const t = norm(text);
-
-  if (GREETINGS.test(t) && text.length < 40) {
-    return {
-      understood: true,
-      kind: 'help',
-      reply: 'I can count and change people in the projects you are allowed to see. I never invent numbers and I never save anything without approval.',
-      suggestions: ['How many are on bench in NEXUS?', 'Set EMP-01042 to hard block'],
-    };
-  }
-
-  const wantsChange = /\b(set|mark|change|update|make|move|put|assign)\b/.test(t);
-  const wantsCount = /\b(how many|count|number of|total|headcount)\b/.test(t);
-  const wantsList = /\b(who|list|show me|which people|names)\b/.test(t);
-
-  if (wantsChange) {
-    const proposal = proposeChange(user, text);
-    if (proposal) return proposal;
-  }
-  if (wantsCount) return answerCount(user, text);
-  if (wantsList) return answerList(user, text);
-
-  const hasFacet = findValue(t, BLOCK) || findValue(t, BENCH);
-  if (hasFacet) return answerCount(user, text);
-
-  return {
-    understood: false,
-    reply: 'I did not understand that yet. I can answer counts ("how many on bench in NEXUS?") and propose changes ("set EMP-01042 to hard block").',
-    suggestions: ['How many are on bench in NEXUS?', 'Set EMP-01042 to hard block'],
-  };
-}
-
-module.exports = { understand, visibleProjects, findProject, findPeople, breakdown, answerCount, parseNumber };
+module.exports = { understand, visibleProjectNames };

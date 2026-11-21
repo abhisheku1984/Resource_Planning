@@ -2,6 +2,7 @@
 const { q, tx, remember } = require('./db');
 const { record } = require('./audit');
 const fielddefs = require('./fielddefs');
+const { assignmentScope, suppliersFor } = require('./access');
 
 /**
  * Field catalogue + dynamic column engine.
@@ -12,6 +13,44 @@ const fielddefs = require('./fielddefs');
  */
 const CORE_FIELDS = fielddefs.CORE;
 const DEFAULT_FIELDS = [...fielddefs.IMPORTED, ...fielddefs.LEGACY];
+
+const CRM_SETTING = 'crm_fields';
+
+/**
+ * Which columns the CRM / Update panel shows, in order.
+ *
+ * Stored as a setting so an administrator can change the panel without a code
+ * change; the catalogue default is used for a fresh database. Unknown keys are
+ * dropped and the result is always returned in the stored order.
+ */
+function crmKeys() {
+  const row = q.get('SELECT value FROM settings WHERE key = ?', CRM_SETTING);
+  const known = new Set(DEFAULT_FIELDS.concat(CORE_FIELDS).map((f) => f.key));
+  const fallback = fielddefs.CRM_KEYS.filter((k) => known.has(k));
+  if (!row || !row.value) return fallback;
+  let parsed;
+  try { parsed = JSON.parse(row.value); } catch { return fallback; }
+  if (!Array.isArray(parsed)) return fallback;
+  const clean = parsed.filter((k) => typeof k === 'string' && known.has(k));
+  if (!clean.length) return fallback;
+  // anything newly added to the catalogue but not yet configured still appears,
+  // at the end, so an upgrade never silently hides a column
+  for (const k of fallback) if (!clean.includes(k) && fielddefs.CRM_KEYS.includes(k)) clean.push(k);
+  return clean;
+}
+
+function setCrmKeys(keys, actor) {
+  const known = new Set(DEFAULT_FIELDS.concat(CORE_FIELDS).map((f) => f.key));
+  const clean = [...new Set((keys || []).filter((k) => known.has(k)))];
+  if (!clean.length) throw Object.assign(new Error('Choose at least one column for the CRM panel.'), { status: 422 });
+  q.run(
+    `INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, datetime('now'), ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), updated_by = excluded.updated_by`,
+    CRM_SETTING, JSON.stringify(clean), actor ? actor.id : null
+  );
+  record({ entity: 'setting', action: 'update', fieldKey: CRM_SETTING, newValue: `${clean.length} columns`, actor });
+  return clean;
+}
 
 /**
  * Idempotent: inserts any catalogue field that is missing and refreshes the
@@ -38,9 +77,12 @@ function seedFields() {
       f.group || null
     );
   }
-  // keep the facet/submit flags on the catalogue definition
+  // keep the facet/submit flags on the catalogue definition. Every CRM column
+  // is editable by a supervisor even when it is not one of the "submit" fields,
+  // so the panel can be configured to show any of them.
+  const crmKeys = fielddefs.CRM_KEYS;
   for (const f of [...CORE_FIELDS, ...DEFAULT_FIELDS]) {
-    if (!f.filterable && !f.submit) continue;
+    if (!f.filterable && !f.submit && !crmKeys.includes(f.key)) continue;
     const row = q.get('SELECT id FROM fields WHERE key = ?', f.key);
     if (!row) continue;
     for (const cat of q.all('SELECT id FROM categories')) {
@@ -49,23 +91,24 @@ function seedFields() {
         q.run(
           `INSERT INTO category_fields (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order)
            VALUES (?, ?, 1, 1, 0, ?, ?, ?)`,
-          cat.id, row.id, f.filterable ? 1 : 0, f.submit ? 1 : 0, 900 + row.id
+          cat.id, row.id, f.filterable ? 1 : 0, (f.submit || crmKeys.includes(f.key)) ? 1 : 0, 900 + row.id
         );
       } else {
         q.run('UPDATE category_fields SET filterable = ?, submit_field = ? WHERE category_id = ? AND field_id = ?',
-          f.filterable ? 1 : 0, f.submit ? 1 : 0, cat.id, row.id);
+          f.filterable ? 1 : 0, (f.submit || crmKeys.includes(f.key)) ? 1 : 0, cat.id, row.id);
       }
     }
   }
 }
 
-function supplierOptions() {
-  return q.all('SELECT name FROM suppliers WHERE active = 1 ORDER BY name').map((r) => r.name);
+function supplierOptions(user) {
+  return suppliersFor(user, true).map((r) => r.name);
 }
 
-function parseOptions(field) {
+function parseOptions(field, user) {
+  if (user?.gigaAccess && field.key === 'supplier') return supplierOptions(user);
   if (!field.options) return null;
-  if (field.options === 'SUPPLIERS') return supplierOptions();
+  if (field.options === 'SUPPLIERS') return supplierOptions(user);
   try {
     const parsed = JSON.parse(field.options);
     return Array.isArray(parsed) ? parsed : null;
@@ -74,13 +117,13 @@ function parseOptions(field) {
   }
 }
 
-function fieldDef(row) {
+function fieldDef(row, user) {
   return {
     id: row.id,
     key: row.key,
     label: row.label,
     type: row.type,
-    options: parseOptions(row),
+    options: parseOptions(row, user),
     help: row.help,
     group: row.group_name || null,
     core: !!row.core,
@@ -89,8 +132,9 @@ function fieldDef(row) {
   };
 }
 
-function listFields() {
-  return remember('fields:all', () => q.all('SELECT * FROM fields ORDER BY id').map(fieldDef));
+function listFields(user) {
+  return remember(`fields:${user?.gigaAccess ? user.id : 'all'}`, () =>
+    q.all('SELECT * FROM fields ORDER BY id').map((row) => fieldDef(row, user)));
 }
 
 /** Field catalogue grouped for the "show columns" picker. */
@@ -104,47 +148,41 @@ function groupedFields() {
   return [...groups.entries()].map(([name, fields]) => ({ name, fields }));
 }
 
-/**
- * Effective column configuration for a category.
- * Falls back to a sensible default set when a category has never been configured,
- * so new categories are instantly usable.
- */
-function columnsForCategory(categoryId) {
-  const key = `cols:${categoryId}`;
-  const cached = remember(key, () => null);
-  if (cached) return cached;
-  const fields = q.all('SELECT * FROM fields ORDER BY id').map(fieldDef);
-  const config = new Map(
-    q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId).map((r) => [r.field_id, r])
-  );
-  const configured = config.size > 0;
-  const out = [];
-  for (const f of fields) {
+/** The editor and employee table must agree on visibility and order, including
+ *  catalogue fields that do not have a category_fields row yet. */
+function categoryLayout(categoryId, user) {
+  const config = new Map(q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId).map((r) => [r.field_id, r]));
+  return listFields(user).map((f) => {
     const c = config.get(f.id);
-    const visible = c ? !!c.visible : (!configured || f.core || f.key === 'status' || f.key === 'remarks');
-    if (!visible) continue;
-    out.push({
+    return {
       ...f,
-      visible: true,
-      editable: c ? !!c.editable : true,
-      required: c ? !!c.required : false,
-      filterable: c ? !!c.filterable : false,
-      submitField: c ? !!c.submit_field : false,
-      sort: c ? c.sort_order : f.id,
-      section: c ? c.section : null,
-    });
-  }
-  const sorted = out.sort((a, b) => a.sort - b.sort || a.id - b.id);
-  // cache inside the current request only
-  remember(key, () => sorted);
-  return sorted;
+      visible: c ? !!c.visible : !!(f.core || f.filterable || f.submit || f.key === 'remarks'),
+      editable: user?.gigaAccess && f.key === 'giga_project_name' ? false : c ? !!c.editable : true,
+      required: !!c?.required,
+      filterable: c ? !!c.filterable : !!f.filterable,
+      submit_field: c ? !!c.submit_field : !!f.submit,
+      sort_order: c?.sort_order ?? f.id,
+      section: c?.section ?? null,
+      configured: !!c,
+      canHide: !f.system,
+    };
+  }).sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+}
+
+function columnsForCategory(categoryId, user) {
+  return remember(`cols:${categoryId}:${user?.gigaAccess ? user.id : 'all'}`, () => categoryLayout(categoryId, user).filter((f) => f.visible)
+    .map(({ sort_order, submit_field, configured, canHide, ...f }) => ({ ...f, sort: sort_order, submitField: submit_field })));
 }
 
 function setCategoryFields(categoryId, rows, actor) {
   return tx(() => {
+    // The layout form edits only visibility, editability, required and order.
+    // Replacing its rows must not clear facet/submit flags or section metadata.
+    const previous = new Map(q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId).map((r) => [r.field_id, r]));
     q.run('DELETE FROM category_fields WHERE category_id = ?', categoryId);
     let order = 10;
     for (const r of rows) {
+      const prev = previous.get(r.field_id);
       q.run(
         `INSERT INTO category_fields
            (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order, section)
@@ -154,10 +192,10 @@ function setCategoryFields(categoryId, rows, actor) {
         r.visible === false ? 0 : 1,
         r.editable === false ? 0 : 1,
         r.required ? 1 : 0,
-        r.filterable ? 1 : 0,
-        r.submit_field ? 1 : 0,
-        r.sort_order ?? order,
-        r.section || null
+        (r.filterable ?? prev?.filterable) ? 1 : 0,
+        (r.submit_field ?? prev?.submit_field) ? 1 : 0,
+        r.sort_order ?? prev?.sort_order ?? order,
+        r.section === undefined ? prev?.section ?? null : r.section
       );
       order += 10;
     }
@@ -184,14 +222,14 @@ function hierarchy(user) {
         ...subs.map((s) => s.id)
       )
     : [];
-  const counts = new Map(
-    q.all(
-      `SELECT subproject_id, COUNT(*) c FROM assignments WHERE active = 1 AND subproject_id IN (${subs
-        .map(() => '?')
-        .join(',')}) GROUP BY subproject_id`,
-      ...(subs.length ? subs.map((s) => s.id) : [0])
-    ).map((r) => [r.subproject_id, r.c])
-  );
+  const acl = assignmentScope(user);
+  const counts = new Map();
+  const visibleCategories = new Set();
+  for (const r of q.all(`SELECT a.subproject_id, a.category_id, COUNT(*) c FROM assignments a
+                          WHERE a.active = 1 AND ${acl.sql} GROUP BY a.subproject_id, a.category_id`, ...acl.args)) {
+    counts.set(r.subproject_id, (counts.get(r.subproject_id) || 0) + r.c);
+    visibleCategories.add(r.category_id);
+  }
   return projects.map((p) => ({
     id: p.id,
     code: p.code,
@@ -202,14 +240,14 @@ function hierarchy(user) {
     start_date: p.start_date,
     grant: user.isAdmin ? { can_edit: 1, can_export: 1, can_crm: 1 } : user.projects.find((x) => x.id === p.id),
     subprojects: subs
-      .filter((s) => s.project_id === p.id)
+      .filter((s) => s.project_id === p.id && (!user.gigaAccess || counts.has(s.id)))
       .map((s) => ({
         id: s.id,
         code: s.code,
         name: s.name,
         description: s.description,
         employeeCount: counts.get(s.id) || 0,
-        categories: cats.filter((c) => c.subproject_id === s.id).map((c) => ({
+        categories: cats.filter((c) => c.subproject_id === s.id && (!user.gigaAccess || visibleCategories.has(c.id))).map((c) => ({
           id: c.id,
           code: c.code,
           name: c.name,
@@ -235,8 +273,11 @@ module.exports = {
   fieldDef,
   parseOptions,
   supplierOptions,
+  categoryLayout,
   columnsForCategory,
   setCategoryFields,
+  crmKeys,
+  setCrmKeys,
   hierarchy,
   scopeLabels,
 };

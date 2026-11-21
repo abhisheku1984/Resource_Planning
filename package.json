@@ -10,7 +10,8 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
     "demo": "node --disable-warning=ExperimentalWarning server/gen-dummy.js",
     "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 tests/api.test.js tests/ui.smoke.mjs",
-    "seed": "node --disable-warning=ExperimentalWarning server/seed.js --reset"
+    "seed": "node --disable-warning=ExperimentalWarning server/seed.js --reset",
+    "check:filters": "node --disable-warning=ExperimentalWarning scripts/check-filters.js"
   },
   "engines": {
     "node": ">=22.5"

@@ -76,7 +76,9 @@ export function renderWorkspace(content, ctx) {
     h('div', { class: 'page-head' },
       h('div', null,
         h('div', { class: 'page-title' }, 'Project workspace'),
-        h('div', { class: 'page-sub' }, 'Pick a project, then walk down through subprojects and categories. Columns and permissions adapt to each category.'),
+        h('div', { class: 'page-sub' }, state.user?.gigaAccess ? (state.user.gigaAccess.name
+          ? `Giga Project Name: ${state.user.gigaAccess.name} · Only matching placements are shown.` : 'No Giga project is assigned to this account.')
+          : 'Pick a project, then walk down through subprojects and categories. Columns and permissions adapt to each category.'),
       ),
       h('div', { class: 'page-actions' },
         h('div', { class: 'panel-switch', role: 'group', 'aria-label': 'Side panel' },
@@ -85,7 +87,7 @@ export function renderWorkspace(content, ctx) {
             onclick: () => setPanel('submit'),
           }, icon('edit', 14), 'Update'),
           h('button', {
-            class: 'panel-toggle', dataset: { panel: 'crm' },
+            class: 'panel-toggle', dataset: { panel: 'crm' }, disabled: !!state.user?.gigaAccess && !state.user.capabilities['crm.use'],
             onclick: () => setPanel('crm'),
           }, icon('contact', 14), 'CRM'),
         ),
@@ -101,7 +103,7 @@ export function renderWorkspace(content, ctx) {
           },
         }, icon('columns', 15), crmVisible ? 'Hide panel' : 'Show panel'),
         h('button', {
-          class: 'btn btn-primary',
+          class: 'btn btn-primary', disabled: !!state.user?.gigaAccess && !state.user.capabilities['employee.create'],
           onclick: () => { setPanel('crm'); crm.newPerson(); },
         }, icon('plus', 15), 'Add person'),
       ),
@@ -243,7 +245,7 @@ export function renderWorkspace(content, ctx) {
           ),
           h('div', { class: 'toolbar-group' },
             h('button', {
-              class: 'btn btn-sm', title: 'Export this scope to Excel',
+              class: 'btn btn-sm', title: 'Export this scope to Excel', disabled: !!state.user?.gigaAccess && !state.user.capabilities['export.data'],
               onclick: () => openExportModal({ projectId: project.id, subprojectId: sub?.id, categoryId: cat?.id }),
             }, icon('download', 14), 'Export'),
             state.user.isAdmin
@@ -329,9 +331,29 @@ export function renderWorkspace(content, ctx) {
     if (ctx.setCrumbs) ctx.setCrumbs(items);
   }
 
+  // An update would otherwise be lost when the panel is closed or the person
+  // changes: settle() waits for the in-flight save and writes anything still
+  // pending before the panel goes away.
+  const flushPanels = () => {
+    try { submit.settle?.(); } catch { /* nothing pending */ }
+    try { crm.settle?.(); } catch { /* nothing pending */ }
+  };
+  const beforeUnload = (e) => {
+    if (submit.hasUnsaved?.() || crm.hasUnsaved?.()) {
+      // the debounce is short, but a hard close mid-keystroke still warns
+      flushPanels();
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
+    return undefined;
+  };
+  window.addEventListener('beforeunload', beforeUnload);
+
   // react to the panel close button inside the CRM
   const closeHandler = (e) => {
     if (e.detail?.collapsed) {
+      flushPanels();
       crmVisible = false;
       crm.el.classList.add('hidden');
       submit.el.classList.add('hidden');
@@ -340,8 +362,10 @@ export function renderWorkspace(content, ctx) {
   };
   document.addEventListener('rp:toggle-crm', closeHandler);
   const cleanup = () => {
+    flushPanels();
     document.removeEventListener('rp:toggle-crm', closeHandler);
     document.removeEventListener('rp:close-panel', closeHandler);
+    window.removeEventListener('beforeunload', beforeUnload);
   };
   document.addEventListener('rp:close-panel', closeHandler);
   window.addEventListener('hashchange', cleanup, { once: true });

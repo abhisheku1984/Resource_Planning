@@ -4,22 +4,30 @@
    ========================================================================= */
 import {
   h, mount, icon, api, state, toast, spinner, emptyState, modal, fmtNum,
-  fmtDateTime, fmtRelative, downloadExport, confirmDialog,
+  fmtDateTime, fmtRelative, downloadExport, downloadWorkbook, confirmDialog,
 } from '../core.js';
 
 export async function renderDataHub(content, ctx) {
+  const giga = state.user?.gigaAccess;
+  const canExport = !giga || state.user.capabilities['export.data'];
   mount(content, h('div', { class: 'page' },
     h('div', { class: 'page-head' },
       h('div', null,
         h('div', { class: 'page-title' }, 'Data Hub'),
-        h('div', { class: 'page-sub' }, 'Generate an Excel snapshot of the central database at any scope, or apply a daily dataset without disturbing supervisor edits.'),
+        h('div', { class: 'page-sub' }, giga ? `Giga Project Name: ${giga.name || 'No project access'}` : 'Generate an Excel snapshot of the central database at any scope, or apply a daily dataset without disturbing supervisor edits.'),
       ),
       h('div', { class: 'page-actions' },
-        h('button', { class: 'btn btn-primary', onclick: () => openExportModal({}) }, icon('download', 15), 'Generate export'),
+        h('button', { class: 'btn btn-primary', disabled: !canExport, onclick: () => openExportModal({}) }, icon('download', 15), 'Generate export'),
       ),
     ),
     h('div', { id: 'hub-body' }, h('div', { class: 'card' }, h('div', { class: 'card-body row' }, spinner(), h('span', { class: 'muted' }, 'Loading…')))),
   ));
+
+  if (giga) {
+    const host = content.querySelector('#hub-body');
+    mount(host, canExport ? exportCard() : emptyState({ title: 'Export not permitted', message: 'Ask your administrator if you need an Excel export of your Giga project.', iconName: 'shield' }));
+    return; // master imports and duplicate reviews span Giga projects
+  }
 
   let imports = [];
   try {
@@ -161,6 +169,8 @@ export function openExportModal(initial = {}) {
 /* ------------------------------------------------------------------ import */
 function importCard(imports) {
   const canImport = state.user.isAdmin || state.user.capabilities?.['import.data'];
+  // where a file without Project/Subproject/Category columns is filed
+  const place = { projectId: '', subprojectId: '', categoryId: '' };
   const fileInput = h('input', {
     type: 'file', accept: '.xlsx', class: 'sr-only', id: 'import-file',
     onchange: () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); },
@@ -216,13 +226,24 @@ function importCard(imports) {
         h('div', { class: 'card-sub' }, 'Upsert by employee ID inside a single transaction.'),
       ),
       h('button', {
-        class: 'btn btn-ghost btn-xs', onclick: () => downloadExport({}),
-        title: 'Download the current dataset as the import template',
-      }, icon('download', 13), 'Template'),
+        class: 'btn btn-ghost btn-xs',
+        onclick: async (e) => {
+          const b = e.currentTarget;
+          b.disabled = true;
+          try {
+            const { filename } = await downloadWorkbook('/api/import/template', {});
+            toast('Template downloaded', `${filename} — your 65 columns plus Project / Subproject / Category.`, 'success', 6000);
+          } catch (err) {
+            toast('Download failed', err.message, 'error');
+          } finally { b.disabled = false; }
+        },
+        title: 'Download a blank workbook with your own 65 headers, ready to fill in',
+      }, icon('download', 13), 'Import template'),
     ),
     h('div', { class: 'card-body' },
       fileInput,
       dropZone,
+      canImport ? placementPicker(place) : null,
       h('div', { class: 'note', style: { marginTop: '12px' } }, icon('shield', 15),
         h('span', null, 'Protected fields: if a supervisor edited a value by hand, a daily upload will not silently overwrite it. An administrator can override explicitly.')),
       historyHost,
@@ -236,12 +257,77 @@ function importCard(imports) {
     }
     const buffer = await file.arrayBuffer();
     const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-    const modalRef = showImportPreview(file.name, base64);
+    const modalRef = showImportPreview(file.name, base64,
+      place.categoryId ? place : {});
     fileInput.value = '';
   }
 }
 
-function showImportPreview(filename, base64) {
+/**
+ * Your HR master workbook has no Project / Subproject / Category column: a
+ * spreadsheet row cannot say where the person sits. Pick it once here and every
+ * new row is filed there; rows that do carry the three columns still win.
+ */
+function placementPicker(place) {
+  const projSel = h('select', { class: 'input', onchange: () => sync() }, h('option', { value: '' }, 'Select a project…'));
+  const subSel = h('select', { class: 'input', disabled: true }, h('option', { value: '' }, 'Select a project first'));
+  const catSel = h('select', { class: 'input', disabled: true }, h('option', { value: '' }, 'Select a subproject first'));
+  const summary = h('span', { class: 'subtle', style: { fontSize: '12px' } }, 'Loading projects…');
+
+  function sync() {
+    const p = state.tree.find((x) => x.id === Number(projSel.value));
+    place.projectId = p ? p.id : '';
+    place.subprojectId = '';
+    place.categoryId = '';
+    subSel.replaceChildren(h('option', { value: '' }, p ? 'Select a subproject…' : 'Select a project first'),
+      ...(p ? p.subprojects.map((s) => h('option', { value: s.id }, s.name)) : []));
+    subSel.disabled = !p;
+    catSel.replaceChildren(h('option', { value: '' }, 'Select a subproject first'));
+    catSel.disabled = true;
+    describe();
+  }
+  subSel.addEventListener('change', () => {
+    const p = state.tree.find((x) => x.id === Number(projSel.value));
+    const s = p?.subprojects.find((x) => x.id === Number(subSel.value));
+    place.subprojectId = s ? s.id : '';
+    place.categoryId = '';
+    catSel.replaceChildren(h('option', { value: '' }, s ? 'Select a category…' : 'Select a subproject first'),
+      ...(s ? s.categories.map((c) => h('option', { value: c.id }, c.name)) : []));
+    catSel.disabled = !s;
+    describe();
+  });
+  catSel.addEventListener('change', () => { place.categoryId = Number(catSel.value) || ''; describe(); });
+
+  function describe() {
+    const p = state.tree.find((x) => x.id === Number(place.projectId));
+    const s = p?.subprojects.find((x) => x.id === Number(place.subprojectId));
+    const c = s?.categories.find((x) => x.id === Number(place.categoryId));
+    summary.textContent = c
+      ? `Rows without a Project column will be filed under ${p.name} › ${s.name} › ${c.name}.`
+      : 'Optional — only needed if your file has no Project / Subproject / Category columns.';
+  }
+
+  projSel.replaceChildren(
+    h('option', { value: '' }, 'Select a project…'),
+    ...state.tree.map((p) => h('option', { value: p.id }, p.name)),
+  );
+  describe();
+
+  return h('details', { style: { marginTop: '12px' } },
+    h('summary', { style: { cursor: 'pointer', fontSize: '13px', fontWeight: '600' } },
+      'Where should new rows go?'),
+    h('div', { class: 'note', style: { margin: '8px 0' } }, icon('info', 15),
+      h('span', null, 'Your workbook has no Project column, so the portal needs to know where to file the people. Rows that do carry Project, Subproject and Category use those instead.')),
+    h('div', { class: 'grid', style: { gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' } },
+      h('div', { class: 'field' }, h('label', { class: 'field-label' }, 'Project'), projSel),
+      h('div', { class: 'field' }, h('label', { class: 'field-label' }, 'Subproject'), subSel),
+      h('div', { class: 'field' }, h('label', { class: 'field-label' }, 'Category'), catSel),
+    ),
+    h('div', { style: { marginTop: '6px' } }, summary),
+  );
+}
+
+function showImportPreview(filename, base64, placement = {}) {
   const host = h('div', null, h('div', { class: 'row' }, spinner(), h('span', { class: 'muted' }, 'Validating workbook…')));
   const ref = modal({
     title: 'Import preview',
@@ -256,7 +342,7 @@ function showImportPreview(filename, base64) {
 
   (async () => {
     try {
-      const res = await api('/import', { method: 'POST', body: { filename, content: base64, dryRun: true } });
+      const res = await api('/import', { method: 'POST', body: { filename, content: base64, dryRun: true, ...placement } });
       const r = res.result;
       renderReport(host, r, { dryRun: true });
       const applyBtn = document.getElementById('apply-import');
@@ -266,7 +352,7 @@ function showImportPreview(filename, base64) {
         applyBtn.disabled = true;
         applyBtn.replaceChildren(spinner(), 'Applying…');
         try {
-          const out = await api('/import', { method: 'POST', body: { filename, content: base64 } });
+          const out = await api('/import', { method: 'POST', body: { filename, content: base64, ...placement } });
           document.querySelector('.overlay')?.remove();
           toast('Import complete',
             `${out.result.created} created · ${out.result.updated} updated · ${out.result.protected} protected`,

@@ -10,7 +10,8 @@ export async function renderDashboard(content, ctx) {
     h('div', { class: 'page-head' },
       h('div', null,
         h('div', { class: 'page-title' }, `Good ${greeting()}, ${state.user.name.split(' ')[0]}`),
-        h('div', { class: 'page-sub' }, 'A consolidated view of the workforce you are authorized to see.'),
+        h('div', { class: 'page-sub' }, state.user.gigaAccess ? `Giga Project Name: ${state.user.gigaAccess.name || 'No project access'}`
+          : 'A consolidated view of the workforce you are authorized to see.'),
       ),
       h('div', { class: 'page-actions' },
         h('button', { class: 'btn', onclick: () => window.__rp.go('directory') }, icon('users', 15), 'Employee directory'),
@@ -43,7 +44,7 @@ function paint(data) {
 
   const kpis = h('div', { class: 'grid grid-kpi', style: { marginBottom: '14px' } },
     kpi('employees', 'People in scope', fmtNum(data.totals.employees), `${fmtNum(data.totals.assignments)} placements`, 'users', () => window.__rp.go('directory')),
-    kpi('layers', 'Projects', fmtNum(data.totals.projects), `${state.tree.reduce((a, p) => a + p.subprojects.length, 0)} subprojects`, 'layers', () => window.__rp.go('workspace')),
+    kpi('layers', state.user.gigaAccess ? 'Hierarchy projects in scope' : 'Projects', fmtNum(data.totals.projects), `${state.tree.reduce((a, p) => a + p.subprojects.length, 0)} subprojects`, 'layers', () => window.__rp.go('workspace')),
     kpi('truck', 'Suppliers', fmtNum(data.totals.suppliers), 'Active partner network', 'truck', () => window.__rp.go('admin')),
     kpi('alert',
       'Needs attention',

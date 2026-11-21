@@ -11,7 +11,7 @@ import { createFilterBar } from './filterbar.js';
 
 const STATUS_FIELDS = new Set(['status', 'training_status', 'completion_status', 'billing_status', 'allocation_status']);
 
-export function createTable({ onSelect, onSaved, compact = false, showScope = true, withFilters = true }) {
+export function createTable({ onSelect, onSaved, onSummary, compact = false, showScope = true, withFilters = true }) {
   const el = h('div', { class: 'card', style: { overflow: 'hidden' } });
 
   const q = {
@@ -62,9 +62,13 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
         q.page = 1;
         load();
       },
-      getActive: () => facetFilters,
     })
     : null;
+
+  // The dropdowns float above the page, so they live next to the table view
+  // rather than inside it, and the bar sticks to the top as you scroll rows.
+  const filtersHost = h('div', { class: 'filters-sticky' },
+    ...(filterBar ? [filterBar.el, filterBar.menu] : []));
 
   const searchInput = h('input', {
     class: 'input',
@@ -73,16 +77,6 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     'aria-label': 'Search employees',
     oninput: debounce((e) => { q.search = e.target.value; q.page = 1; load(); }, 280),
   });
-
-  const statusSelect = h('select', {
-    class: 'select', style: { width: '160px' }, 'aria-label': 'Filter by status',
-    onchange: (e) => { q.status = e.target.value; q.page = 1; load(); },
-  }, h('option', { value: '' }, 'All statuses'));
-
-  const supplierSelect = h('select', {
-    class: 'select', style: { width: '180px' }, 'aria-label': 'Filter by supplier',
-    onchange: (e) => { q.supplierId = e.target.value || null; q.page = 1; load(); },
-  }, h('option', { value: '' }, 'All suppliers'));
 
   const pageSizeSelect = h('select', {
     class: 'select', style: { width: '96px' }, 'aria-label': 'Rows per page',
@@ -100,14 +94,12 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   }, icon('filter', 14), 'Filter');
 
   const exportBtn = h('button', {
-    class: 'btn btn-sm', title: 'Export current view to Excel',
+    class: 'btn btn-sm', title: 'Export current view to Excel', disabled: !!state.user?.gigaAccess && !state.user.capabilities['export.data'],
     onclick: doExport,
   }, icon('download', 14), 'Export');
 
   const toolbar = h('div', { class: 'table-toolbar' },
     h('div', { class: 'search-box' }, icon('search', 15), searchInput),
-    statusSelect,
-    supplierSelect,
     h('div', { class: 'grow' }),
     filterBtn,
     colsBtn,
@@ -115,50 +107,68 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   );
 
   const foot = h('div', { class: 'table-foot' });
+  const rowCount = h('span', { class: 'count-pill', id: 'row-count' }, '—');
   const head = h('div', { class: 'card-head' },
     h('div', null,
-      h('div', { class: 'card-title' }, 'Employee records', h('span', { class: 'count-pill', id: 'row-count' }, '—')),
+      h('div', { class: 'card-title' }, 'Employee records', rowCount),
       h('div', { class: 'card-sub' }, 'Click any editable cell to update it. Changes save automatically.'),
     ),
   );
   const bodyHost = h('div', { id: 'table-host' });
   const chipsHost = h('div', { class: 'row', style: { padding: '0 14px 10px', gap: '6px', flexWrap: 'wrap', background: 'var(--surface)' } });
 
-  mount(el, head, ...(filterBar ? [filterBar.el] : []), toolbar, chipsHost, bodyHost, foot);
+  mount(el, head, toolbar, ...(filterBar ? [filtersHost] : []), chipsHost, bodyHost, foot);
+
+  // One set of parameters for both the table and "Export current view".
+  function currentView() {
+    return {
+      projectId: q.projectId, subprojectId: q.subprojectId, categoryId: q.categoryId,
+      supplierId: q.supplierId, status: q.status, search: q.search, ...q.filters,
+      ...Object.fromEntries(Object.entries(facetFilters).map(([key, vals]) => [`f_${key}`, vals])),
+    };
+  }
 
   /* ------------------------------------------------------------- loading */
+  function showCounts(result) {
+    rowCount.textContent = fmtNum(result?.total);
+    onSummary?.(result?.summary ?? null);
+  }
+
   async function load({ silent = false } = {}) {
-    if (controller) controller.abort();
+    controller?.abort();
     controller = new AbortController();
+    const { signal } = controller;
     loading = true;
-    if (!silent) renderLoading();
+    if (!silent) {
+      showCounts(null);
+      mount(foot);
+      renderLoading();
+    }
     const params = new URLSearchParams();
     params.set('page', q.page);
     params.set('pageSize', q.pageSize);
+    if (onSummary) params.set('includeSummary', '1');
     params.set('sort', q.sort);
     params.set('dir', q.dir);
-    if (q.search) params.set('search', q.search);
-    if (q.projectId) params.set('projectId', q.projectId);
-    if (q.subprojectId) params.set('subprojectId', q.subprojectId);
-    if (q.categoryId) params.set('categoryId', q.categoryId);
-    if (q.supplierId) params.set('supplierId', q.supplierId);
-    if (q.status) params.set('status', q.status);
-    for (const [k, v] of Object.entries(q.filters)) if (v) params.set(k, v);
-    for (const [k, vals] of Object.entries(facetFilters)) {
-      if (vals && vals.length) params.set(`f_${k}`, vals.join('|'));
+    for (const [key, value] of Object.entries(currentView())) {
+      if (Array.isArray(value)) { for (const v of value) params.append(`${key}[]`, v); }
+      else if (value) params.set(key, value);
     }
     try {
-      const res = await api(`/employees?${params}`, { signal: controller.signal });
+      const res = await api(`/employees?${params}`, { signal });
+      if (signal.aborted) return; // a late response cannot replace newer rows or totals
       data = res;
-      if (filterBar && res.facets) {
+      if (Array.isArray(res.facets)) {
         facets = res.facets;
-        filterBar.setFacets(facets, res.scope?.category?.name || res.scope?.project?.name || '');
+        if (filterBar) filterBar.setFacets(facets, res.scope?.category?.name || res.scope?.project?.name || '');
       }
       loading = false;
+      showCounts(res);
       render();
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      if (signal.aborted || err.name === 'AbortError') return;
       loading = false;
+      showCounts(null);
       mount(bodyHost, h('div', { class: 'card-body' }, emptyState({
         title: 'Could not load records',
         message: err.message,
@@ -183,18 +193,15 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   /* ------------------------------------------------------------- render */
   function render() {
     renderChips();
-    renderStatusOptions();
-    const countEl = el.querySelector('#row-count');
-    if (countEl) countEl.textContent = fmtNum(data.total);
 
     if (!data.rows.length) {
       mount(bodyHost, emptyState({
-        title: q.search || q.status || q.supplierId ? 'No matching employees' : 'No employees in this selection',
-        message: q.search || q.status || q.supplierId
+        title: hasAnyFilter() ? 'No matching employees' : 'No employees in this selection',
+        message: hasAnyFilter()
           ? 'Try a different search term or clear the active filters.'
           : 'Add a person from the CRM panel, or choose a different category in the drill-down.',
         iconName: 'users',
-        action: q.search || q.status || q.supplierId
+        action: hasAnyFilter()
           ? h('button', { class: 'btn btn-sm', onclick: clearFilters }, 'Clear filters')
           : null,
       }));
@@ -248,33 +255,11 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     renderFoot();
   }
 
-  function renderStatusOptions() {
-    const known = ['Active', 'On Leave', 'Training', 'Billing Hold', 'Released', 'Completed'];
-    const current = statusSelect.value;
-    statusSelect.replaceChildren(
-      h('option', { value: '' }, 'All statuses'),
-      ...known.map((s) => h('option', { value: s, selected: s === q.status }, s)),
-    );
-    statusSelect.value = current || q.status || '';
-
-    const curSup = supplierSelect.value;
-    supplierSelect.replaceChildren(
-      h('option', { value: '' }, 'All suppliers'),
-      ...(state.suppliers || []).map((s) => h('option', { value: s.id, selected: String(s.id) === String(q.supplierId) }, s.name)),
-    );
-    supplierSelect.value = curSup || (q.supplierId ? String(q.supplierId) : '');
-  }
-
   function renderChips() {
     const chips = [];
     const add = (label, clear) => chips.push(h('span', { class: 'filter-chip' }, label,
       h('button', { 'aria-label': `Remove ${label}`, onclick: () => { clear(); q.page = 1; load(); } }, icon('x', 11))));
     if (q.search) add(`Search: “${q.search}”`, () => { q.search = ''; searchInput.value = ''; });
-    if (q.status) add(q.status, () => { q.status = ''; });
-    if (q.supplierId) {
-      const s = (state.suppliers || []).find((x) => String(x.id) === String(q.supplierId));
-      add(`Supplier: ${s ? s.name : q.supplierId}`, () => { q.supplierId = null; });
-    }
     for (const [k, v] of Object.entries(q.filters)) {
       if (!v) continue;
       const col = data.columns.find((c) => c.key === k.slice(2));
@@ -295,6 +280,10 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     chipsHost.style.display = chips.length ? 'flex' : 'none';
   }
 
+  function hasAnyFilter() {
+    return !!(q.search || Object.keys(facetFilters).length || Object.keys(q.filters).length);
+  }
+
   function clearFilters() {
     q.search = '';
     q.status = '';
@@ -304,8 +293,6 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     if (filterBar) filterBar.setActive({});
     q.page = 1;
     searchInput.value = '';
-    statusSelect.value = '';
-    supplierSelect.value = '';
     load();
   }
 
@@ -372,7 +359,19 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     if (col.key === 'emp_code') {
       return h('span', { class: 'mono', style: { color: 'var(--text-2)' } }, raw || '—');
     }
-    if (!col.editable) {
+    // The person's name is the way into the updater: a plain, readable click
+    // target that opens the leader's form (the rest of the row still selects).
+    if (col.key === 'name' || col.key === 'first_name' || col.key === 'last_name') {
+      const target = (row.values.first_name || row.values.last_name)
+        ? `${row.values.first_name || ''} ${row.values.last_name || ''}`.trim()
+        : raw;
+      return h('button', {
+        class: 'emp-name-link',
+        title: 'Open the update form for this person',
+        onclick: (e) => { e.stopPropagation(); select(row); },
+      }, target || '—');
+    }
+    if (!col.editable || (state.user?.gigaAccess && !state.user.capabilities['employee.edit'])) {
       return staticView(col, raw);
     }
     return editableCell(row, col, raw);
@@ -541,7 +540,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
       // rebuild just the value cells for accuracy
       const cells = tr.querySelectorAll('td');
       let idx = (showScope && !q.categoryId) ? 1 : 0;
-      for (const c of data.columns) {
+      for (const c of shownColumns()) {
         const fresh = cellFor(row, c);
         cells[idx].replaceChildren(fresh);
         idx++;
@@ -639,12 +638,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     exportBtn.replaceChildren(spinner(), 'Generating…');
     try {
       const { downloadExport } = await import('../core.js');
-      const res = await downloadExport({
-        projectId: q.projectId || '',
-        subprojectId: q.subprojectId || '',
-        categoryId: q.categoryId || '',
-        supplierId: q.supplierId || '',
-      });
+      const res = await downloadExport(currentView());
       toast('Export ready', `${res.filename} · ${fmtNum(res.rows)} rows generated from the database.`, 'success', 5000);
     } catch (err) {
       if (err.status === 403) toast('Export not permitted', 'Your role does not allow exports for this scope.', 'error');

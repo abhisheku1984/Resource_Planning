@@ -1,5 +1,6 @@
 'use strict';
 const { q, tx } = require('./db');
+const { assignmentScope } = require('./access');
 
 /**
  * Append-only audit trail. Every mutation funnels through here so the UI can
@@ -22,39 +23,26 @@ function record({ entity, entityId = null, ref = null, action, fieldKey = null, 
   );
 }
 
-function historyFor(entity, entityId, limit = 100) {
-  return q.all(
-    `SELECT id, entity, entity_id, ref, action, field_key, old_value, new_value, actor_name, at
-       FROM audit_log WHERE entity = ? AND entity_id = ? ORDER BY id DESC LIMIT ?`,
-    entity,
-    entityId,
-    limit
-  );
+// Configuration, import and account events have no workforce row to authorize.
+// Only admins see those; never treat a NULL project or an entity filter as a grant.
+function auditScope(user) {
+  if (user.isAdmin) return { sql: '1', args: [] };
+  const acl = assignmentScope(user);
+  return {
+    sql: `((l.entity = 'assignment' AND l.entity_id IN (SELECT a.id FROM assignments a WHERE ${acl.sql})) OR
+           (l.entity = 'employee' AND l.entity_id IN (SELECT a.employee_id FROM assignments a WHERE ${acl.sql})))`
+      + (user.gigaAccess ? " AND l.field_key IS NOT 'giga_project_name'" : ''),
+    args: [...acl.args, ...acl.args],
+  };
 }
 
-/** Recent activity feed, restricted to the projects a supervisor can see. */
-function recentActivity({ projectIds = null, limit = 25 } = {}) {
-  const rows = q.all(
-    `SELECT a.id, a.entity, a.entity_id, a.ref, a.action, a.field_key, a.old_value, a.new_value,
-            a.actor_name, a.at, asg.project_id
-       FROM audit_log a
-       LEFT JOIN assignments asg
-         ON (a.entity = 'assignment' AND asg.id = a.entity_id)
-         OR (a.entity = 'employee' AND asg.employee_id = a.entity_id)
-      GROUP BY a.id
-      ORDER BY a.id DESC LIMIT ?`,
-    limit * 6
-  );
-  const seen = new Set();
-  const out = [];
-  for (const r of rows) {
-    if (seen.has(r.id)) continue;
-    seen.add(r.id);
-    if (projectIds && r.project_id && !projectIds.includes(r.project_id)) continue;
-    out.push(r);
-    if (out.length >= limit) break;
-  }
-  return out;
+function recentActivity(user, { limit = 25, entity, entityId } = {}) {
+  const { sql, args } = auditScope(user);
+  const where = [sql];
+  if (entity != null) { where.push('l.entity = ?'); args.push(entity); }
+  if (entityId != null) { where.push('l.entity_id = ?'); args.push(entityId); }
+  return q.all(`SELECT id, entity, entity_id, ref, action, field_key, old_value, new_value, actor_name, at
+                  FROM audit_log l WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`, ...args, limit);
 }
 
-module.exports = { record, historyFor, recentActivity, tx };
+module.exports = { record, auditScope, recentActivity, tx };

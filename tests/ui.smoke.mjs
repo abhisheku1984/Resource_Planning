@@ -33,6 +33,7 @@ class El {
     this.parentElement = null;
     this.isConnected = true;
     this.disabled = false;
+    this.checked = false;
     this.files = [];
   }
   get className() { return this.classList.set.size ? [...this.classList.set].join(' ') : this._className; }
@@ -49,7 +50,7 @@ class El {
   get innerHTML() { return this._html || ''; }
   get rowCount() { return 1; }
   appendChild(c) { c.parentElement = this; this.children.push(c); return c; }
-  append(...c) { c.forEach((x) => x && this.appendChild(x)); }
+  append(...c) { c.forEach((x) => { if (x != null) this.appendChild(x instanceof El ? x : documentShim.createTextNode(String(x))); }); }
   prepend(...c) { c.reverse().forEach((x) => x && this.appendChild(x)); }
   insertBefore(n, ref) {
     const i = ref ? this.children.indexOf(ref) : -1;
@@ -75,7 +76,7 @@ class El {
   addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
   removeEventListener(t, fn) { this.listeners[t] = (this.listeners[t] || []).filter((f) => f !== fn); }
   dispatchEvent(e) { (this.listeners[e.type] || []).forEach((f) => f(e)); return true; }
-  click() { this.dispatchEvent({ type: 'click', target: this, stopPropagation() {}, preventDefault() {}, closest: (sel) => this.closest(sel) }); }
+  click() { this.dispatchEvent({ type: 'click', currentTarget: this, target: this, stopPropagation() {}, preventDefault() {}, closest: (sel) => this.closest(sel) }); }
   focus() { globalThis.document.activeElement = this; }
   select() {}
   setSelectionRange() {}
@@ -95,6 +96,18 @@ class El {
     return walk(this);
   }
   querySelectorAll(sel) {
+    // support comma-separated selector lists ("input, textarea"), which the
+    // real DOM does and the views use
+    if (String(sel).includes(',')) {
+      const seen = new Set();
+      const out = [];
+      for (const part of String(sel).split(',')) {
+        for (const el of this.querySelectorAll(part.trim())) {
+          if (!seen.has(el)) { seen.add(el); out.push(el); }
+        }
+      }
+      return out;
+    }
     const out = [];
     const cls = sel.startsWith('.') ? sel.replace(/^\./, '') : null;
     const tagOnly = /^[a-z]+$/.test(sel) ? sel.toUpperCase() : null;
@@ -217,6 +230,13 @@ globalThis.fetch = async (url, opts = {}) => {
         { id: 3, key: 'training_status', label: 'Training Status', type: 'select', options: ['Not Started', 'In Progress', 'Completed'] },
         { id: 4, key: 'status', label: 'Current Status', type: 'select', options: ['Active', 'On Leave'] },
         { id: 5, key: 'remarks', label: 'Remarks', type: 'textarea' },
+        // the workbook supervisor columns the CRM panel is configured with
+        { id: 6, key: 'leader_input_last_week', label: 'Leader Input Last Week', type: 'textarea', group: 'Leadership' },
+        { id: 7, key: 'leader_input_this_week', label: 'Leader Input This Week', type: 'textarea', group: 'Leadership' },
+        { id: 8, key: 'opp_id', label: 'Opp ID', type: 'text', group: 'Demand' },
+        { id: 9, key: 'demand_number', label: 'Demand Number', type: 'text', group: 'Demand' },
+        { id: 10, key: 'block_status', label: 'Hard Block / Soft Block', type: 'select', options: ['No Block', 'Soft Block', 'Hard Block'] },
+        { id: 11, key: 'giga_project_name', label: 'Giga Project Name', type: 'text', group: 'Demand' },
       ],
       suppliers: [{ id: 3, name: 'TechCore Staffing' }],
       totals: { employees: 60, assignments: 60, projects: 1, suppliers: 1, pendingReviews: 2 },
@@ -245,6 +265,20 @@ globalThis.fetch = async (url, opts = {}) => {
         { key: 'remarks', label: 'Remarks', type: 'textarea', editable: true },
       ],
       scope: { project: { id: 1, name: 'Nexus' }, category: { id: 4, name: 'Training Cohort' } },
+      facets: [
+        { key: 'billing_status', label: 'Billing Status', type: 'select', total: 60,
+          values: [{ value: 'Billable', count: 40 }, { value: 'Non-Billable', count: 20 }] },
+        { key: 'bench_category', label: 'Bench Category', type: 'select', total: 60,
+          values: [{ value: 'Allocated', count: 45 }, { value: 'Bench', count: 15 }] },
+        { key: 'bl_status', label: 'BL Status', type: 'select', total: 60,
+          values: [{ value: 'BL-1', count: 60 }] },
+        { key: 'offsite_onsite', label: 'Offsite / Onsite', type: 'select', total: 60,
+          values: [{ value: 'Onsite', count: 35 }, { value: 'Offsite', count: 25 }] },
+        { key: 'giga_project_name', label: 'Giga Project Name', type: 'select', total: 10,
+          values: [{ value: 'Giga One', count: 10 }] },
+        { key: 'capability', label: 'Capability', type: 'select', total: 60,
+          values: [{ value: 'Tech', count: 60 }] },
+      ],
     });
   }
   if (/^\/employees\/\d+$/.test(path)) {
@@ -265,8 +299,20 @@ globalThis.fetch = async (url, opts = {}) => {
       { key: 'status', label: 'Current Status', type: 'select', editable: true, options: ['Active', 'On Leave'] },
       { key: 'training_status', label: 'Training Status', type: 'select', editable: true, options: ['Not Started', 'In Progress', 'Completed'] },
       { key: 'remarks', label: 'Remarks', type: 'textarea', editable: true },
+      { key: 'leader_input_last_week', label: 'Leader Input Last Week', type: 'textarea', editable: true },
+      { key: 'leader_input_this_week', label: 'Leader Input This Week', type: 'textarea', editable: true },
+      { key: 'opp_id', label: 'Opp ID', type: 'text', editable: true },
+      { key: 'demand_number', label: 'Demand Number', type: 'text', editable: true },
+      { key: 'block_status', label: 'Hard Block / Soft Block', type: 'select', editable: true, options: ['No Block', 'Soft Block', 'Hard Block'] },
+      { key: 'giga_project_name', label: 'Giga Project Name', type: 'text', editable: true },
     ];
     return jsonResponse({ record: rec });
+  }
+  if (/^\/employees\/\d+\/submit$/.test(path)) {
+    const rec = JSON.parse(JSON.stringify(workers[0]));
+    rec.values = { ...rec.values, ...(body.changes || {}) };
+    rec.rev = (rec.rev || 1) + 1;
+    return jsonResponse({ record: rec, changed: Object.keys(body.changes || {}), message: 'Saved' });
   }
   if (/^\/employees\/\d+\/history$/.test(path)) {
     return jsonResponse({ history: [{ id: 2, field_key: 'training_status', field_label: 'Training Status', old_value: 'Not Started', new_value: 'Completed', actor_name: 'Priya Nair', at: '2026-11-19 10:00:00' }] });
@@ -280,13 +326,27 @@ globalThis.fetch = async (url, opts = {}) => {
   }
   if (path.startsWith('/imports')) return jsonResponse({ imports: [] });
   if (path.startsWith('/audit')) return jsonResponse({ activity: [{ id: 1, entity: 'assignment', entity_id: 1, action: 'update', field_key: 'status', old_value: 'A', new_value: 'B', actor_name: 'P', at: '2026-11-19 10:00:00', ref: 'EMP-1' }] });
+  if (path.startsWith('/agent/projects')) return jsonResponse({ projectNames: ['Giga One', 'Giga Two'] });
+  if (path.startsWith('/agent/proposals')) return jsonResponse({ proposals: [] });
   if (path.startsWith('/projects')) return jsonResponse({ projects: [] });
   if (path.startsWith('/suppliers')) return jsonResponse({ suppliers: [] });
   if (path.startsWith('/groups')) return jsonResponse({ groups: [] });
-  if (path.startsWith('/users')) return jsonResponse({ users: [], capabilities: ['employee.edit'] });
+  if (path.startsWith('/users')) {
+    return jsonResponse({
+      users: [{ id: 7, email: 'lead@x.io', name: 'Test Leader', role: 'supervisor', title: 'Lead', active: 1,
+        projects: [{ project_id: 1, name: 'Nexus', can_edit: 1, can_export: 1, can_crm: 1 }],
+        capabilities: { 'employee.edit': true } }],
+      gigaProjectNames: ['Giga Apple', 'Giga Pear'],
+      gigaCapabilities: ['project.view', 'employee.edit', 'crm.use', 'export.data'],
+      capabilities: ['employee.edit', 'crm.use', 'export.data'],
+    });
+  }
   if (path.startsWith('/fields')) return jsonResponse({ fields: [] });
   if (path.startsWith('/duplicates')) return jsonResponse({ reviews: [] });
-  if (path.startsWith('/categories/') && path.includes('/columns')) return jsonResponse({ category: { id: 4, name: 'Training Cohort' }, fields: [], isConfigured: false });
+  if (path.startsWith('/categories/') && path.includes('/columns')) return jsonResponse({
+    category: { id: 4, name: 'Training Cohort' }, isConfigured: true,
+    fields: [{ id: 3, key: 'notes', label: 'Notes', type: 'text', visible: true, editable: true, required: false, sort_order: 27 }],
+  });
   return jsonResponse({ error: `unstubbed ${method} ${path}` }, 404);
 };
 
@@ -410,8 +470,38 @@ test('inline cell edit saves through the API', async () => {
   assert.ok(calls.some((c) => c.startsWith('PATCH /api/employees/')), 'the edit is persisted with a PATCH');
 });
 
+test('the CRM panel offers only the configured update columns', async () => {
+  const { createCrm } = await import('../public/js/views/crm.js');
+  const { state } = await import('../public/js/core.js');
+  state.crmKeys = ['leader_input_last_week', 'leader_input_this_week', 'opp_id',
+    'demand_number', 'block_status'];
+  const crm = createCrm({ getScope: () => ({ projectId: 1 }), onChanged() {} });
+  documentShim.body.replaceChildren(crm.el);
+  crm.showAssignment(1);
+  await new Promise((r) => setTimeout(r, 90));
+
+  const text = flatten(crm.el).join(' ');
+  // identity and placement are context, not inputs
+  assert.ok(text.includes('Worker 1'), 'the person is shown');
+  assert.ok(text.includes('Worker 1'), 'the person name is shown');
+  assert.ok(!text.includes('Designation'), 'the job title is not an update field');
+
+  const edited = ['input', 'select', 'textarea']
+    .flatMap((tag) => crm.el.querySelectorAll(tag))
+    .map((i) => i.dataset.fieldKey)
+    .filter(Boolean);
+  // the placement switcher is a read-only navigation control and carries no key
+  assert.deepEqual([...new Set(edited)].sort(), [...state.crmKeys].sort(),
+    'only the six configured columns are editable in the leader panel');
+  state.crmKeys = [];
+});
+
 test('CRM autosaves with explicit Saving -> Saved states', async () => {
   const { createCrm } = await import('../public/js/views/crm.js');
+  const { state } = await import('../public/js/core.js');
+  state.crmKeys = ['leader_input_last_week', 'leader_input_this_week', 'opp_id',
+    'demand_number', 'block_status', 'giga_project_name'];
+  if (!state.user) state.user = { id: 1, name: 'Priya Nair', isAdmin: false, capabilities: { 'employee.edit': true } };
   const crm = createCrm({ getScope: () => ({ projectId: 1 }), onChanged() {} });
   documentShim.body.replaceChildren(crm.el);
   crm.showAssignment(1);
@@ -421,11 +511,13 @@ test('CRM autosaves with explicit Saving -> Saved states', async () => {
   assert.ok(text.includes('Worker 1'), 'the CRM shows the selected person');
   assert.ok(text.includes('Update history'), 'history section is present');
 
-  const input = crm.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'training_status' || i.tagName === 'SELECT');
-  const nameInput = crm.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'name');
-  assert.ok(nameInput, 'name field is editable');
-  nameInput.value = 'Worker One Updated';
-  nameInput.dispatchEvent({ type: 'input', target: nameInput });
+  // the panel edits only the configured supervisor columns, so the autosave is
+  // exercised through one of those rather than the name
+  const editInput = crm.el.querySelectorAll('input, textarea')
+    .find((i) => i.dataset.fieldKey === 'leader_input_this_week');
+  assert.ok(editInput, 'a configured supervisor column is editable');
+  editInput.value = 'Client sign-off pending';
+  editInput.dispatchEvent({ type: 'input', target: editInput });
 
   const states = [];
   const observer = setInterval(() => {
@@ -438,18 +530,20 @@ test('CRM autosaves with explicit Saving -> Saved states', async () => {
   assert.ok(calls.some((c) => c.startsWith('PATCH /api/employees/')), 'autosave issued a PATCH');
   const finalText = flatten(crm.el).join(' ');
   assert.ok(/Saved|Saving/.test(finalText) || states.length > 0, 'a save indicator is shown');
-  void input;
 });
 
 test('CRM keeps values and reports "Not saved" when the network fails, then retries safely', async () => {
   const { createCrm } = await import('../public/js/views/crm.js');
   core.state.user = { id: 1, name: 'Priya Nair', isAdmin: false, capabilities: { 'employee.edit': true } };
+  core.state.crmKeys = ['leader_input_last_week', 'leader_input_this_week', 'opp_id',
+    'demand_number', 'block_status', 'giga_project_name'];
   const crm = createCrm({ getScope: () => ({ projectId: 1 }), onChanged() {} });
   documentShim.body.replaceChildren(crm.el);
   crm.showAssignment(1);
   await new Promise((r) => setTimeout(r, 80));
 
   const originalFetch = globalThis.fetch;
+  try {
   // simulate a dropped connection on the next PATCH only
   globalThis.fetch = async (url, opts) => {
     if ((opts?.method || 'GET') === 'PATCH') throw new TypeError('Failed to fetch');
@@ -459,13 +553,14 @@ test('CRM keeps values and reports "Not saved" when the network fails, then retr
   crm.showAssignment(1);
   await new Promise((r) => setTimeout(r, 150));
 
-  const nameInput = crm.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'name');
-  if (!nameInput) {
+  const findEditable = () => crm.el.querySelectorAll('input, textarea')
+    .find((i) => i.dataset.fieldKey === 'leader_input_this_week');
+  if (!findEditable()) {
     // form has not painted yet in the shim; wait and retry once
     await new Promise((r) => setTimeout(r, 250));
   }
-  const retryInput = crm.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'name');
-  assert.ok(retryInput, 'the CRM exposes the name field for editing');
+  const retryInput = findEditable();
+  assert.ok(retryInput, 'the CRM exposes a supervisor field for editing');
   retryInput.value = 'Offline Edit';
   retryInput.dispatchEvent({ type: 'input', target: retryInput });
   await new Promise((r) => setTimeout(r, 1400));
@@ -484,6 +579,11 @@ test('CRM keeps values and reports "Not saved" when the network fails, then retr
   const afterRetry = flatten(crm.el).join(' ');
   assert.ok(afterRetry.includes('Saved') || !afterRetry.includes('Not saved'), 'a successful retry reports Saved');
   assert.ok(calls.filter((c) => c.startsWith('PATCH')).length >= 1);
+  } finally {
+    // a failed assertion here used to leave the broken stub in place for the
+    // tests that follow, which is its own bug
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('the assistant opens from the Ask event and answers a question', async () => {
@@ -504,9 +604,10 @@ test('the assistant opens from the Ask event and answers a question', async () =
   // and a question round-trips through the API layer
   document.dispatchEvent({ type: 'rp:assistant' });
   const payload = JSON.stringify({
-    reply: '446 people in bench category "Bench" in Nexus Digital Transformation.',
+    reply: '125 people (Bench Category: Bench) in Giga One.',
     understood: true, kind: 'count', table: null, suggestions: [],
   });
+  const assistantFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     assert.match(String(url), /\/api\/agent\/ask/);
     // core.api() reads res.text() and parses it itself, so the body comes back
@@ -523,11 +624,400 @@ test('the assistant opens from the Ask event and answers a question', async () =
   const sendBtn = foot.children.find((c) => c.classList && c.classList.contains('btn-primary'));
   assert.ok(input, 'the composer is rendered');
   assert.ok(sendBtn, 'the send button is rendered');
-  input.value = 'how many on bench in nexus?';
+  input.value = 'how many on bench in Giga One?';
   sendBtn.click();
   await new Promise((r) => setTimeout(r, 60));
 
   const walk = (n) => (n.children || []).map((c) => (c.textContent || '') + walk(c)).join(' ');
   const text = walk(assistant.el);
-  assert.match(text, /446 people/, 'the answer is rendered in the panel');
+  assert.match(text, /125 people/, 'the answer is rendered in the panel');
+  globalThis.fetch = assistantFetch;
+});
+
+test('the filter bar is five dropdowns, and picking a value narrows the rows', async () => {
+  const { createFilterBar } = await import('../public/js/views/filterbar.js');
+  const seen = [];
+  const bar = createFilterBar({ onChange: (next) => seen.push(next) });
+  bar.setFacets([
+    { key: 'billing_status', label: 'Billing Status', total: 60, values: [{ value: 'Billable', count: 40 }, { value: 'Non-Billable', count: 20 }] },
+    { key: 'bench_category', label: 'Bench Category', total: 60, values: [{ value: 'Bench', count: 15 }] },
+    { key: 'bl_status', label: 'BL Status', total: 60, values: [{ value: 'BL-1', count: 60 }] },
+    { key: 'offsite_onsite', label: 'Offsite / Onsite', total: 60, values: [{ value: 'Onsite', count: 35 }] },
+    { key: 'giga_project_name', label: 'Giga Project Name', total: 10, values: [{ value: 'Giga One', count: 10 }] },
+    { key: 'capability', label: 'Capability', total: 60, values: [{ value: 'Tech', count: 60 }] },
+  ], 'Nexus');
+
+  const barButtons = bar.el.querySelectorAll('.facet-btn');
+  assert.equal(barButtons.length, 5, 'the bar shows the five dimensions, not a wall of chips');
+  // nothing is expanded on the page: no value is rendered until a dropdown opens
+  assert.equal(bar.el.querySelectorAll('.facet-option').length, 0);
+
+  // opening one lists its real values with counts
+  bar.openFor('bench_category');
+  const options = bar.menu.querySelectorAll('.facet-option');
+  assert.ok(options.length >= 2, 'All + the real values');
+
+  // the shim does not aggregate text from children, so walk the tree
+  const text = (node) => [node._text || '', ...node.children.map((c) => (c instanceof El ? text(c) : String(c._text ?? '')))].join(' ');
+
+  // the option count is the row count the table will show
+  assert.ok(text(bar.menu).includes('15'));
+
+  // choosing a value is reported as a filter and the button shows it
+  options[1].click();
+  assert.deepEqual(seen.at(-1), { bench_category: ['Bench'] });
+  // Regression: the menu used to stay open over the rows after a pick, so the
+  // filtered result was hidden behind its own dropdown.
+  assert.ok(bar.menu.classList.contains('hidden'), 'the menu closes when a value is chosen');
+  assert.equal(bar.menu.children.length, 0, 'the closed menu is emptied, not left floating');
+  assert.ok(text(bar.el).includes('Bench'), 'the button shows the chosen value');
+
+  bar.clearAll();
+  assert.deepEqual(seen.at(-1), {});
+});
+
+test('the Update panel shows the employee ID, the name and exactly the CRM columns', async () => {
+  const { createSubmitPanel } = await import('../public/js/views/submit.js');
+  const { state } = await import('../public/js/core.js');
+  state.crmKeys = ['leader_input_last_week', 'leader_input_this_week', 'opp_id',
+    'demand_number', 'block_status', 'giga_project_name'];
+  const panel = createSubmitPanel({ getScope: () => ({ projectId: 1 }), onSaved() {} });
+  documentShim.body.replaceChildren(panel.el);
+  await panel.show(1);
+  await new Promise((r) => setTimeout(r, 80));
+
+  const text = flatten(panel.el).join(' ');
+  assert.ok(text.includes('Worker 1'), 'the person name is shown');
+  assert.ok(text.includes('Worker 1'), 'the person is shown');
+  assert.ok(text.includes('Leader Input This Week'), 'a configured CRM column is rendered');
+  assert.ok(!text.includes('Email Address'), 'identity fields are not part of the update form');
+  assert.ok(!text.includes('Supplier'), 'the panel is not the whole record');
+
+  // only the configured columns produce an input
+  // the shim understands single tag selectors only, so query each tag
+  const keys = ['input', 'select', 'textarea']
+    .flatMap((tag) => panel.el.querySelectorAll(tag))
+    .map((i) => i.dataset.fieldKey).filter(Boolean);
+  assert.deepEqual([...new Set(keys)].sort(), [...state.crmKeys].sort(),
+    'exactly the configured columns are editable');
+  state.crmKeys = [];
+});
+
+test('clicking a person name opens the update form for that row', async () => {
+  const { createTable } = await import('../public/js/views/table.js');
+  let picked = null;
+  const t = createTable({ onSelect: (row) => { picked = row; }, onSaved() {} });
+  documentShim.body.replaceChildren(t.el);
+  t.el.parentElement = documentShim.body;
+  await t.setScope({ projectId: 1, subprojectId: 2, categoryId: 4 });
+  await new Promise((r) => setTimeout(r, 120));
+
+  const link = t.el.querySelectorAll('button').find((b) => b.classList.contains('emp-name-link'));
+  assert.ok(link, 'the name is rendered as a link into the updater');
+  link.click();
+  assert.ok(picked && picked.assignmentId, 'clicking the name selects that person');
+});
+
+test('Data Hub offers the import template and asks where new rows go', async () => {
+  core.state.user = { id: 1, name: 'Uploader', isAdmin: false, capabilities: { 'import.data': true } };
+  core.state.tree = [{
+    id: 1, code: 'NEXUS', name: 'Nexus Digital Transformation',
+    subprojects: [{ id: 2, name: 'Core Banking Migration', categories: [{ id: 4, name: 'Training Cohort' }] }],
+  }];
+  core.state.imports = [];
+
+  const { renderDataHub } = await import('../public/js/views/datahub.js');
+  const content = new El('div');
+  content.id = 'content';
+  documentShim.body.replaceChildren(content);
+  await renderDataHub(content, {});
+  await new Promise((r) => setTimeout(r, 60));
+
+  const text = flatten(content).join(' ');
+  assert.ok(text.includes('Import template'), 'the blank template with the 65 headers is downloadable from here');
+  assert.ok(text.includes('Where should new rows go?'), 'the placement picker is offered for files without a Project column');
+  assert.ok(text.includes('Upload a daily dataset'));
+
+  const selects = content.querySelectorAll('select');
+  assert.ok(selects.length >= 3, 'project / subproject / category are selectable');
+});
+
+test('typing in the update panel saves itself: no Submit, no export, straight to the database', async () => {
+  const { createSubmitPanel } = await import('../public/js/views/submit.js');
+  const { state } = await import('../public/js/core.js');
+  state.crmKeys = ['leader_input_this_week', 'opp_id', 'demand_number'];
+  state.user = {
+    id: 1, name: 'Priya Nair', isAdmin: false,
+    capabilities: { 'employee.edit': true, 'crm.use': true },
+    projects: [{ id: 1, can_edit: 1 }],
+  };
+  const saved = [];
+  const panel = createSubmitPanel({ getScope: () => ({ projectId: 1 }), onSaved: (rec) => saved.push(rec) });
+  documentShim.body.replaceChildren(panel.el);
+  await panel.show(1);
+  await new Promise((r) => setTimeout(r, 80));
+
+  const input = panel.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'demand_number');
+  assert.ok(input, 'the field is on the form');
+  const before = calls.filter((c) => c.includes('/submit')).length;
+
+  // a keystroke, then wait out the debounce - nothing else is clicked
+  input.value = 'DEM-AUTOSAVE';
+  input.dispatchEvent({ type: 'input', target: input });
+  await new Promise((r) => setTimeout(r, 1300));
+
+  const writes = calls.filter((c) => c.includes('/submit'));
+  assert.ok(writes.length > before, 'the change reached the server without pressing Submit');
+  assert.ok(saved.length > 0, 'the saved record came back to the panel');
+  // the footer reports the truth: no longer pending
+  const text = flatten(panel.el).join(' ');
+  assert.ok(/All changes saved/.test(text) || /Saving/.test(text), `footer state: ${text.slice(-200)}`);
+  // and no file/export traffic was involved
+  assert.ok(!calls.some((c) => c.includes('/export')), 'saving never touches an export');
+
+  // the button is an optional "save now", not the only path
+  assert.ok(flatten(panel.el).join(' ').includes('Save now'));
+  state.crmKeys = [];
+});
+
+test('Administration shows only Data model, CRM panel and Users & access', async () => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  core.state.user = { id: 1, name: 'Ananya Deshmukh', isAdmin: true, role: 'admin', capabilities: {} };
+  core.state.tree = [{ id: 1, name: 'Nexus Digital Transformation' }];
+  const content = documentShim.createElement('div');
+  await renderAdmin(content, { tab: 'access' });
+  await new Promise((r) => setTimeout(r, 60));
+
+  const text = flatten(content).join(' ');
+  for (const label of ['Data model', 'CRM panel', 'Users & access']) {
+    assert.ok(text.includes(label), `tab present: ${label}`);
+  }
+  for (const gone of ['Projects & hierarchy', 'Suppliers', 'Employee groups']) {
+    assert.ok(!text.includes(gone), `tab removed: ${gone}`);
+  }
+  assert.ok(text.includes('New user'), 'a new user can be created from here');
+  assert.ok(text.includes('Delete'), 'each user can be deleted');
+  assert.ok(text.includes('Test Leader'), 'the user list renders');
+});
+
+const button = (root, label) => {
+  const el = root.querySelectorAll('button').find((b) => flatten(b).join('') === label);
+  assert.ok(el, `button rendered: ${label}`);
+  return el;
+};
+const settleClicks = () => new Promise((resolve) => setImmediate(resolve));
+
+test('New user submits the form with its grants; Delete requires confirmation', async (t) => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  core.state.user = { id: 1, isAdmin: true };
+  core.state.tree = [{ id: 1, name: 'Nexus', subprojects: [] }];
+  const content = new El('div');
+  documentShim.body.replaceChildren(content);
+  const fetch = t.mock.method(globalThis, 'fetch'); // call through to the stub; inspect writes
+  await renderAdmin(content, { tab: 'access' });
+  button(content, 'New user').click();
+  const dialog = body.querySelector('.overlay');
+  assert.ok(dialog, 'the modal actually opens');
+  const input = (placeholder) => dialog.querySelectorAll('input').find((el) => el.attrs.placeholder === placeholder);
+  input('Full name').value = 'New supervisor';
+  input('name@company.com').value = 'new@example.test';
+  input('At least 8 characters').value = 'example123';
+  dialog.querySelector('select').value = 'supervisor';
+  const picker = dialog.querySelectorAll('select')[1];
+  assert.ok(flatten(picker).includes('Giga Apple'));
+  picker.value = 'g:Giga Apple'; picker.dispatchEvent({ type: 'change' });
+  const capability = dialog.querySelectorAll('label').find((l) => flatten(l).join('') === 'Edit employee records').querySelector('input');
+  capability.checked = true; capability.dispatchEvent({ type: 'change' });
+  button(dialog, 'Create user').click();
+  await settleClicks();
+  const post = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/users' && opts.method === 'POST');
+  const payload = JSON.parse(post.arguments[1].body);
+  assert.equal(payload.email, 'new@example.test');
+  assert.equal(payload.gigaProjectName, 'Giga Apple');
+  assert.equal(payload.projects, undefined);
+  assert.equal(payload.capabilities['employee.edit'], true);
+  assert.ok(!body.querySelector('.overlay'));
+
+  const deletes = () => fetch.mock.calls.filter(({ arguments: [url, opts] }) => url === '/api/users/7' && opts.method === 'DELETE');
+  button(content, 'Delete').click();
+  button(body.querySelector('.overlay'), 'Cancel').click();
+  await settleClicks();
+  assert.equal(deletes().length, 0);
+  button(content, 'Delete').click();
+  button(body.querySelector('.overlay'), 'Delete user').click();
+  await settleClicks();
+  assert.equal(deletes().length, 1);
+  assert.equal(fetch.mock.calls.at(-1).arguments[1].method, 'GET', 'refresh the user list after deletion');
+});
+
+test('Edit access can replace existing hierarchy grants with one workbook Giga project', async (t) => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  core.state.user = { id: 1, isAdmin: true };
+  core.state.tree = [{ id: 1, name: 'Nexus', subprojects: [] }];
+  const content = new El('div');
+  documentShim.body.replaceChildren(content);
+  const fetch = t.mock.method(globalThis, 'fetch');
+  await renderAdmin(content, { tab: 'access' });
+  button(content, 'Edit access').click();
+  const dialog = body.querySelector('.overlay');
+  const picker = dialog.querySelector('select');
+  assert.equal(picker.value, 'legacy');
+  picker.value = 'g:Giga Pear'; picker.dispatchEvent({ type: 'change' });
+  button(dialog, 'Save access').click();
+  await settleClicks();
+  const put = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/users/7/access' && opts.method === 'PUT');
+  const saved = JSON.parse(put.arguments[1].body);
+  assert.equal(saved.gigaProjectName, 'Giga Pear');
+  assert.equal(saved.projects, undefined);
+  assert.equal(saved.capabilities['employee.edit'], true);
+});
+
+test('Data model renders a populated category, opens the field form and saves the selected layout', async (t) => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  core.state.user = { isAdmin: true };
+  core.state.tree = [{ id: 1, name: 'Nexus', subprojects: [{ name: 'Core', categories: [{ id: 4, name: 'Training' }] }] }];
+  const content = new El('div');
+  documentShim.body.replaceChildren(content);
+  const fetch = t.mock.method(globalThis, 'fetch');
+  await renderAdmin(content, {});
+  const order = content.querySelectorAll('input').find((i) => i.attrs.type === 'number');
+  assert.equal(Number(order.value), 27, 'display the persisted order, not the catalogue index');
+  button(content, 'New field').click();
+  assert.ok(flatten(body.querySelector('.overlay')).includes('Field key'));
+  button(body.querySelector('.overlay'), 'Cancel').click();
+  order.value = 9;
+  order.dispatchEvent({ type: 'change' });
+  button(content, 'Save layout').click();
+  await settleClicks();
+  const write = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/categories/4/columns' && opts.method === 'PUT');
+  assert.equal(JSON.parse(write.arguments[1].body).fields[0].sort_order, 9);
+});
+
+test('Directory cards and row count switch together on filter, clear, failure and retry', async (t) => {
+  const { renderDirectory } = await import('../public/js/views/directory.js');
+  const all = { people: 12000, placements: 12000, gigaProjects: 3, hierarchyProjects: 6, pendingReviews: 8 };
+  const giga = { people: 966, placements: 967, gigaProjects: 1, hierarchyProjects: 2, pendingReviews: 1 };
+  core.state.user = { id: 1, isAdmin: true };
+  core.state.tree = [];
+  core.state.totals = { employees: 88888, assignments: 90000 }; // must not be shown or overwritten
+  const fallback = globalThis.fetch;
+  let failNext = false, holdNext = false, release;
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (!url.startsWith('/api/employees?')) return fallback(url, opts);
+    const params = new URL(url, 'http://localhost').searchParams;
+    const summary = params.has('f_giga_project_name[]') ? giga : all;
+    if (holdNext) { holdNext = false; await new Promise((resolve) => { release = resolve; }); } // ignores abort on purpose
+    if (failNext) { failNext = false; return jsonResponse({ error: 'Unavailable' }, 503); }
+    return jsonResponse({ total: summary.placements, summary: params.get('includeSummary') === '1' ? summary : null,
+      page: 1, pageSize: 25, totalPages: Math.ceil(summary.placements / 25), rows: workers.slice(0, 25), columns: [],
+      facets: [{ key: 'giga_project_name', label: 'Giga Project Name', allCount: 12000, values: [{ value: 'Giga One', count: 967 }] }],
+    });
+  });
+  const content = new El('div');
+  documentShim.body.replaceChildren(content);
+  const counts = () => [...content.querySelectorAll('.kpi-value'), content.querySelector('#row-count')].map((el) => flatten(el).join(''));
+  const selectGiga = () => {
+    content.querySelector('.facet-btn').click();
+    content.querySelectorAll('.facet-option').find((b) => flatten(b).includes('Giga One')).click();
+  };
+  const pending = ['—', '—', '—', '—', '—'];
+  const overall = ['12,000', '12,000', '3', '8', '12,000'];
+  const selected = ['966', '967', '1', '1', '967'];
+  renderDirectory(content, { setCrumbs() {} });
+  assert.deepEqual(counts(), pending);
+  await settleClicks();
+  assert.deepEqual(counts(), overall);
+  assert.ok(flatten(content.querySelector('.facet-btn-count')).includes('12,000'), 'All includes blank Giga names too');
+  holdNext = true;
+  selectGiga();
+  assert.deepEqual(counts(), pending, 'do not show global totals while filtering');
+  button(content, 'Clear 1').click();
+  await settleClicks();
+  release(); await settleClicks();
+  assert.deepEqual(counts(), overall, 'a late superseded response must not replace rows or cards');
+  selectGiga(); await settleClicks();
+  assert.deepEqual(counts(), selected);
+  assert.ok(flatten(content).includes('2 hierarchy projects in view'));
+  failNext = true;
+  content.querySelectorAll('button').find((b) => b.attrs['aria-label'] === 'Next page').click();
+  await settleClicks();
+  assert.deepEqual(counts(), pending, 'a failed load cannot advertise stale totals');
+  button(content, 'Try again').click(); await settleClicks();
+  assert.deepEqual(counts(), selected);
+  assert.deepEqual(core.state.totals, { employees: 88888, assignments: 90000 });
+});
+
+test('hands-free Ask: speech → scoped question → open CRM → dictate → review → confirm, without an automatic write', async (t) => {
+  const { createAssistant } = await import('../public/js/views/assistant.js');
+  let mic, listening = false, packInstalled = false;
+  const heard = [], asks = [], saves = [];
+  const define = (key, value) => { const old = Object.getOwnPropertyDescriptor(window, key); Object.defineProperty(window, key, { configurable: true, value }); t.after(() => old ? Object.defineProperty(window, key, old) : delete window[key]); };
+  class Recognition {
+    processLocally = false;
+    static available = async (o) => { assert.equal(o.processLocally, true); return packInstalled ? 'available' : 'downloadable'; };
+    static install = async () => (packInstalled = true);
+    start() { assert.equal(this.processLocally, true); assert.equal(listening, false); mic = this; listening = true; }
+    stop() { listening = false; this.onend(); }
+    abort() { listening = false; this.onend?.(); }
+  }
+  define('SpeechRecognition', Recognition); define('isSecureContext', true);
+  define('SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
+  define('speechSynthesis', { getVoices: () => [{ lang: 'en-US', localService: false }, { lang: 'en-US', localService: true }],
+    speak(u) { assert.ok(!listening && u.voice.localService); heard.push(u.text); u.onend(); }, cancel() {} });
+  core.state.user = { id: 7, isAdmin: false };
+  const name = 'Summer Project', form = { projectName: name, assignmentId: 73, name: 'Alex Rao', empCode: 'QA-123', rev: 4,
+    fields: [{ key: 'detail_comments', label: 'Detail Comments', editable: true, type: 'textarea', value: 'Original' },
+      { key: 'billing_start_date', label: 'Billing Start Date', editable: true, type: 'date', value: '' },
+      { key: 'demand_number', label: 'Demand Number', editable: false, type: 'text', value: '' }] };
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url === '/api/agent/projects') return jsonResponse({ projectNames: [name, 'Autumn Project'] });
+    const body = JSON.parse(opts.body);
+    if (url === '/api/agent/ask') {
+      asks.push(body);
+      if (!body.projectName && !body.message.includes(name)) return jsonResponse({ kind: 'choose_project', reply: 'Which project?' });
+      if (body.message === name) return jsonResponse({ kind: 'project', projectName: name, reply: 'Selected' });
+      if (body.message === 'Open CRM') return jsonResponse({ kind: 'crm_lookup', projectName: name, reply: 'Whose CRM record?' });
+      if (body.message === 'Open CRM for QA 123') return jsonResponse({ kind: 'crm', projectName: name, reply: 'CRM open for Alex', crm: form });
+      return jsonResponse({ kind: 'count', reply: '3 people on bench in Summer Project.', projectName: name });
+    }
+    assert.equal(url, '/api/employees/73/submit'); saves.push(body);
+    return jsonResponse({ record: { rev: 5, values: body.changes } });
+  });
+  const assistant = createAssistant(); documentShim.body.replaceChildren(assistant.el); assistant.open(); await settleClicks();
+  button(assistant.el, 'Start voice mode').click(); await settleClicks();
+  assert.ok(!packInstalled && !listening, 'install requires a separate explicit gesture');
+  button(assistant.el, 'Install English speech pack').click(); await settleClicks();
+  const say = async (text) => {
+    assert.ok(listening, 'next turn must not require clicking the mic');
+    const result = [{ transcript: text }]; result.isFinal = true;
+    mic.onresult({ results: [result] }); await settleClicks();
+  };
+  await say('How many on bench?'); await say(name);
+  assert.match(heard.at(-1), /3 people on bench/);
+  assert.deepEqual(asks.at(-1), { message: 'How many on bench?', projectName: name });
+  await say('Open CRM'); await say('QA 123'); assert.match(heard.at(-1), /CRM open for Alex/);
+  await say('Set Demand Number to forbidden'); assert.match(heard.at(-1), /read-only/);
+  await say('Set Detail Comments to Ready for interview');
+  assert.equal(assistant.el.querySelector('.assistant-crm').querySelector('textarea').value, 'Ready for interview');
+  await say('Confirm save'); assert.equal(saves.length, 0);
+  await say('Review changes'); assert.match(heard.at(-1), /Alex Rao.*QA-123.*Summer Project.*Detail Comments: Ready for interview/);
+  await say('Set Billing Start Date to May 12 2027'); await say('Confirm save'); assert.equal(saves.length, 0, 'changing a value invalidates the review');
+  await say('Review changes'); await say('Confirm save');
+  assert.deepEqual(saves, [{ crmProjectName: name, changes: { detail_comments: 'Ready for interview', billing_start_date: '2027-05-12' }, rev: 4, reason: 'Confirmed CRM form in assistant' }]);
+  await say('Set Detail Comments to Do not keep'); await say('Discard changes'); await say('Close CRM');
+  assert.ok(!assistant.el.querySelector('.assistant-crm').children.length); assert.equal(saves.length, 1);
+  const late = mic; assistant.toggle(false); assert.ok(!listening);
+  const result = [{ transcript: 'Confirm save' }]; result.isFinal = true;
+  late.onresult({ results: [result] }); await settleClicks(); assert.equal(saves.length, 1);
+});
+
+test('voice does not fall back to a cloud-only recognizer or require a mic for text', async () => {
+  const { createLocalVoice } = await import('../public/js/voice.js');
+  let started = false, state;
+  window.isSecureContext = true;
+  window.SpeechRecognition = class { start() { started = true; } };
+  try {
+    const voice = createLocalVoice({ onCommand: () => assert.fail('must not capture audio'), onState: (s) => { state = s; } });
+    await voice.toggle(); assert.equal(started, false); assert.equal(state.active, false); assert.match(state.text, /type instead/);
+  } finally { delete window.SpeechRecognition; delete window.isSecureContext; }
 });

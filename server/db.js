@@ -26,6 +26,9 @@ db.exec(`
   PRAGMA busy_timeout = 5000;
 `);
 
+// Match the whitespace removed by JS String.trim() at import/grant time,
+// including non-breaking spaces pasted into an Excel cell.
+const GIGA_NAME = 'trim(av.value, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))';
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,6 +239,23 @@ CREATE TABLE IF NOT EXISTS user_projects (
   PRIMARY KEY (user_id, project_id)
 );
 
+-- No grant row = existing hierarchy-based account. A grant row with a NULL
+-- name = explicitly revoked; it must never fall back to hierarchy access.
+CREATE TABLE IF NOT EXISTS user_giga_access (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  project_name TEXT CHECK (project_name IS NULL OR length(project_name) > 0)
+);
+
+-- A live view of the workbook field, not a copy of assignments or a catalogue
+-- to maintain. An import or an authorized reclassification takes effect at once.
+CREATE VIEW IF NOT EXISTS giga_assignments AS
+  SELECT a.id AS assignment_id, a.employee_id, a.project_id, a.subproject_id, a.category_id,
+         ${GIGA_NAME} AS project_name
+    FROM assignment_values av JOIN fields f ON f.id = av.field_id
+    JOIN assignments a ON a.id = av.assignment_id JOIN employees e ON e.id = a.employee_id
+   WHERE f.key = 'giga_project_name' AND a.active = 1 AND e.active = 1
+     AND ${GIGA_NAME} <> '';
+
 CREATE TABLE IF NOT EXISTS user_subprojects (
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   subproject_id INTEGER NOT NULL REFERENCES subprojects(id) ON DELETE CASCADE,
@@ -280,6 +300,16 @@ CREATE TABLE IF NOT EXISTS import_jobs (
   user_id     INTEGER REFERENCES users(id)
 );
 
+-- Small key/value store for platform settings (e.g. which columns the CRM
+-- panel shows). Kept in the database so the choice travels with the data
+-- rather than living in code.
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_by INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS imports (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   filename    TEXT NOT NULL,
@@ -305,6 +335,9 @@ function migrate() {
   add('category_fields', 'submit_field', 'submit_field INTEGER NOT NULL DEFAULT 0');
   add('fields', 'group_name', 'group_name TEXT');
   add('fields', 'imported', 'imported INTEGER NOT NULL DEFAULT 0');
+  // New filterable/submit fields must reach categories that already exist, not
+  // just the ones seeded after this release, so the column is added before any
+  // category layout is read.
   add('employees', 'name_source', "name_source TEXT DEFAULT 'manual'");
   add('employees', 'first_name', 'first_name TEXT');
   add('employees', 'last_name', 'last_name TEXT');
@@ -316,9 +349,14 @@ function migrate() {
   // Optimistic-concurrency token. A timestamp is only second-precise, so two
   // saves inside the same second would compare equal and silently clobber.
   add('assignments', 'rev', 'rev INTEGER NOT NULL DEFAULT 1');
+  // Only populated when unlinking a deleted account; no table rebuild or data reset.
+  add('assignments', 'archived_updater_name', 'archived_updater_name TEXT');
   // value lookups by field are the hot path for filters
   db.exec('CREATE INDEX IF NOT EXISTS idx_av_field_value ON assignment_values(field_id, value)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_assign_proj ON assignments(project_id, category_id, active)');
+  // Covers the facet grouping, so SQLite can answer a filter dropdown straight
+  // from the index without touching assignment_values rows or joining back.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_av_field_value_key ON assignment_values(field_id, value, assignment_id)');
 }
 migrate();
 

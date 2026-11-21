@@ -12,12 +12,13 @@
  */
 const { q } = require('./db');
 const schema = require('./schema');
+const { assignmentScope } = require('./access');
 const emp = require('./employees');
 const { record } = require('./audit');
 
 function raiseProposal(user, proposal, message) {
   const fields = schema.listFields();
-  const before = {};
+  const before = { giga_project_name: proposal.projectName }; // reclassification also makes the proposal stale
   const after = {};
   for (const key of Object.keys(proposal.changes)) {
     const f = fields.find((x) => x.key === key);
@@ -63,10 +64,21 @@ function loadProposal(id) {
   };
 }
 
-function listProposals(status) {
-  const rows = status
-    ? q.all('SELECT id FROM agent_actions WHERE status = ? ORDER BY id DESC LIMIT 100', status)
-    : q.all('SELECT id FROM agent_actions ORDER BY id DESC LIMIT 100');
+function proposalScope(user, name) {
+  const original = "json_extract(before_json, '$.giga_project_name')";
+  const live = '(SELECT g.project_name FROM giga_assignments g WHERE g.assignment_id = agent_actions.assignment_id)';
+  if (user.isAdmin) return name ? { sql: `COALESCE(${original}, ${live}) = ?`, args: [name] } : { sql: '1', args: [] };
+  const acl = assignmentScope(user);
+  // A reassigned employee must not carry a prior project's proposal into the
+  // new supervisor's queue. Legacy proposals have no project snapshot.
+  const sql = `assignment_id IN (SELECT a.id FROM assignments a WHERE ${acl.sql}) AND (${original} IS NULL OR ${original} = ${live})`;
+  return { sql: sql + (name ? ` AND ${live} = ?` : ''), args: name ? [...acl.args, name] : acl.args };
+}
+
+function listProposals(user, status, name) {
+  const { sql, args } = proposalScope(user, name);
+  const rows = q.all(`SELECT id FROM agent_actions WHERE ${sql} ${status ? 'AND status = ?' : ''} ORDER BY id DESC LIMIT 100`,
+    ...args, ...(status ? [status] : []));
   return rows.map((r) => loadProposal(r.id));
 }
 
@@ -75,6 +87,10 @@ function currentValues(assignmentId, keys) {
   const fields = schema.listFields();
   const out = {};
   for (const key of keys) {
+    if (key === 'giga_project_name') {
+      out[key] = q.get('SELECT project_name FROM giga_assignments WHERE assignment_id = ?', assignmentId)?.project_name ?? null;
+      continue;
+    }
     const f = fields.find((x) => x.key === key);
     if (!f) continue;
     const row = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', assignmentId, f.id);
@@ -90,7 +106,7 @@ function approve(actor, id, note) {
     throw Object.assign(new Error(`This proposal is already ${proposal.status}.`), { status: 409, code: 'NOT_PENDING' });
   }
 
-  const keys = Object.keys(proposal.after);
+  const keys = Object.keys(proposal.before);
   const now = currentValues(proposal.assignmentId, keys);
   const drift = keys.filter((k) => String(now[k] === undefined ? null : now[k]) !== String(proposal.before[k] === undefined ? null : proposal.before[k]));
 
@@ -142,8 +158,9 @@ function reject(actor, id, note) {
   return loadProposal(id);
 }
 
-function pendingCount() {
-  return Number(q.get("SELECT COUNT(*) c FROM agent_actions WHERE status = 'pending'").c);
+function pendingCount(user, name) {
+  const { sql, args } = proposalScope(user, name);
+  return Number(q.get(`SELECT COUNT(*) c FROM agent_actions WHERE status = 'pending' AND ${sql}`, ...args).c);
 }
 
 module.exports = { raiseProposal, loadProposal, listProposals, approve, reject, pendingCount };

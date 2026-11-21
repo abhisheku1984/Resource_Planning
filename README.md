@@ -10,17 +10,32 @@ import/export only, supervisors update records in the app.
 > compiled and there are no native modules. `package.json` pulls two pure-JS
 > packages (Express and ExcelJS).
 
+For a **new checkout** of the version on PR #3:
+
 ```bash
-git clone https://github.com/abhisheku1984/Resource_Planning.git
+git clone --branch arena/558e92f0-resource-planning https://github.com/abhisheku1984/Resource_Planning.git
 cd Resource_Planning
-git checkout arena/bd816d6f-resource-planning
-npm install
-npm run demo      # builds the 12,000-employee demo database (about 10 seconds)
+npm ci
 npm start         # http://localhost:4000
 ```
 
-`npm run demo` wipes `data/` and regenerates everything, so re-run it any time you
-want a clean dataset. `npm run demo -- --rows 500` makes a smaller one.
+To **update an existing installation on Windows**, stop the running server with
+**Ctrl+C**, open PowerShell in the existing `Resource_Planning` folder and run:
+
+```powershell
+git fetch origin
+git switch arena/558e92f0-resource-planning
+git pull --ff-only origin arena/558e92f0-resource-planning
+git log -1 --oneline
+npm.cmd ci
+npm.cmd start
+```
+
+Open <http://localhost:4000> and press **Ctrl+Shift+R**. Start in the **same
+folder** as before to use the same `data/resource_planning.db`. The server
+updates the schema on startup; **do not run `npm run demo` or `npm run seed`
+as part of an update**. Those commands replace data. The large demo is optional
+and intended only for disposable installations.
 
 ### Demo logins
 
@@ -35,43 +50,96 @@ want a clean dataset. `npm run demo -- --rows 500` makes a smaller one.
 | Read-only reviewer | `kavita.rao@resourceplanning.io` | `Super@12345` |
 | HR uploader | `hr.upload@resourceplanning.io` | `Hr@1234567` |
 
-Windows: `start-windows.bat` does the install, demo build and start in one step.
+Windows: after pulling the code, `start-windows.bat` can install missing dependencies and start the app. Use an **Administrator** login for Administration.
+
+### Employee Directory totals
+
+The cards above **Employee records** describe the current selection, across **all
+pages**. They update when you choose or clear a Giga project, combine filters,
+search, or change the hierarchy project. Clearing filters shows your authorized
+records, not necessarily the whole database.
+
+* **People in scope** counts distinct employees. **Placements** is the exact
+  Employee records count. One person with two matching placements counts as one
+  person and two records.
+* **Giga projects** counts distinct, nonblank workbook project names. The line
+  beneath it counts the hierarchy projects containing matching rows. One Giga
+  project can span several hierarchy projects.
+* **Pending reviews** counts open duplicate reviews involving matching people,
+  once per review. Only administrators can see the count.
+
+The Directory requests `GET /api/employees?includeSummary=1` with its usual query
+parameters. The summary and table share the same authorization and filter conditions;
+no second request, workbook or stored copy of the totals is needed.
+
+### Checking the five filter dropdowns
+
+With the server running in one window, open a second one:
+
+```bash
+npm run check:filters
+```
+
+It signs in as the administrator, loads the Employee Directory the same way the
+browser does, and prints the values plus counts behind **Billing Status, Bench
+Category, BL Status, Offsite/Onsite** and **Giga Project Name**. Then it selects
+one value in each and confirms the row total becomes exactly the number the
+dropdown advertised. It also checks the Directory card totals in the same response.
+Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere.
 
 ### Tests
 
 ```bash
-npm test          # 31 integration + UI smoke tests
+npm test          # integration + UI smoke tests
 ```
 
-## The assistant (in-app, offline, propose-only)
+## Ask: answers by workbook project name
 
-Press **Ctrl+K** or the **Ask** button in the top bar. It is not a chatbot
-connected to a language model — it is a rules-based parser inside this app.
+Open **Ask** (or **Ctrl+K**). Say or select a **Giga Project Name** from your
+workbook. This is not the hierarchy project or its code. If several names are
+available and you don't give one, Ask requests a name instead of returning a
+database-wide total. Follow-ups keep the selected name until you change it;
+permissions and live workbook membership are checked on every request.
 
-- **It never touches the internet.** No API key, no outbound call. That keeps the
-  "zero network traffic" promise in `SECURITY.md` true.
-- **It never invents numbers.** Every count is a real SQL query, scoped to the
-  projects the asking user may see. Ask about another project and it says it has
-  no access instead of quietly answering for a different one.
-- **It never writes.** A change request becomes a *proposal* holding the exact
-  before/after values. Nothing reaches the master data until an administrator
-  clicks **Approve & save**.
-
-| You type | What happens |
+| Example (use your actual workbook name and employee ID) | Result |
 |---|---|
-| `how many people are on bench in NEXUS?` | Count, plus a breakdown table |
-| `how many are hard block in nexus` | Count by block status |
-| `who is on bench in NEXUS?` | First 25 matching people |
-| `set EMP-10001 to hard block` | A proposal awaiting approval |
-| `mark EMP-10001 as bench` | A proposal awaiting approval |
+| `How many are on bench in Giga One?` | Distinct people, plus the bench breakdown for **Giga One only** |
+| `How many are hard block?` | Count in the selected Giga project |
+| `Who is on bench?` | Up to 25 matching people in that project |
+| `Break down billing status` | People by billing status in that project |
+| `Set EMP-10001 to hard block` | If the placement matches, a proposal for administrator approval |
+| `Open CRM for EMP-10001` | The employee’s scoped CRM form inside Ask |
 
-Anything outside those patterns gets "I did not understand that" plus examples —
-never a guess.
+Counts, lists and breakdowns use live SQLite data, not an AI provider. Unknown
+names or unsupported filters do not produce estimates. A person with multiple
+matching placements counts once per bucket; distinct buckets can overlap.
+
+### Voice mode and CRM entry
+
+1. Open the app directly on **localhost or HTTPS** in a desktop browser that
+   supports **on-device** English (US) speech recognition. Click **Start voice
+   mode** and allow the microphone. If offered, **Install English speech pack**
+   is a separate, optional browser download. No audio is uploaded. For spoken
+   replies, install a local English system voice as well. If the app is embedded
+   and permission is blocked, open it in a standalone tab. Typed commands always work.
+2. Ask **“How many are on bench in Giga One?”**. The mic pauses during replies
+   and listens for the next turn automatically. Say **“Open CRM”**, then an
+   employee ID or exact full name. For multiple matches, say **“placement”** and
+   the offered number. No CRM access means no form; read-only users cannot edit.
+3. Say **“List fields”**, **“Read Detail Comments”**, or **“Set Detail Comments
+   to ready for interview”**. Use any editable field on that CRM form, including
+   the BC–BS supervisor fields. For dates, say e.g. **“May 12 2027”**.
+4. Say **“Review changes”** to hear the employee, project and values. Then say
+   **“Confirm save”** or **“Discard changes”**. Only confirmation writes the
+   form, through the existing audited supervisor-save path. A changed record
+   must be reopened; there is no automatic overwrite or voice autosave.
+5. Say **“Close CRM”** to return to questions, or **“Stop listening”** to turn
+   off the microphone. Closing Ask, hiding the tab or signing out also stops it.
 
 ### The approval step
 
 1. A supervisor asks for a change; it is stored in `agent_actions` as pending.
-2. An administrator sees it pinned at the top of the assistant panel, old value
+2. An administrator selects the Giga project and sees its proposals at the top of Ask, old value
    struck through, new value beside it.
 3. If the record still holds the old value, **Approve** writes it and records
    both the approver and the requester in the audit trail.
@@ -103,15 +171,25 @@ employees ──< assignments >── projects / subprojects / categories / supp
   `supplier`, `remarks`) map onto real columns. Every other field stores its
   value in `assignment_values`, so administrators can invent columns at runtime.
 
-### Configurable hierarchy
+### The project tree
 
-Projects, subprojects and categories are ordinary records created in
-*Administration → Projects & hierarchy*. Because categories hang off
-subprojects (not projects), two projects can have completely different
-structures, and two subprojects of the same project can have different category
-sets — see the seeded Nexus vs. Atlas trees.
+Projects, subprojects and categories are ordinary records, and categories hang
+off subprojects (not projects), so two projects can have completely different
+structures and two subprojects of the same project can have different category
+sets — see the seeded Nexus vs. Atlas trees. The tree is **read-only in the
+UI**: there is deliberately no hierarchy editor, no supplier register and no
+employee-group register, because the workbook has no such tabs and a second
+place to maintain them is a second place to get out of date. (The API still
+accepts hierarchy writes; only the screens were removed.)
 
 ### Dynamic tables
+
+As an administrator, open **Administration → Data model** and choose a
+**Category**. **New field** adds a definition to the shared catalogue. To use a
+new field in this category, check **Visible**, choose its **Editable** / **Required**
+settings and **Order**, then click **Save layout**. Open the same category in
+Project Workspace to see the result. A layout change does not remove its filter
+or supervisor-update settings.
 
 `GET /api/employees?categoryId=…` returns both `rows` and the `columns` that
 apply to that category. The client renders whatever it is given, so a category
@@ -119,12 +197,38 @@ configured with Training Status + Joining Date + Completion Status looks nothing
 like one configured with Billing Status + Allocation Status + Effective Date.
 Hidden columns are never serialised, so they cannot leak through the API.
 
-### Embedded CRM
+### The Update panel (supervisor CRM)
 
-The panel is part of the workspace layout, not a separate screen. It supports
-search, add, edit, placement switching and per-field history. Autosave is
-debounced (900 ms) and reports `Unsaved → Saving… → Saved`; on failure it shows
-`Not saved` with an explicit retry, and the pending values stay in the form.
+Clicking a person's **name** opens **Update**: the name, then the 17 workbook
+columns **BC–BS** and nothing else — Leader Input Last Week through Demand
+Number. There is no Employee ID field (the row identifies the person), no
+contact details, no placement, no remarks:
+
+| | | |
+|---|---|---|
+| Leader Input Last Week | Leader Input This Week | Leader Input PID Account Awaited Name |
+| Billing Start Date | Billing Ended Date | PID Awaited Account |
+| PID Awaited Blocked Date | Opp ID | Account Owner |
+| Allocation Closure ETA | Role of Month | Role of Responses |
+| Detail Comments | Hard Block / Soft Block | Account Name |
+| Interviewed By | Demand Number | |
+
+**Every change saves itself.** Type, and the field goes *Saving…* → *Saved*;
+the value is already in the database, audited with the leader's name and time.
+The whole set of changed fields goes in **one transaction**, so a half-typed
+screen never lands half-applied. **Save now** is an optional button, not the
+only path — there is no "submit then export" step and nothing is held in the
+browser:
+
+* the debounce is ~0.9s, and leaving a field saves it immediately;
+* a dropped connection keeps the text and retries;
+* if someone else saved the same record first, the guard returns `409`, your
+  text is kept, the newer revision is loaded and yours is re-saved on top;
+* changing person, closing the panel, navigating away or closing the browser
+  waits for the in-flight save first (the browser asks before discarding).
+
+`crmKeys` in `server/fielddefs.js` is the single source for that list, and it
+drives the panel order and the export order.
 
 ### Duplicate prevention
 
@@ -133,10 +237,30 @@ A hard match (ID/email/phone with a *different* employee ID) is queued in
 `duplicate_reviews` for an administrator instead of being written silently. Name
 matches alone are always queued — never auto-merged.
 
+### Where the data lives
+
+Everything lives in **one SQLite file**: `data/resource_planning.db`. Edits are
+written there the moment they are made and are visible to every user straight
+away. Nothing is push-synced to Google Drive, OneDrive, Dropbox, email or any
+other service, and the app makes **no outbound network calls** — no cloud
+account, no API key, no background job. There is no autosave-to-file loop: a
+workbook only exists when someone asks for one (below), and it is generated from
+the database at that moment.
+
+Excel is therefore **import and export only**: a way in, and a snapshot out. It
+is never the store, and two people never share an `.xlsx` to pass changes
+around.
+
 ### Excel synchronisation
 
 * `GET /api/export?projectId=&subprojectId=&categoryId=&supplierId=` streams a
   workbook with `Employees` and `Summary` sheets built from the live database.
+  The supervisor columns come first, in the same order the Update panel shows
+  them; beside each one the report adds **`<column> — Updated By`** and
+  **`<column> — Updated At`**, plus a single **Last Supervisor Update** line, so
+  an administrator can see who changed what and when without asking. The
+  importer recognises and skips those derived columns, so the report can be
+  re-uploaded safely.
 * `POST /api/import` upserts a daily dataset **by employee ID** inside one
   transaction. Fields a supervisor edited by hand are recorded in
   `field_overrides`; the import reports them as `protected` and leaves them
@@ -144,19 +268,87 @@ matches alone are always queued — never auto-merged.
 * A `dryRun` flag validates a workbook and returns per-row errors without
   writing anything, which is what the Data Hub preview uses.
 
-### Access control
+#### Uploading your own workbook (the 65-column HR file)
 
-* **Roles** — `admin` (everything) and `supervisor`.
-* **Capabilities** — `project.view`, `employee.edit`, `employee.create`,
-  `crm.use`, `export.data`, `import.data`, `schema.manage`, `users.manage`,
-  `audit.view`.
-* **Project grants** — each supervisor has per-project `can_edit`, `can_export`
-  and `can_crm` flags.
+Your master file has no **Project / Subproject / Category** column — a
+spreadsheet row has nowhere to say which part of the business the person sits
+in. So the portal asks once, and files the rows there:
 
-Every read and write re-checks the grant on the server
-(`assertProjectAccess`, `visibleProjectIds`). The UI hides controls as a
-courtesy; the API is the enforcement point, and the tests assert 403s for each
-verb on foreign projects.
+1. Sign in as an importer (`admin`, or a supervisor with `import.data` — the
+   demo user is `hr.upload@resourceplanning.io` / `Hr@1234567`).
+2. **Data Hub → Import template** downloads `resource-planning-import-template.xlsx`:
+   your own 65 headers, in your own order, with `Project, Subproject, Category`
+   prepended. A **How to use** sheet and one example row are included — delete
+   the example row. (If you would rather keep your file untouched, skip this
+   step: any `.xlsx` with your 65 headers is accepted.)
+3. **Data Hub → Where should new rows go?** pick the project, subproject and
+   category. This is only needed because your file has no placement columns;
+   rows that *do* carry Project / Subproject / Category still use their own.
+4. Drop the file on **Upload a daily dataset**. A **preview** runs in a
+   transaction and is rolled back, so nothing is written: check *New employees*,
+   *Updated placements*, *Protected values* and any *Rows needing attention*.
+5. Press **Apply import**. The workbook is upserted by **Employee ID**.
+
+Header matching is forgiving: case and punctuation are ignored, and the portal
+understands the spellings your file actually uses — `unite manual`,
+`billing end date`, `PID awaited account + blocked date` and
+`Hardblock/Softblock` all land on their own columns. The three headers your
+workbook repeats (`account`, `billing status`, `allocation percentage`) are both
+kept: the second copy is stored under `… (2nd column)`.
+
+`GET /api/import/template` returns the same blank workbook
+(requires `import.data`).
+
+### Assign or change one Giga project
+
+1. Sign in as an **Administrator**. Open **Administration → Users & access → New user**.
+2. Enter the person's name, email and temporary password. Leave **Role** as
+   **Supervisor**. In **Giga Project Name**, choose one name from the workbook
+   rows already imported into the app. If there are no names, import a workbook
+   with this column filled in; there is no separate project list to maintain.
+3. A selected project gives read access. Check **Edit employee records** for a
+   leader who updates the BC–BS fields. Add CRM, Excel export, employee creation
+   or audit permissions only if needed. Click **Create user**. Account and access
+   are saved together: an invalid project leaves no partial account behind.
+4. To change it later, find that person's row and click **Edit access**. The
+   picker shows the current selection. Choose a different name and **Save access**,
+   or choose **No project access** to keep the login and revoke workforce access.
+   The change applies on the next request, including in existing sessions. Refresh
+   an already open page to reload its navigation and rows; no new sign-in is needed.
+
+**Example:** if XYZ has *Giga North*, XYZ sees only assignments whose **Giga
+Project Name** is *Giga North*, even when *Giga South* or blank rows share the
+same hierarchy project, subproject and category. A matching assignment in another
+placement is still in scope. Clearing Directory filters cannot broaden the grant.
+Names are matched exactly after trimming outside whitespace. A rename or removal
+of the last matching workbook value gives no rows, **not** access to another Giga.
+A supervisor cannot change the Giga name on a row to move it out of scope.
+
+**Upgrading:** existing hierarchy-based accounts keep their grants until you
+choose a Giga project (or **No project access**) in their editor. That choice
+**replaces**, rather than adds to, their old grants. Administrators retain full
+access. Master workbook import and global configuration are not available to
+Giga-scoped users. The leader update form is unchanged: no Giga field is added.
+
+**API:** admin-only `GET /api/users` includes `gigaProjectNames` (all distinct,
+nonblank live names) and each supervisor's `gigaAccess`. Send `gigaProjectName`
+plus `capabilities` with `POST /api/users` or `PUT /api/users/:id/access`.
+For example, given an imported name `Giga North`:
+
+```json
+{"gigaProjectName":"Giga North","capabilities":{"employee.edit":true,"export.data":false}}
+```
+
+Send `{"gigaProjectName":null}` to revoke. The server validates the name and
+uses a single grant per user (`user_giga_access`) and a live SQL view over the
+existing field (`giga_assignments`); no workforce data is copied. Reads, edits,
+counts, CRM, assistant responses, audit and in-app Excel exports are restricted
+server-side, before filtering or pagination. New assignments, when permitted,
+inherit the user's Giga name.
+
+**Delete** beside a user's name still asks for confirmation. Deletion revokes
+sessions, grants and capabilities; employees, edits, import history, approvals,
+and past attribution remain. You cannot delete yourself or the last active admin.
 
 ### Concurrency and audit
 
@@ -186,10 +378,12 @@ verb on foreign projects.
 | `GET`/`PUT` | `/api/categories/:id/columns` | Read / write the column layout |
 | `GET`/`POST`/`PATCH` | `/api/projects`, `/api/subprojects`, `/api/categories` | Hierarchy |
 | `GET`/`POST`/`PATCH` | `/api/suppliers`, `/api/groups`, `/api/fields`, `/api/users` | Configuration |
-| `PUT` | `/api/users/:id/access` | Project grants + capabilities |
+| `PUT` | `/api/users/:id/access` | Replace or revoke Giga project access; update capabilities |
+| `DELETE` | `/api/users/:id` | Remove an account (not yourself, not the last admin) |
 | `GET` | `/api/duplicates`, `POST /api/duplicates/:id/resolve` | Review queue |
 | `GET` | `/api/export` | Excel snapshot (scope-aware) |
-| `POST` | `/api/import` | Daily dataset upsert (dry-run supported) |
+| `POST` | `/api/import` | Daily dataset upsert (dry-run supported, optional `projectId`/`subprojectId`/`categoryId` placement) |
+| `GET` | `/api/import/template` | Blank workbook: your 65 headers + the 3 placement columns |
 | `GET` | `/api/audit` | Activity feed scoped by project access |
 
 Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticated,
@@ -199,20 +393,21 @@ Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticate
 
 ## Tests
 
-`npm test` runs both suites against a temporary database:
+`npm test` runs both suites without modifying your application database:
 
-* `tests/api.test.js` — 17 integration tests covering all twelve required
+* `tests/api.test.js` — HTTP integration tests against a temporary database, covering all twelve required
   scenarios (shared project with six supervisors, multi-project supervisor,
   differing category columns, concurrent edits with conflict detection, CRM
   autosave propagation, duplicate-free updates, creation and validation,
   exports containing fresh data, imports preserving supervisor edits, and
   blocked cross-project access), plus read-only enforcement, admin-only
-  endpoints, layout round-trips and concurrent writes.
-* `tests/ui.smoke.mjs` — 7 tests that render the views against a minimal DOM shim
+  endpoints, layout round-trips, atomic user creation and deletion with work history.
+* `tests/ui.smoke.mjs` — tests that render and interact with the views against a minimal DOM shim
   and a stubbed API, catching import errors, render crashes and broken
   autosave/table wiring without needing a browser. Includes an offline test that
   drops the connection mid-save and asserts the panel reports `Not saved`,
-  keeps the typed value, and succeeds on explicit retry.
+  keeps the typed value, and succeeds on explicit retry. Administration tests open
+  the user and field forms, confirm/cancel deletion, and submit a category layout.
 
 ## Project layout
 

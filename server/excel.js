@@ -3,7 +3,10 @@ const ExcelJS = require('exceljs');
 const { q, tx } = require('./db');
 const { record } = require('./audit');
 const schema = require('./schema');
+const fielddefs = require('./fielddefs');
 const emp = require('./employees');
+const { prepareEmployeeQuery } = require('./query');
+const { denied } = require('./access');
 
 const BASE_HEADERS = [
   { key: 'project.code', label: 'Project Code', width: 14 },
@@ -27,30 +30,32 @@ const BASE_HEADERS = [
 /** A flat, ordered row set for every employee assignment the user may export. */
 function collectRows(user, scope = {}) {
   const fields = schema.listFields().filter((f) => !BASE_HEADERS.some((h) => h.key === f.key));
+  // the CRM columns first after the identity block, in the order the supervisor
+  // sees them, so the administrator reads the same layout they filled in
+  const crmKeys = schema.crmKeys();
+  const crmFields = crmKeys.map((k) => fields.find((f) => f.key === k)).filter(Boolean);
+  const otherFields = fields.filter((f) => !crmKeys.includes(f.key));
   const headers = [
     ...BASE_HEADERS,
-    ...fields.map((f) => ({ key: f.key, label: f.label, width: f.type === 'textarea' ? 40 : 18 })),
+    ...crmFields.map((f) => ({ key: f.key, label: f.label, width: f.type === 'textarea' ? 40 : 18 })),
+    ...otherFields.map((f) => ({ key: f.key, label: f.label, width: f.type === 'textarea' ? 40 : 18 })),
   ];
-
-  const allowedProjects = user.isAdmin ? q.all('SELECT id FROM projects').map((r) => r.id) : user.projects.map((p) => p.id);
-  const where = ['a.active = 1', 'e.active = 1'];
-  const args = [];
-  if (scope.projectId) { where.push('a.project_id = ?'); args.push(Number(scope.projectId)); }
-  else if (!user.isAdmin) {
-    where.push(`a.project_id IN (${allowedProjects.map(() => '?').join(',') || 'NULL'})`);
-    args.push(...allowedProjects);
+  // per-field change stamps, written beside the CRM value they describe
+  const extraHeaders = [];
+  for (const f of crmFields) {
+    extraHeaders.push({ key: `${f.key}__updated_by`, label: `${f.label} — Updated By`, width: 20 });
+    extraHeaders.push({ key: `${f.key}__updated_at`, label: `${f.label} — Updated At`, width: 20 });
   }
-  if (scope.subprojectId) { where.push('a.subproject_id = ?'); args.push(Number(scope.subprojectId)); }
-  if (scope.categoryId) { where.push('a.category_id = ?'); args.push(Number(scope.categoryId)); }
-  if (scope.supplierId) { where.push('a.supplier_id = ?'); args.push(Number(scope.supplierId)); }
+  extraHeaders.push({ key: 'last_supervisor_update', label: 'Last Supervisor Update', width: 46 });
 
+  const { narrow: { where, args } } = prepareEmployeeQuery(user, scope, 'can_export');
   const rows = q.all(
     `SELECT a.id, a.status, a.remarks, a.updated_at, a.supplier_id,
             e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone,
             p.code AS pcode, p.name AS pname,
             s.code AS scode, s.name AS sname,
             c.code AS ccode, c.name AS cname,
-            sup.name AS supplier, u.name AS updated_by
+            sup.name AS supplier, COALESCE(u.name, a.archived_updater_name) AS updated_by
        FROM assignments a
        JOIN employees e ON e.id = a.employee_id
        JOIN projects p ON p.id = a.project_id
@@ -58,12 +63,12 @@ function collectRows(user, scope = {}) {
        JOIN categories c ON c.id = a.category_id
        LEFT JOIN suppliers sup ON sup.id = a.supplier_id
        LEFT JOIN users u ON u.id = a.updated_by
-      WHERE ${where.join(' AND ')}
+      WHERE ${where}
       ORDER BY p.name, s.name, c.name, e.name`,
     ...args
   );
 
-  if (!rows.length) return { headers, rows: [], fields };
+  if (!rows.length) return { headers, rows: [], fields, extraHeaders };
 
   const ids = rows.map((r) => r.id);
   const values = new Map();
@@ -80,6 +85,25 @@ function collectRows(user, scope = {}) {
     )) {
       if (!values.has(v.assignment_id)) values.set(v.assignment_id, {});
       values.get(v.assignment_id)[v.key] = v.value;
+    }
+  }
+
+  // Who last touched a supervisor-editable value on each row, and when: the
+  // administrator's report has to show the update, not only the new text.
+  const lastEdits = new Map();
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const chunk = ids.slice(i, i + BATCH);
+    for (const e of q.all(
+      `SELECT al.entity_id AS assignment_id, al.field_key, al.actor_name, al.at,
+              f.label AS field_label
+         FROM audit_log al JOIN fields f ON f.key = al.field_key
+        WHERE al.entity = 'assignment' AND al.action = 'update'
+          AND al.entity_id IN (${chunk.map(() => '?').join(',')})
+        ORDER BY al.id`,
+      ...chunk
+    )) {
+      if (!lastEdits.has(e.assignment_id)) lastEdits.set(e.assignment_id, {});
+      lastEdits.get(e.assignment_id)[e.field_key] = { by: e.actor_name, at: e.at, label: e.field_label };
     }
   }
 
@@ -102,9 +126,20 @@ function collectRows(user, scope = {}) {
     };
     const extra = values.get(r.id) || {};
     for (const f of fields) flat[f.key] = extra[f.key] ?? null;
+    // one extra column per submitted field pair, plus a single summary line, so
+    // "what changed and who changed it" survives the round trip through Excel
+    let latest = null;
+    for (const [key, edit] of Object.entries(lastEdits.get(r.id) || {})) {
+      flat[`${key}__updated_by`] = edit.by;
+      flat[`${key}__updated_at`] = edit.at;
+      if (!latest || String(edit.at) > String(latest.at)) latest = { ...edit, key };
+    }
+    flat.last_supervisor_update = latest
+      ? `${latest.label} → ${latest.by} on ${latest.at}`
+      : '';
     return flat;
   });
-  return { headers, rows: out, fields };
+  return { headers, rows: out, fields, extraHeaders };
 }
 
 function styleHeader(ws) {
@@ -129,7 +164,8 @@ async function buildWorkbook(user, scope = {}) {
   const info = [
     ['Generated at', new Date().toISOString()],
     ['Generated by', `${user.name} (${user.role})`],
-    ['Scope', scope.projectId || scope.subprojectId || scope.categoryId || scope.supplierId ? JSON.stringify(scope) : 'All authorized projects'],
+    ...(user.gigaAccess ? [['Giga Project Name', user.gigaAccess.name || 'No project access']] : []),
+    ['Scope', Object.keys(scope).length ? JSON.stringify(scope) : 'All authorized placements'],
     ['Source of truth', 'Central database snapshot (read-only export)'],
   ];
   for (const [k, v] of info) {
@@ -140,9 +176,10 @@ async function buildWorkbook(user, scope = {}) {
   meta.addRow(['This workbook is a generated snapshot. Do not edit it as a live database —', '']);
   meta.addRow(['imports are applied through the application so transactions and audit history are preserved.', '']);
 
-  const { headers, rows } = collectRows(user, scope);
+  const { headers, rows, extraHeaders } = collectRows(user, scope);
   const data = wb.addWorksheet('Employees');
-  data.columns = headers.map((h) => ({ header: h.label, key: h.key, width: h.width }));
+  const allHeaders = [...headers, ...extraHeaders];
+  data.columns = allHeaders.map((h) => ({ header: h.label, key: h.key, width: h.width }));
   for (const r of rows) {
     const flat = { ...r };
     flat['project.code'] = r.project.code;
@@ -200,6 +237,17 @@ function headerKey(h) {
 }
 
 /**
+ * The export writes change stamps beside each CRM value ("Leader Input This
+ * Week — Updated By"). Those columns are derived, not data, so an import of the
+ * workbook we generated has to ignore them instead of creating 37 new fields.
+ */
+function isDerivedHeader(header) {
+  const h = String(header || '').trim();
+  if (/\s+—\s+(Updated By|Updated At)$/i.test(h)) return true;
+  return headerKey(h) === 'last_supervisor_update';
+}
+
+/**
  * Import a daily dataset.
  *
  * Rules:
@@ -210,7 +258,30 @@ function headerKey(h) {
  *  - unknown projects/subprojects/categories/suppliers are auto-created when the
  *    user may manage schema, otherwise reported as row errors
  */
-async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = false, dryRun = false } = {}) {
+/**
+ * Your HR master workbook has no Project / Subproject / Category columns - the
+ * hierarchy lives only in the portal. Rather than reject the whole file, resolve
+ * one default placement for the upload: whatever the caller chose, else the only
+ * project/category in the database, else null (rows then report the required
+ * column instead of a misleading partial import).
+ */
+function resolveDefaultPlacement() {
+  const projects = q.all('SELECT id, name FROM projects ORDER BY id');
+  const categories = q.all(
+    `SELECT c.id, c.name, s.id AS subproject_id, s.name AS subproject_name, p.id AS project_id, p.name AS project_name
+       FROM categories c JOIN subprojects s ON s.id = c.subproject_id JOIN projects p ON p.id = s.project_id
+      ORDER BY c.id`
+  );
+  const pick = (list) => (list.length === 1 ? list[0] : null);
+  const cat = pick(categories);
+  if (!cat) return null;
+  const proj = pick(projects);
+  if (!proj) return null;
+  return { projectId: proj.id, subprojectId: cat.subproject_id, categoryId: cat.id };
+}
+
+async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = false, dryRun = false, defaultPlacement = null } = {}) {
+  if (user.gigaAccess) throw denied('Master workbook imports are not permitted for Giga-scoped users.');
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
   const sheet = wb.getWorksheet('Employees') || wb.worksheets[0];
@@ -219,18 +290,48 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
   // map header labels -> keys
   const headerRow = sheet.getRow(1);
   const labels = [];
-  headerRow.eachCell((cell, col) => labels[col] = headerKey(cell.value));
+  const derived = new Set();
+  headerRow.eachCell((cell, col) => {
+    if (isDerivedHeader(cell.value)) { derived.add(headerKey(cell.value)); return; }
+    labels[col] = headerKey(cell.value);
+  });
   const allFields = schema.listFields();
   const labelToField = new Map();
   for (const f of allFields) {
     labelToField.set(headerKey(f.label), f);
     labelToField.set(headerKey(f.key), f);
   }
+  // spellings your real workbook uses that differ from the catalogue label
+  const byKey = new Map(allFields.map((f) => [f.key, f]));
+  for (const [alias, key] of Object.entries(fielddefs.HEADER_ALIASES || {})) {
+    const f = byKey.get(key);
+    if (f) labelToField.set(alias, f);
+  }
   const specials = {
     project_code: 'project.code', project: 'project.name',
     subproject_code: 'subproject.code', subproject: 'subproject.name',
     category_code: 'category.code', category: 'category.name',
   };
+
+  // Repeated headers (your workbook has "account", "billing status" and
+  // "allocation percentage" twice) cannot both resolve to one field: the first
+  // occurrence wins the field and each later one is looked up as
+  // "<header>_2nd_column" so its own values land in their own column.
+  const seenHeaders = new Map();
+  const colField = new Map();
+  labels.forEach((label, col) => {
+    if (!label) return;
+    const n = (seenHeaders.get(label) || 0) + 1;
+    seenHeaders.set(label, n);
+    const wanted = n === 1 ? label : `${label}_${n}${n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}_column`;
+    const f = labelToField.get(wanted) || labelToField.get(label);
+    if (f) colField.set(col, f);
+  });
+
+  // Your file has no Project / Subproject / Category columns; without one of the
+  // three there is nowhere to file the person, so fall back to a single
+  // placement when the database only has one category.
+  const placement = defaultPlacement || resolveDefaultPlacement();
 
   const report = { created: 0, updated: 0, protected: 0, flagged: 0, rows: [], errors: [], dryRun };
   const parsed = [];
@@ -240,7 +341,7 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
     if (!row.hasValues) continue;
     const rec = { _row: r, values: {}, identity: {}, meta: {} };
     labels.forEach((label, col) => {
-      if (!label) return;
+      if (!label || derived.has(label)) return;
       const cell = row.getCell(col);
       let v = cell.value;
       if (v && typeof v === 'object') {
@@ -252,7 +353,8 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
       }
       if (v === undefined || v === '') return;
       if (specials[label]) { rec.meta[specials[label]] = String(v).trim(); return; }
-      const f = labelToField.get(label);
+      const f = colField.get(col);
+      // a repeated header's second copy is kept separately, never overwriting
       if (f) rec.values[f.key] = v;
     });
     rec.identity.emp_code = rec.values.emp_code;
@@ -269,7 +371,7 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
   const run = () => {
     for (const rec of parsed) {
       try {
-        applyRow(user, rec, { force, report });
+        applyRow(user, rec, { force, report, placement });
       } catch (e) {
         report.errors.push({ row: rec._row, message: e.message });
       }
@@ -302,7 +404,7 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
   });
 }
 
-function applyRow(user, rec, { force, report }) {
+function applyRow(user, rec, { force, report, placement }) {
   const s = rec.meta;
   const fieldsByKey = new Map(schema.listFields().map((f) => [f.key, f]));
   let changed = false;
@@ -318,6 +420,7 @@ function applyRow(user, rec, { force, report }) {
     if (!p) throw new Error(`Unknown project "${s['project.name'] || s['project.code']}" — create it in Administration first.`);
     projectId = p.id;
   }
+  if (!projectId && placement) projectId = placement.projectId;
   if (!projectId) throw new Error('Project column is required for import rows.');
 
   if (s['subproject.name'] || s['subproject.code']) {
@@ -328,6 +431,7 @@ function applyRow(user, rec, { force, report }) {
     if (!sp) throw new Error(`Unknown subproject "${s['subproject.name'] || s['subproject.code']}" in the selected project.`);
     subprojectId = sp.id;
   }
+  if (!subprojectId && placement) subprojectId = placement.subprojectId;
   if (!subprojectId) throw new Error('Subproject column is required for import rows.');
 
   if (s['category.name'] || s['category.code']) {
@@ -338,6 +442,7 @@ function applyRow(user, rec, { force, report }) {
     if (!c) throw new Error(`Unknown category "${s['category.name'] || s['category.code']}".`);
     categoryId = c.id;
   }
+  if (!categoryId && placement) categoryId = placement.categoryId;
   if (!categoryId) throw new Error('Category column is required for import rows.');
 
   if (!user.isAdmin) {
@@ -459,4 +564,71 @@ function applyRow(user, rec, { force, report }) {
   if (changed) report.updated += 1;
 }
 
-module.exports = { collectRows, buildWorkbook, streamWorkbook, importWorkbook, BASE_HEADERS };
+/**
+ * Builds the import template: your own 65 headers, in your own order, with the
+ * three hierarchy columns the importer needs prepended - because a spreadsheet
+ * row has no place to say which project it belongs to. One example row shows the
+ * expected shape; delete it before uploading.
+ */
+async function buildTemplateWorkbook({ placement = null } = {}) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Resource Planning';
+  const ws = wb.addWorksheet('Employees');
+  const place = placement || resolveDefaultPlacement();
+  const hier = place
+    ? q.all(
+      `SELECT p.name project, s.name subproject, c.name category
+         FROM categories c JOIN subprojects s ON s.id = c.subproject_id JOIN projects p ON p.id = s.project_id
+        WHERE c.id = ?`
+    )[0]
+    : { project: '', subproject: '', category: '' };
+
+  const headers = ['Project', 'Subproject', 'Category', ...fielddefs.WORKBOOK_HEADERS.map(([label]) => label)];
+  ws.addRow(headers);
+  ws.getRow(1).font = { bold: true };
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
+
+  const example = new Array(headers.length).fill('');
+  example[0] = hier?.project || '';
+  example[1] = hier?.subproject || '';
+  example[2] = hier?.category || '';
+  const put = (label, value) => {
+    const i = headers.indexOf(label);
+    if (i >= 0) example[i] = value;
+  };
+  put('employee ID', 'EMP-00001');
+  put('first name', 'Example');
+  put('last name', 'Row — delete me');
+  put('leader input this week', 'Free text the leader types');
+  put('Opp ID', 'OPP-00000');
+  put('Hardblock/Softblock', 'Soft Block');
+  put('demand number', 'DEM-00000');
+  ws.addRow(example);
+
+  const widths = headers.map((h) => Math.min(Math.max(String(h).length + 2, 12), 40));
+  ws.columns.forEach((c, i) => { c.width = widths[i]; });
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+  const notes = wb.addWorksheet('How to use');
+  notes.columns = [{ width: 100 }];
+  [
+    'RESOURCE PLANNING — IMPORT TEMPLATE',
+    '',
+    '1. Fill the Employees sheet, one person per row. Column order matches your own workbook.',
+    '2. Project, Subproject and Category are required by the portal (a spreadsheet row has',
+    '   nowhere else to say where the person sits). Fill them on every row, or lock the',
+    '   placement in Data Hub when you upload but do not change the columns here.',
+    '3. Employee ID identifies the row: an existing ID is updated, a new one is created.',
+    '4. "account", "billing status" and "allocation percentage" appear twice, exactly as in',
+    '   your workbook; both copies are stored.',
+    '5. Delete the example row before uploading.',
+    '6. Upload in Data Hub -> Upload a daily dataset. You get a preview first, nothing is',
+    '   written until you press Apply import.',
+    '7. Values a supervisor has edited in the portal are protected: a later upload reports',
+    '   them as "protected" and leaves them alone unless an admin forces the overwrite.',
+  ].forEach((line) => notes.addRow([line]));
+
+  return wb;
+}
+
+module.exports = { collectRows, buildWorkbook, streamWorkbook, importWorkbook, BASE_HEADERS, resolveDefaultPlacement, buildTemplateWorkbook };

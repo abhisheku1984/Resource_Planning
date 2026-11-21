@@ -1,15 +1,34 @@
 /* =========================================================================
-   Supervisor submit panel.
-   The brief asks for an explicit Submit (not silent autosave) for the update
-   fields — allocation plan, PID/OPID, ETA, dates, notes. Changes are held in
-   the form, highlighted as dirty, then written in ONE transaction on Submit.
+   Supervisor update panel.
+
+   Every change saves itself. You type, the field says "Saving…", then "Saved",
+   and the value is already in the database - there is no separate export step
+   and nothing is held in the browser. The whole set of changed fields is still
+   written in ONE transaction, so a half-typed screen never lands half-applied.
+   The Submit button remains as an optional "save now" for a whole batch; a
+   closed tab, a lost connection or a forgotten click cannot lose work.
    ========================================================================= */
 import {
   h, mount, icon, api, state, toast, fmtDate, fmtRelative, spinner,
   emptyState, statusBadge, initials,
 } from '../core.js';
 
-const GROUP_ORDER = ['Allocation', 'Supervisor Update', 'Notes'];
+/**
+ * The panel is deliberately a short, ordered list, not the whole record: the
+ * person's name and the workbook's BC–BS supervisor columns from Leader
+ * Input Last Week through Demand Number. Autosave writes them in one
+ * transaction; the next export carries the new value plus who changed it.
+ *
+ * The list comes from the server (`state.crmKeys`, admin-configurable), so this
+ * constant is only the fallback for an old cached page.
+ */
+const FALLBACK_KEYS = [
+  'leader_input_last_week', 'leader_input_this_week', 'leader_input_pid_account',
+  'billing_start_date', 'billing_end_date', 'pid_awaited_account',
+  'pid_awaited_blocked_date', 'opp_id', 'account_owner', 'allocation_closure_eta',
+  'role_of_month', 'role_of_responses', 'detail_comments', 'block_status',
+  'account_name', 'interviewed_by', 'demand_number',
+];
 
 export function createSubmitPanel({ onSaved, getScope }) {
   const el = h('aside', { class: 'card crm-panel submit-panel', 'aria-label': 'Update employee record' });
@@ -22,6 +41,10 @@ export function createSubmitPanel({ onSaved, getScope }) {
   let inputs = new Map();     // key -> { input, field, type, original }
   let saving = false;
   let savedAt = null;
+  let saveTimer = null;       // debounce handle
+  let savePromise = null;     // in-flight write, awaited before leaving
+  let lastError = null;
+  const AUTOSAVE_MS = 900;
 
   /* ---------------------------------------------------------------- head */
   function renderHead() {
@@ -29,7 +52,7 @@ export function createSubmitPanel({ onSaved, getScope }) {
       h('div', { class: 'grow', style: { minWidth: '0' } },
         h('div', { class: 'card-title' }, icon('edit', 15), 'Update record'),
         h('div', { class: 'card-sub' }, record
-          ? `${record.values.name} · ${record.values.emp_code}`
+          ? `${record.values.emp_code} · ${record.values.name}`
           : 'Select a row to update'),
       ),
       h('button', {
@@ -54,10 +77,14 @@ export function createSubmitPanel({ onSaved, getScope }) {
     mount(footHost,
       h('div', { class: 'col', style: { minWidth: '0' } },
         h('div', { style: { fontSize: '12px', fontWeight: '600', color: count ? 'var(--warn)' : 'var(--text-2)' } },
-          count ? `${count} unsaved change${count === 1 ? '' : 's'}` : 'No pending changes'),
-        savedAt
-          ? h('div', { class: 'subtle', style: { fontSize: '11px' } }, `Last saved ${fmtRelative(savedAt)}`)
-          : h('div', { class: 'subtle', style: { fontSize: '11px' } }, 'Changes apply to the next export'),
+          saving
+          ? 'Saving…'
+          : count ? `${count} change${count === 1 ? '' : 's'} pending — saving automatically` : 'All changes saved'),
+        lastError
+          ? h('div', { style: { fontSize: '11px', color: 'var(--danger)' } }, `Not saved — ${lastError}. Retrying…`)
+          : savedAt
+            ? h('div', { class: 'subtle', style: { fontSize: '11px' } }, `Saved to the database ${fmtRelative(savedAt)} · ${state.user?.name || 'you'} · visible to the admin immediately`)
+            : h('div', { class: 'subtle', style: { fontSize: '11px' } }, 'Changes save themselves as you type, into the database'),
       ),
       h('div', { class: 'row', style: { gap: '6px' } },
         count
@@ -67,7 +94,7 @@ export function createSubmitPanel({ onSaved, getScope }) {
           class: 'btn btn-primary btn-sm',
           disabled: !count || saving || !canEdit(),
           onclick: () => submit(),
-        }, saving ? spinner() : icon('check', 14), saving ? 'Saving…' : 'Submit'),
+        }, saving ? spinner() : icon('check', 14), saving ? 'Saving…' : 'Save now'),
       ),
     );
   }
@@ -98,19 +125,17 @@ export function createSubmitPanel({ onSaved, getScope }) {
     const v = record.values || {};
     const canEditNow = canEdit();
 
-    // which fields appear: the category's submit fields, in group order
-    const submitCols = (record.columns || []).filter((c) => c.submitField);
-    const groups = new Map();
-    for (const c of submitCols) {
-      const g = c.group || 'Other';
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(c);
-    }
-    const orderedGroups = [
-      ...[...groups.keys()].filter((g) => GROUP_ORDER.includes(g))
-        .sort((a, b) => GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b)),
-      ...[...groups.keys()].filter((g) => !GROUP_ORDER.includes(g)),
-    ];
+    // Exactly the configured CRM columns, in that order. A column the category
+    // does not list still resolves through the catalogue, so a category created
+    // by an import gets the same form as a seeded one.
+    const byKey = new Map((record.columns || []).map((c) => [c.key, c]));
+    const catalogue = new Map((state.fields || []).map((f) => [f.key, f]));
+    const wanted = (state.crmKeys && state.crmKeys.length ? state.crmKeys : FALLBACK_KEYS);
+    const submitCols = wanted
+      .map((k) => byKey.get(k) || catalogue.get(k))
+      .filter(Boolean)
+      .map((c) => ({ ...c, submitField: true }));
+    const orderedGroups = submitCols.length ? [['Supervisor update', submitCols]] : [];
 
     const buildField = (col) => {
       const original = v[col.key] ?? '';
@@ -135,6 +160,7 @@ export function createSubmitPanel({ onSaved, getScope }) {
       } else {
         input = h('input', { class: 'input', type: 'text', value: original, ...common });
       }
+      input.dataset.fieldKey = col.key;
       const wrap = h('div', { class: 'field submit-field' },
         h('label', { class: 'field-label', for: id }, col.label,
           col.required ? h('span', { class: 'req' }, '*') : null),
@@ -158,16 +184,18 @@ export function createSubmitPanel({ onSaved, getScope }) {
           input.classList.remove('is-error');
         }
       };
-      input.addEventListener('input', sync);
-      input.addEventListener('change', sync);
+      input.addEventListener('input', () => { sync(); scheduleSave(); });
+      input.addEventListener('change', () => { sync(); scheduleSave(); });
+      // leaving the field saves it at once instead of waiting for the debounce
+      input.addEventListener('blur', () => { if (dirty()[col.key] !== undefined) flushSave(); });
       return wrap;
     };
 
     const summary = h('div', { class: 'submit-summary' },
+      summaryItem('Employee ID', v.emp_code || '—'),
       summaryItem('Project', record.projectName),
       summaryItem('Category', record.categoryName),
       summaryItem('Bench category', v.bench_category || '—'),
-      summaryItem('Allocation', v.allocation_percentage ? `${v.allocation_percentage}%` : '—'),
     );
 
     mount(bodyHost,
@@ -186,9 +214,9 @@ export function createSubmitPanel({ onSaved, getScope }) {
         ? h('div', { class: 'note warn', style: { marginBottom: '12px' } }, icon('shield', 15),
           h('span', null, 'You have read-only access here. The Submit button is disabled.'))
         : null,
-      ...orderedGroups.map((g) => h('div', { class: 'submit-group' },
-        h('div', { class: 'submit-group-title' }, g),
-        ...groups.get(g).map(buildField),
+      ...orderedGroups.map(([title, fields]) => h('div', { class: 'submit-group' },
+        h('div', { class: 'submit-group-title' }, title),
+        ...fields.map(buildField),
       )),
       submitCols.length === 0
         ? h('div', { class: 'note' }, icon('info', 15),
@@ -219,51 +247,106 @@ export function createSubmitPanel({ onSaved, getScope }) {
   }
 
   /* ---------------------------------------------------------------- save */
-  async function submit() {
+  /**
+   * Autosave. Typing schedules a write; the debounce keeps one keystroke burst
+   * to a single transaction. Only valid fields are sent, and a field that fails
+   * validation is left alone until it is fixed - so an incomplete date never
+   * blocks the rest of the form from saving.
+   */
+  function scheduleSave() {
+    if (!record || !canEdit()) return;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { saveTimer = null; flushSave(); }, AUTOSAVE_MS);
+  }
+
+  function flushSave() {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    if (saving) return savePromise || Promise.resolve();
     const changes = dirty();
-    const keys = Object.keys(changes);
-    if (!keys.length) return;
-
-    // validate everything before the round trip
-    const problems = [];
-    for (const key of keys) {
-      const entry = inputs.get(key);
+    const keys = Object.keys(changes).filter((k) => {
+      const entry = inputs.get(k);
+      if (!entry) return false;
       const problem = validate(entry.field, entry.input.value);
-      if (problem) problems.push(`${entry.field.label}: ${problem}`);
-    }
-    if (problems.length) {
-      toast('Check the highlighted fields', problems[0], 'error', 5200);
-      return;
-    }
-
+      if (problem) {
+        const err = entry.wrap.querySelector('.field-error');
+        if (err) { err.textContent = problem; err.classList.remove('hidden'); }
+        entry.input.classList.add('is-error');
+        return false;
+      }
+      return true;
+    });
+    if (!keys.length) { renderFoot(); return Promise.resolve(); }
+    const body = {};
+    for (const k of keys) body[k] = changes[k];
     saving = true;
     renderFoot();
-    try {
-      const res = await api(`/employees/${record.assignmentId}/submit`, {
-        method: 'POST',
-        body: { changes, rev: record.rev, reason: 'Supervisor submit' },
-      });
-      record = res.record;
-      savedAt = new Date().toISOString();
-      saving = false;
-      renderForm();
-      toast('Saved to the database', res.message, 'success', 5200);
-      if (onSaved) onSaved(res.record, res.changed);
-    } catch (err) {
-      saving = false;
-      renderFoot();
-      if (err.status === 409) {
-        toast('Someone else saved first', 'The latest values are loaded below. Re-apply your changes and submit again.', 'warn', 7000);
-        if (err.data?.current) {
-          record = err.data.current;
-          renderForm();
+    savePromise = (async () => {
+      try {
+        const res = await api(`/employees/${record.assignmentId}/submit`, {
+          method: 'POST',
+          body: { changes: body, rev: record.rev, reason: 'Supervisor autosave' },
+        });
+        record = res.record;
+        savedAt = new Date().toISOString();
+        lastError = null;
+        // the saved values are now the baseline: the fields are no longer dirty
+        for (const k of keys) {
+          const entry = inputs.get(k);
+          if (!entry) continue;
+          entry.original = entry.input.value;
+          entry.wrap.classList.remove('is-changed');
         }
-      } else if (err.data?.errors) {
-        toast('Not saved', Object.values(err.data.errors)[0], 'error', 6000);
-      } else {
-        toast('Not saved', err.message, 'error', 6000);
+        saving = false;
+        renderFoot();
+        if (onSaved) onSaved(res.record, res.changed);
+        // anything typed while the request was in flight goes next
+        if (Object.keys(dirty()).length) scheduleSave();
+      } catch (err) {
+        saving = false;
+        if (err.status === 409) {
+          // someone else saved this record first: keep the user's text, reload
+          // the baseline, and retry theirs on top of the newer revision
+          lastError = 'someone else saved this record first';
+          toast('Someone else saved first', 'Your text is kept. Reloading the latest values and saving yours again.', 'warn', 7000);
+          const mine = dirty();
+          if (err.data?.current) {
+            record = err.data.current;
+            const keep = new Map(Object.entries(mine));
+            renderForm();
+            for (const [k, val] of keep) {
+              const entry = inputs.get(k);
+              if (entry) { entry.input.value = val; entry.wrap.classList.add('is-changed'); }
+            }
+            renderFoot();
+            scheduleSave();
+          }
+        } else {
+          lastError = err.data?.errors ? Object.values(err.data.errors)[0] : err.message;
+          toast('Not saved', lastError, 'error', 6000);
+          renderFoot();
+          // keep trying: a dropped connection should not silently lose the edit
+          if (saveTimer) clearTimeout(saveTimer);
+          saveTimer = setTimeout(() => { saveTimer = null; flushSave(); }, 4000);
+        }
+      } finally {
+        savePromise = null;
       }
-    }
+    })();
+    return savePromise;
+  }
+
+  /** The button is now just "save this batch right now". */
+  async function submit() {
+    await flushSave();
+    const left = Object.keys(dirty()).length;
+    if (!left) toast('Saved to the database', 'Every change on this form is already stored.', 'success', 4000);
+  }
+
+  /** Awaited before the panel changes person or closes, so nothing is lost. */
+  async function settle() {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    if (savePromise) { try { await savePromise; } catch { /* reported already */ } }
+    if (Object.keys(dirty()).length) { try { await flushSave(); } catch { /* reported already */ } }
   }
 
   function resetForm() {
@@ -279,6 +362,8 @@ export function createSubmitPanel({ onSaved, getScope }) {
   return {
     el,
     async show(assignmentId) {
+      // switching person must not drop an unsaved edit on the previous one
+      if (record && record.assignmentId !== Number(assignmentId)) await settle();
       if (!assignmentId) {
         record = null;
         renderForm();
@@ -294,8 +379,9 @@ export function createSubmitPanel({ onSaved, getScope }) {
         mount(bodyHost, emptyState({ title: 'Could not open record', message: err.message, iconName: 'alert' }));
       }
     },
-    clear() { record = null; inputs = new Map(); renderForm(); },
-    hasUnsaved: () => Object.keys(dirty()).length > 0,
+    clear() { record = null; inputs = new Map(); lastError = null; renderForm(); },
+    settle,
+    hasUnsaved: () => saving || Object.keys(dirty()).length > 0,
     currentId: () => record?.assignmentId || null,
   };
 }

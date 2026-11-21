@@ -100,6 +100,7 @@ const ICONS = {
   merge: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
   sparkles: '<path d="m12 3 1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9Z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9Z"/>',
   briefcase: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6M14 11v6"/>',
 };
 
 export const icon = (name, size = 16) => {
@@ -157,6 +158,8 @@ export const state = {
   tree: [],
   fields: [],
   suppliers: [],
+  // columns the CRM / Update panel shows (from /bootstrap, admin-configurable)
+  crmKeys: [],
   route: { name: 'dashboard', params: {} },
 };
 
@@ -195,14 +198,45 @@ export async function api(path, { method = 'GET', body, signal } = {}) {
 }
 
 export function setToken(token) {
+  if (!token && state.token) document.dispatchEvent(new CustomEvent('rp:logout'));
   state.token = token;
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
 }
 
-export async function downloadExport(query) {
+/**
+ * Downloads any authenticated workbook route (export, blank import template) as
+ * a file. The route decides the name through Content-Disposition.
+ */
+export async function downloadWorkbook(path, query, fallbackName = 'download.xlsx') {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(query || {})) if (v !== null && v !== undefined && v !== '') params.set(k, v);
+  const res = await fetch(`${path}?${params}`, { headers: { Authorization: `Bearer ${state.token}` } });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(data.error || 'Download failed.', res.status, data);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match ? match[1] : fallbackName;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return { filename };
+}
+
+export async function downloadExport(query) {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(query || {})) {
+    if (Array.isArray(v)) { for (const value of v) params.append(`${k}[]`, value); }
+    else if (v !== null && v !== undefined && v !== '') params.set(k, v);
+  }
   const res = await fetch(`/api/export?${params}`, {
     headers: { Authorization: `Bearer ${state.token}` },
   });

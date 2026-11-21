@@ -101,7 +101,9 @@ login is the only thing protecting the data.
 
 ### Content-Security-Policy
 
-Every response carries a CSP that only permits same-origin content:
+By default, every response carries the following CSP. The hosted preview
+(`ARENA_PREVIEW=1`) additionally allows Arena to frame the app; the Windows
+start commands do not enable this exception.
 
 ```
 default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
@@ -127,7 +129,12 @@ These are the controls actually implemented (each has a test):
 * **Authorization is server-side.** Every read and write re-checks the caller's
   project grant. Hiding a button in the browser is never the protection — the API
   returns `403` regardless. Tests assert this for each verb on a foreign project.
-* **Per-project rights** — `can_edit`, `can_export`, `can_crm` can differ per
+* **Giga-scoped accounts** — one workbook Giga Project Name replaces hierarchy
+  grants. SQL checks the current assignment value before listing, counting,
+  editing or exporting it; names are bound values, not `LIKE` patterns. A blank
+  grant authorizes no rows. Access is reloaded on each authenticated request.
+  Master imports and global configuration are unavailable to these accounts.
+* **Hierarchy-based accounts** — `can_edit`, `can_export`, `can_crm` can differ per
   person per project. A read-only reviewer cannot write, even with a crafted request.
 * **SQL injection** is not possible in the normal path: every query uses bound
   parameters. Sort column names are whitelisted rather than interpolated.
@@ -151,11 +158,11 @@ Node process, not a language model and not a cloud service.
 | Concern | Reality |
 |---|---|
 | Does it call an AI provider? | No. There is no API key, no SDK, no HTTP client for it. `server/agent.js` is plain string matching plus SQL against the local database. |
-| Can it send data off the machine? | No. Section 4's "zero outbound connections" claim still holds, and you can confirm it the same way — watch the machine's connections while asking it questions. |
-| Can it change records on its own? | No. It cannot write. A request creates a row in `agent_actions` describing the change; `server/agentstore.js` only writes to master data when an administrator approves. |
-| Can it leak another project's data? | No. Every query is scoped to the asking user's project grants, and asking about a project you cannot see returns an explicit refusal rather than a number. |
+| Does it send speech to a provider? | No. Microphone access is opt-in. The browser must support `processLocally`; cloud-only recognition is never started. Read-aloud uses only `localService` English voices. Only transcribed commands/confirmed field values go to the app server, never audio. Installing an optional language pack is a separate, user-initiated browser download. |
+| Can it change records on its own? | No. Chat change requests are proposals for administrator approval. Explicitly opening the CRM form is a separate, authenticated editing workflow: dictation drafts values in memory. A separate review and confirmation submits the displayed changes with the current revision through the existing employee update path. |
+| Can it leak another project's data? | The assistant resolves only Giga Project Names from active placements in the caller’s access. Counts, lists, proposals and CRM all intersect the exact workbook name with assignment ACLs. A missing or ambiguous name never enables a broader search. CRM submit rechecks the placement, CRM/edit grants, editable fields and revision. |
 | Does it weaken the audit trail? | It strengthens it. Proposals and approvals are both logged in `audit_log` with the requester and the approver named. |
-| What if it mis-parses? | The damage is bounded: a wrong proposal needs a human to approve it, and approval is refused if the record changed in the meantime (`stale`). |
+| What if it mis-parses? | The damage is bounded: a wrong proposal needs a human to approve it, and approval is refused if the target field or workbook project changed (`stale`). In the CRM form a dictated value must be reviewed and separately confirmed by the editor. |
 
 One honest limitation: because it is pattern matching, it will not understand
 unusual phrasing. It says so plainly ("I did not understand that yet") instead of
