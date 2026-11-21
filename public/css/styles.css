@@ -1207,6 +1207,11 @@ table.mini tr:last-child td { border-bottom: none; }
 .voice-help { grid-column: 1 / -1; max-height: 22vh; overflow-y: auto; line-height: 1.45; }
 .voice-help summary { cursor: pointer; font-weight: 600; }
 .voice-help p { margin: 5px 0; }
+.speaker-settings { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 5px 12px; margin: 6px 0; }
+.speaker-settings select { min-width: 0; width: 100%; }
+.speaker-volume { display: flex; align-items: center; gap: 8px; }
+.speaker-volume input { flex: 1; min-width: 0; accent-color: var(--brand); }
+.speaker-volume output { min-width: 4ch; text-align: end; font-variant-numeric: tabular-nums; }
 .assistant-voice [aria-pressed="true"] { color: var(--brand); border-color: var(--brand); }
 .assistant-crm { max-height: 36vh; overflow: auto; flex: 0 1 auto; background: var(--surface-2); }
 .assistant-crm:empty { display: none; }

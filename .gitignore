@@ -4,5 +4,6 @@ data/
 .DS_Store
 tests/screenshots/
 
-# Optional, downloaded (not user data)
+# Optional downloaded models and locally generated speaker auditions (not user data)
 /voice/.cache/
+/voice/*.wav

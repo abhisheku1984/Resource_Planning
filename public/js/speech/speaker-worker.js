@@ -1,28 +1,19 @@
-import { WASI, File, OpenFile, PreopenDirectory, ConsoleStdout } from '/speech/wasi/index.js';
+import { phrases } from './phrases.js';
 
-// No real filesystem, audio device or network API is passed into the synthesizer.
-// Its only inputs are the locally served voice and an in-memory UTF-8 text file.
-let resources;
-async function get(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('Voice asset unavailable');
-  return res;
-}
-self.onmessage = async ({ data: { modelUrl, text } }) => {
+// One worker (and one model) per utterance. Pull at most one phrase ahead, so
+// Stop can interrupt even a long inference and a report cannot fill the heap.
+let engine, chunks, index = 0, model, language;
+self.onmessage = async ({ data }) => {
   try {
-    resources ??= Promise.all([
-      WebAssembly.compileStreaming(get('/speech/flite.wasm')),
-      get(modelUrl).then((r) => r.arrayBuffer()).then((bytes) => new File(bytes, { readonly: true })),
-    ]);
-    const [module, voice] = await resources;
-    const out = new File([]), silent = () => new ConsoleStdout(() => {});
-    const fds = [new OpenFile(new File([])), silent(), silent(), new PreopenDirectory('.', [
-      ['voice.flitevox', voice], ['input.txt', new File(new TextEncoder().encode(text + '\n'))], ['answer.wav', out],
-    ])];
-    const wasi = new WASI(['flite', '-voice', 'voice.flitevox', '-f', 'input.txt', '-o', 'answer.wav'], [], fds, { debug: false });
-    const instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi.wasiImport });
-    if (wasi.start(instance) !== 0 || out.data.length <= 44) throw new Error('No speech generated');
-    const wav = out.data.slice().buffer;
-    self.postMessage({ wav }, [wav]);
+    if (!data.next) {
+      const studio = data.engine === 'studio';
+      language = data.language === 'hi' ? 'hi' : 'en'; model = data.modelUrl;
+      engine = studio ? await import('./studio.js') : await import('./flite.js');
+      chunks = phrases(studio ? engine.prepare(data.text, language) : data.text, studio ? 100 : 400);
+      index = 0;
+    }
+    if (!chunks[index]) throw new Error('Empty speech');
+    const result = await engine.synthesize(model, chunks[index++], language);
+    self.postMessage({ ...result, more: index < chunks.length }, [result.wav || result.pcm.buffer]);
   } catch { self.postMessage({ error: true }); }
 };

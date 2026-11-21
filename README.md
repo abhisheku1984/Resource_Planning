@@ -149,7 +149,18 @@ can be dictated as **May 12 2027** or **१२ मई २०२७**. CRM grants
 fields, revision checks and the audited confirmation step apply in both
 languages. Closing Ask, hiding the tab or signing out stops app voice mode.
 
-### Indian English and Hindi on Windows (no browser speech packs required)
+### A clearer, louder Ask speaker on Windows
+
+For a more natural read-back, install **Studio**. It uses two different 24 kHz neural voices: one trained for Indian English and one for Hindi. This changes **Test speaker**, **Read last reply** and replies in voice mode. It doesn't replace your microphone, change workbook data or require a re-import.
+
+1. In the **updated app folder**, double-click **`install-studio-voices-windows.bat`**. No Y/N prompt. Or run `npm.cmd run voice:studio` in PowerShell there. This one-time download is about **100 MB** for both languages; allow about 220 MB of installed space plus npm's cache. For just Hindi or English, use `npm.cmd run voice:studio -- hi` or `-- en`.
+2. Wait for **Ready**. After updating the app code, restart `start-windows.bat` and refresh the app tab (**Ctrl+F5**). Open **Ask → English / हिन्दी → Test speaker / स्पीकर जाँचें**. No microphone access is needed. The status identifies the voice actually used.
+3. Open **Speaker settings and voice setup**. **Auto** prefers Studio when installed; choose **Standard** for the faster original pack or **Local device voice** for a matching offline Windows/browser voice. Studio can take several seconds to prepare each phrase on a slow CPU. An explicitly selected missing pack gives setup guidance rather than silently substituting another language.
+4. Start with **Volume 100%**, test, then adjust (e.g. **125%**). Studio and Standard level quiet speech and limit peaks, including with boost up to **200%**. Device voices use the OS synthesizer and can't be boosted past its maximum. Settings apply on the next test/reply and are remembered in this browser. If it's still quiet, check the tab isn't muted and **Windows Settings → System → Sound → Volume mixer** for Chrome/Edge and the selected output device.
+
+Studio is **speaker only**. If your microphone already works, leave it alone. If not, use the separate microphone/Standard installer below. `http://localhost:4000/speech/status` shows `studio` (neural speaker), `output` (Standard speaker) and `input` (mic) **independently** under `en` and `hi`. The app only serves installed files; it doesn't contact a speech provider. See [voice credits](voice/studio/NOTICE.md).
+
+### Indian English and Hindi microphone + Standard voices on Windows
 
 **“No local English speech pack” refers to the browser recognizer, not your
 microphone hardware.** Hearing an English reply does not mean the browser can
@@ -170,7 +181,7 @@ pack cannot add any of those capabilities.
    choose a workbook project, then **English** or **हिन्दी**. There is no Windows
    language-pack setting to change. If you installed the packs while the updated
    app was running, just stop any current voice session and start a new one.
-3. Select **Test speaker** / **स्पीकर जाँचें**. With the packs installed,
+3. Select **Test speaker** / **स्पीकर जाँचें**. With just the Standard packs,
    English uses the **Indian English KSP** voice model; हिन्दी uses a
    separate **Hindi** voice model, not an English voice tagged `hi-IN`. The
    speaker never opens the mic. After a reply the same button reads it aloud;

@@ -5,7 +5,7 @@
    ========================================================================= */
 import { h, mount, icon, api, state, toast, fmtRelative } from '../core.js';
 
-import { createLocalVoice } from '../voice.js';
+import { createLocalVoice, speakerSettings } from '../voice.js';
 import { createAssistantCrm } from './assistant-crm.js';
 
 const LANGUAGE_KEY = 'rp.askLanguage';
@@ -38,6 +38,23 @@ export function createAssistant() {
   const readBtn = audioButton('speaker', speakerLabel, 'ask-speaker-status', () => voice.togglePlayback(lastReply));
   const audioActions = h('div', { class: 'voice-actions' }, voiceBtn, readBtn);
   const help = h('details', { class: 'voice-help' });
+  const getSpeaker = () => speakerSettings(localStorage.getItem('rp.speakerMode'), localStorage.getItem('rp.speakerVolume'));
+  function speakerControls() {
+    const { mode, volume } = getSpeaker();
+    const select = h('select', { class: 'select', id: 'ask-speaker-mode', onchange: () => localStorage.setItem('rp.speakerMode', select.value) },
+      ...[['auto', t('Auto (Studio if installed)', 'स्वतः (इंस्टॉल होने पर स्टूडियो)')], ['studio', t('Studio · neural voice', 'स्टूडियो · न्यूरल आवाज़')],
+        ['standard', t('Standard · faster', 'स्टैंडर्ड · तेज़')], ['device', t('Local device voice', 'डिवाइस की स्थानीय आवाज़')]]
+        .map(([value, label]) => h('option', { value }, label)));
+    select.value = mode;
+    const pct = Math.round(volume * 100), amount = h('output', { for: 'ask-speaker-volume' }, pct + '%');
+    const slider = h('input', { type: 'range', id: 'ask-speaker-volume', min: '0', max: '200', step: '1', oninput() {
+      localStorage.setItem('rp.speakerVolume', slider.value); amount.textContent = slider.value + '%';
+      slider.setAttribute('aria-valuetext', amount.textContent);
+    } });
+    slider.value = String(pct); slider.setAttribute('aria-valuetext', pct + '%');
+    return h('div', { class: 'speaker-settings' }, h('label', { for: select.id }, t('Voice', 'आवाज़')), select,
+      h('label', { for: slider.id }, t('Volume', 'वॉल्यूम')), h('div', { class: 'speaker-volume' }, slider, amount));
+  }
   let mic = { active: false, action: 'start' }, playing = false;
   function renderAudioButtons() {
     // Update the captions, not the buttons/icons: keep keyboard focus on Stop.
@@ -53,14 +70,15 @@ export function createAssistant() {
   function renderVoiceLabels() {
     languageButtons.forEach((b) => b.setAttribute('aria-pressed', String(language === b.getAttribute('lang'))));
     renderAudioButtons();
-    mount(help, h('summary', null, t('Voice setup and device dictation', 'आवाज़ की सेटिंग और डिक्टेशन')),
+    mount(help, h('summary', null, t('Speaker settings and voice setup', 'स्पीकर सेटिंग और वॉइस सेटअप')), speakerControls(),
+      h('p', null, t('Changes apply to the next test or reply. Above 100% boosts Studio and Standard; device voices use system volume. For Studio, double-click install-studio-voices-windows.bat in the app folder or run npm.cmd run voice:studio (about 100 MB). Refresh Ask, then test the speaker.', 'सेटिंग अगले परीक्षण या जवाब पर लागू होगी। 100% से ऊपर का बूस्ट स्टूडियो और स्टैंडर्ड के लिए है। डिवाइस की आवाज़ सिस्टम वॉल्यूम पर निर्भर है। स्टूडियो के लिए ऐप फ़ोल्डर में install-studio-voices-windows.bat पर डबल-क्लिक करें या npm.cmd run voice:studio चलाएँ (लगभग 100 MB)। ऐप रीफ़्रेश करके स्पीकर जाँचें।')),
       window.self !== window.top ? h('a', { href: location.href, target: '_blank', rel: 'noopener noreferrer' }, t('Open the app in its own tab', 'ऐप को अलग टैब में खोलें')) : null,
-      h('p', null, t('Missing a browser pack or want an Indian accent? In the app folder, double-click setup-voice-windows.bat. It downloads Indian English and Hindi listening and speaking packs once (about 155 MB).', 'ब्राउज़र में हिन्दी पैक नहीं है? ऐप फ़ोल्डर में setup-voice-windows.bat पर डबल-क्लिक करें। यह हिन्दी और भारतीय अंग्रेज़ी में सुनने और बोलने के पैक एक बार डाउनलोड करता है (लगभग 155 MB)।')),
+      h('p', null, t('For the offline microphone and faster Standard voices, run npm.cmd run voice:setup in the app folder, or use setup-voice-windows.bat (about 155 MB).', 'ऑफ़लाइन माइक और तेज़ स्टैंडर्ड आवाज़ों के लिए ऐप फ़ोल्डर में npm.cmd run voice:setup चलाएँ या setup-voice-windows.bat का उपयोग करें (लगभग 155 MB)।')),
       h('p', null, t('Open Ask in its own tab on localhost or HTTPS in current desktop Chrome or Edge. Select English or हिन्दी, then Test speaker or Start voice mode. Allow the microphone, wait for “Listening”, speak, then pause. Audio stays in this browser.', 'डेस्कटॉप Chrome या Edge के अलग टैब में localhost या HTTPS पर ऐप खोलें। हिन्दी चुनें, फिर “स्पीकर जाँचें” या “बोलना शुरू करें” दबाएँ। माइक की अनुमति दें। “सुन रहे हैं” दिखने पर सवाल पूछें और थोड़ा रुकें। आवाज़ इसी ब्राउज़र में रहती है।')),
       h('p', null, t('No microphone? Type below and press Enter. On supported Windows 11 PCs you can also dictate English into the box using Voice access.', 'माइक नहीं है? नीचे हिन्दी में लिखकर एंटर दबाएँ। स्पीकर जाँचने के लिए माइक की ज़रूरत नहीं है।')),
       h('button', { class: 'btn btn-xs', onclick: () => el.querySelector('.assistant-input')?.focus() }, t('Focus message box', 'संदेश बॉक्स चुनें')));
   }
-  const voice = createLocalVoice({ language, onCommand: send,
+  const voice = createLocalVoice({ language, getSpeaker, onCommand: send,
     onState(state) {
       mic = state; playing = false; voiceText.textContent = state.text; playbackText.textContent = '';
       renderAudioButtons();

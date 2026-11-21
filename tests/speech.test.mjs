@@ -1,11 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, writeFile, truncate, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { install } from '../voice/setup.js';
-import { createLocalVoice } from '../public/js/voice.js';
+import models from '../voice/assets.js';
+import express from 'express';
+import { speechAssets } from '../server/speech-assets.js';
+import { createLocalVoice, speakerSettings } from '../public/js/voice.js';
+import { levelSpeech } from '../public/js/speech/level.js';
+import { spokenText } from '../public/js/speech/studio-text.js';
+import { phrases } from '../public/js/speech/phrases.js';
+import { offlineSpeech } from '../public/js/speech/offline.js';
 import { openOfflineInput } from '../public/js/speech/offline-input.js';
 
 function replace(t, obj, key, value) {
@@ -125,4 +132,104 @@ test('microphone permission policy or an insecure page blocks both recognition p
   const voice = createLocalVoice({ offline, onCommand: assert.fail, onState: (s) => states.push(s) });
   await voice.toggle(); assert.match(states.at(-1).text, /localhost/); window.isSecureContext = true;
   await voice.toggle(); assert.match(states.at(-1).text, /permissions policy/); assert.equal(states.at(-1).active, false);
+});
+
+const peak = (pcm) => pcm.reduce((p, x) => Math.max(p, Math.abs(x)), 0);
+test('speech leveling raises quiet phrases, preserves silence, respects volume and leaves headroom even at 200%', () => {
+  const raw = Float32Array.from({ length: 4800 }, (_, i) => i < 480 || i > 4200 ? 0 : 0.02 * Math.sin(i / 4));
+  const render = (vol) => { const pcm = raw.slice(); levelSpeech(pcm, 24000, vol); return pcm; };
+  assert.ok(peak(render(1)) > 3.9 * peak(raw));
+  assert.equal(peak(render(0.5)), peak(render(1)) / 2); assert.equal(peak(render(0)), 0);
+  assert.ok(peak(render(2)) > 1.9 * peak(render(1))); assert.equal(peak(render(2).subarray(0, 480)), 0);
+  raw[1000] = 1; raw[2000] = -1; const strong = render(2); assert.ok(peak(strong) <= 0.891 && peak(strong) > 0.85);
+  assert.equal(strong[0], 0); assert.equal(strong.at(-1), 0);
+  raw.fill(0); assert.equal(peak(render(2)), 0); raw.fill(1e-7); assert.equal(peak(render(1)), peak(raw));
+  raw[150] = NaN; assert.throws(() => render(1));
+});
+
+test('Studio preserves names, acronyms, leading zeroes, counts and decimals before splitting a long report', () => {
+  const hi = (s) => spokenText(s, 'hi', (w) => { assert.equal(w, 'Giga'); return 'गिग'; });
+  assert.match(hi('Giga One में ५ कर्मचारी।'), /गिगा वन में पाँच कर्मचारी/);
+  assert.match(hi('CRM BL-007: ₹१,२३,४०५.५०'), /सी आर एम बी एल- शून्य शून्य सात.*एक लाख तेईस हज़ार चार सौ पाँच दशमलव पाँच शून्य रुपये/);
+  assert.match(hi('1,234,567'), /बारह लाख चौंतीस हज़ार पाँच सौ सड़सठ/);
+  const en = spokenText('प्रिया शर्मा: QA-005, 2.05%', 'en'); assert.match(en, /priya sharma: Q A- zero zero five.*2\.05%/);
+  const long = (en + ' हिन्दी। ').repeat(12).trim(); const chunks = phrases(long, 60);
+  assert.ok(chunks.length > 1 && chunks.every((p) => p.length <= 60)); assert.equal(chunks.join(' '), long.replace(/\s+/g, ' '));
+  assert.deepEqual(phrases('  ', 40), []); assert.equal(phrases('x'.repeat(403), 100).join('').length, 403);
+});
+
+test('speaker preference is bounded and independent of language or microphone state', () => {
+  assert.deepEqual(speakerSettings('broken', 'NaN'), { mode: 'auto', volume: 1 });
+  assert.deepEqual(speakerSettings(null, null), { mode: 'auto', volume: 1 });
+  assert.deepEqual(speakerSettings('studio', '-1'), { mode: 'studio', volume: 0 });
+  assert.deepEqual(speakerSettings('device', '999'), { mode: 'device', volume: 2 });
+});
+
+test('Auto prefers Studio; init failure can fall back, never after audible speech or Stop; explicit choices are honored', async (t) => {
+  const calls = [], states = []; let mode = 'auto', packs = { studio: '/studio-hi', output: '/standard-hi' };
+  replace(t, globalThis, 'window', {});
+  const offline = { canPlay: () => true, packs: async (l) => { assert.equal(l, 'hi'); return packs; },
+    openInput: assert.fail, play(model, text, done, opts) { calls.push({ model, done, opts }); return () => {}; } };
+  const voice = createLocalVoice({ language: 'hi', offline, onPlayback: (s) => states.push(s), onState() {}, onCommand: assert.fail,
+    getSpeaker: () => speakerSettings(mode, '150') });
+  voice.togglePlayback('जवाब'); await tick(); const first = calls[0]; assert.equal(first.model, packs.studio);
+  const { onStart, ...opts } = first.opts; assert.deepEqual(opts, { engine: 'studio', language: 'hi', volume: 1.5 });
+  assert.equal(typeof onStart, 'function');
+  first.done(false, false); await tick(); assert.equal(calls[1].model, packs.output); calls[1].done(true, true);
+  assert.match(states.at(-1).text, /स्टूडियो शुरू नहीं हुआ.*स्टैंडर्ड/s);
+  voice.togglePlayback('फिर'); await tick(); calls.at(-1).done(false, true); await tick(); assert.equal(calls.length, 3);
+  voice.togglePlayback('फिर'); await tick(); calls.at(-1).done(false, false); voice.stop(); await tick(); assert.equal(calls.length, 4);
+  mode = 'standard'; voice.togglePlayback('फिर'); await tick(); assert.equal(calls.at(-1).model, packs.output); voice.stop();
+  mode = 'studio'; packs = { output: '/standard-hi' }; voice.togglePlayback('फिर'); await tick();
+  assert.equal(calls.length, 5); assert.match(states.at(-1).text, /voice:studio/); assert.equal(states.at(-1).help, true);
+});
+
+test('Device choice bypasses bundled packs, uses only a matching local voice and caps its API volume at 1', (t) => {
+  const hi = { name: 'Local Hindi', lang: 'hi-IN', localService: true }, utterances = [];
+  replace(t, globalThis, 'window', { SpeechSynthesisUtterance: class {}, speechSynthesis: {
+    getVoices: () => [{ lang: 'hi-IN', localService: false }, hi], speak(u) { utterances.push(u); u.onend(); } } });
+  let pct = 40;
+  const voice = createLocalVoice({ language: 'hi', onState() {}, onCommand: assert.fail, getSpeaker: () => speakerSettings('device', pct),
+    offline: { canPlay: () => true, packs: assert.fail, play: assert.fail } });
+  voice.togglePlayback('नमस्ते'); assert.equal(utterances[0].voice, hi); assert.equal(utterances[0].volume, 0.4);
+  pct = 180; voice.togglePlayback('फिर'); assert.equal(utterances[1].volume, 1);
+  pct = 0; voice.togglePlayback('फिर'); assert.equal(utterances.length, 2); assert.equal(voice.isActive(), false);
+});
+
+test('offline playback primes only one next phrase, and Stop discards both pending PCM and late worker events', async (t) => {
+  const sources = [], messages = []; let worker, closed = 0, ended = 0;
+  replace(t, globalThis, 'Worker', class { constructor() { worker = this; } postMessage(m) { messages.push(m); } terminate() { this.ended = true; } });
+  replace(t, globalThis, 'AudioContext', class {
+    async resume() {} async close() { closed++; }
+    createBuffer(_, n, sampleRate) { const pcm = new Float32Array(n); return { getChannelData: () => pcm, copyToChannel: (s) => pcm.set(s), sampleRate }; }
+    createBufferSource() { const s = { connect() {}, disconnect() {}, start() { sources.push(s); }, stop() { this.stopped = true; } }; return s; }
+  });
+  const flush = (more) => worker.onmessage({ data: { more, hz: 24000, pcm: new Float32Array(800).fill(0.04) } });
+  const play = () => offlineSpeech.play('studio', 'three phrases', () => ended++, { engine: 'studio', volume: 2 });
+  const stop = play(); await flush(true); await flush(true); assert.equal(sources.length, 1); assert.equal(messages.length, 2);
+  assert.deepEqual(messages[1], { next: true }); sources[0].onended(); assert.equal(sources.length, 2); assert.equal(messages.length, 3);
+  stop(); await flush(false); assert.ok(sources[1].stopped && worker.ended); assert.equal(sources.length, 2); assert.equal(closed, 1); assert.equal(ended, 0);
+  play(); await flush(true); sources.at(-1).onended(); assert.equal(ended, 0, 'wait for slow next inference');
+  await flush(false); sources.at(-1).onended(); assert.equal(ended, 1); assert.equal(closed, 2);
+});
+
+test('Studio status requires its complete runtime and selected-language model, independently of mic and Standard', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'voice-status-'));
+  const app = express(); app.use('/speech', speechAssets(root)); const server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  t.after(async () => { await new Promise((r) => server.close(r)); await rm(root, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${server.address().port}/speech/`;
+  const status = async () => (await fetch(base + 'status')).json();
+  assert.deepEqual(await status(), { en: {}, hi: {} });
+  const a = models.find((x) => x.kind === 'studio' && x.lang === 'hi');
+  for (const rel of ['.cache/models/' + a.file, ...['g2p.js', 'studio_g2p.js', 'ipa_g2p.js'].map((f) => 'studio/node_modules/ninada/src/' + f),
+    ...['ort.wasm.min.mjs', 'ort-wasm-simd-threaded.mjs'].map((f) => 'studio/node_modules/onnxruntime-web/dist/' + f)]) {
+    const file = path.join(root, rel); await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, '');
+  }
+  const model = path.join(root, '.cache/models', a.file);
+  await truncate(model, a.bytes); assert.deepEqual(await status(), { en: {}, hi: {} }, 'missing WASM');
+  await writeFile(path.join(root, 'studio/node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm'), 'fixture');
+  assert.deepEqual(await status(), { en: {}, hi: { studio: '/speech/models/' + a.file } });
+  assert.equal((await fetch(base + 'models/' + a.file, { method: 'HEAD' })).status, 200);
+  await truncate(model, a.bytes - 1); assert.deepEqual(await status(), { en: {}, hi: {} }, 'wrong model size');
 });

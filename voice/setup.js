@@ -33,15 +33,20 @@ async function install(asset, dir, download = fetch) {
   } finally { await rm(temp, { force: true }); }
 }
 async function main() {
-  const lang = process.argv[2];
-  if (lang && !['en', 'hi'].includes(lang)) throw new Error('Use npm run voice:setup, optionally followed by -- en or -- hi');
+  const args = process.argv.slice(2);
+  const studio = args[0] === '--studio';
+  if (studio) args.shift();
+  const [lang] = args;
+  if (args.length > 1 || (lang && !['en', 'hi'].includes(lang))) throw new Error('Use npm run voice:setup or npm run voice:studio, optionally followed by -- en or -- hi');
   const dir = path.join(__dirname, '.cache', 'models');
   await mkdir(dir, { recursive: true });
-  for (const asset of assets.filter((a) => !lang || a.lang === lang)) {
+  for (const asset of assets.filter((a) => (a.kind === 'studio') === studio && (!lang || a.lang === lang))) {
     console.log(`Checking ${asset.file} (${Math.ceil(asset.bytes / 1e6)} MB)…`);
     console.log('  ' + await install(asset, dir));
   }
-  console.log('Ready. Open Ask on localhost, choose English or हिन्दी, and select Start voice mode or Test speaker.');
+  console.log(studio
+    ? 'Ready. Refresh Ask on localhost, choose English or हिन्दी, and select Test speaker. Auto uses Studio when installed.'
+    : 'Ready. Open Ask on localhost, choose English or हिन्दी, and select Start voice mode or Test speaker.');
 }
 if (require.main === module) main().catch((err) => {
   console.error(`Voice setup failed: ${err.cause?.message || err.message}. Check your connection and disk space, then rerun the command. No workbook data was changed.`);
