@@ -14,9 +14,9 @@ Everything below was verified against the code in this repository, not assumed.
 | Does my data leave my computer? | **No.** Not at runtime, not ever, once installed. |
 | Is there a cloud database? | No. A single SQLite file on your disk. |
 | Any analytics, telemetry, crash reporting? | None. |
-| Any third-party scripts, CDNs, web fonts? | None. Fonts are bundled locally. |
+| Any scripts or fonts loaded from a third-party site? | No. Fonts and optional speech runtimes are served locally. |
 | Can other people on my Wi-Fi see it? | No, by default. The server binds to `127.0.0.1` only. |
-| What needs internet? | `npm install` once (downloads the two libraries). Nothing after that. |
+| What needs internet? | Initial dependency install and, if chosen, one-time voice setup (about 155 MB for both languages) or a browser-managed language-pack download. Normal use needs no internet. |
 | Where is the actual data? | One file: `data/resource_planning.db` |
 
 ---
@@ -27,7 +27,7 @@ Everything below was verified against the code in this repository, not assumed.
 alarming, so here is what it really is:
 
 * **2 direct dependencies** — Express (HTTP routing) and ExcelJS (reads/writes
-  `.xlsx`). These are the only libraries this project asked for.
+  `.xlsx`). The default app needs no speech library. Optional voice runtimes have a separate `voice/package-lock.json` and are installed with lifecycle scripts disabled.
 * **240 transitive packages** — the dependencies of those two, and of their
   dependencies. They are ordinary JavaScript utility libraries.
 
@@ -62,9 +62,11 @@ worth re-checking with `npm audit` before each release.
 | `data/resource_planning.db-shm` | Shared-memory index file, transient | Yes |
 | `exports/hr-master-12000.xlsx` | Generated sample workbook (demo generator only) | Yes |
 | `node_modules/` | Libraries | No |
+| `voice/node_modules/`, `voice/.cache/models/` | Optional browser speech runtimes and checksummed model data | No |
 
-Nothing is written outside the project folder. No temp files with data, no
-`AppData` writes, no registry changes, no Windows services, no scheduled tasks.
+The server and voice setup keep app files in the project folder; there are no
+registry changes, Windows services or scheduled tasks. The browser maintains
+its usual profile and site storage, including the optional recognition-model cache.
 
 To move or back up the whole installation: copy the project folder. To move only
 the data: copy `data/resource_planning.db` (stop the server first so the WAL is
@@ -84,6 +86,14 @@ been fixed: the font files are now vendored in `public/fonts/` (100 KB, SIL Open
 Font License) and served from the app itself. Verified: the served HTML contains
 **zero** `https://` references.
 
+**Optional speech setup is not server runtime.** Only the operator's `npm run
+voice:setup` (or confirmed Windows launcher) downloads pinned runtime packages
+and speech models from npm/GitHub. The setup command never reads SQLite or audio.
+The server has no speech install or audio-upload endpoint; `/speech/` serves an allowlist of
+local runtime and model files. In the browser, model data may be cached in site
+storage/IndexedDB. Microphone samples, synthesized WAVs and the synthesizer's
+virtual files are not saved by Ask.
+
 ### Binding address — the most important setting
 
 Default: `HOST=127.0.0.1` → **only this computer can connect**. Your colleague
@@ -101,7 +111,7 @@ login is the only thing protecting the data.
 
 ### Content-Security-Policy
 
-By default, every response carries the following CSP. The hosted preview
+The app page and ordinary resources carry the following CSP. The hosted preview
 (`ARENA_PREVIEW=1`) additionally allows Arena to frame the app; the Windows
 start commands do not enable this exception.
 
@@ -110,6 +120,13 @@ default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 img-src 'self' data:; font-src 'self'; connect-src 'self';
 form-action 'self'; frame-ancestors 'self'; base-uri 'none'; object-src 'none'
 ```
+
+Only two same-origin **worker script responses** have different `script-src`
+policies. The self-contained Vosk worker requires `'unsafe-eval'` for Emscripten
+binding generation and WASM; its policy permits **no script imports**. The Flite
+worker allows `'self' 'wasm-unsafe-eval'` for its local WASI shim and WASM. Both
+forbid child workers and retain `connect-src 'self'`. Neither exception applies
+to the app document. No blob/CDN script or cross-origin speech endpoint is allowed.
 
 Practical effect: even if malicious content ended up in a field, it could not
 load a remote script, phone home, or exfiltrate data to another domain. Also set:
@@ -158,7 +175,7 @@ Node process, not a language model and not a cloud service.
 | Concern | Reality |
 |---|---|
 | Does it call an AI provider? | No. There is no API key, no SDK, no HTTP client for it. `server/agent.js` is plain string matching plus SQL against the local database. |
-| Does it send speech to a provider? | No. Both English and Hindi require `processLocally` for app microphone use. Ask probes only the selected language’s locales, one at a time. Pack installation is a separate user-initiated browser download. Read-aloud accepts only matching `localService` voices. Neither path falls back to cloud speech or to the other language. Only text goes to the app server, never audio. Device dictation in the text box is controlled by the OS, not the app. |
+| Does it send speech to a provider? | No. The optional Indian English/Hindi packs run Vosk and Flite in browser workers. Only final transcribed text goes through the existing Ask command path; microphone samples never leave the browser. During command processing and read-back the app is not recording. Without optional files, native recognition requires `processLocally`, and native read-aloud requires a matching `localService` voice. No cloud fallback. OS dictation is controlled by the OS. |
 | What is remembered when I switch languages? | Only the `en`/`hi` preference is stored in browser local storage for this feature, not audio, transcripts or CRM drafts. Switching stops app voice and drops late microphone/read-aloud events. An open draft stays in memory and must be reviewed again before confirmation. |
 | Can it change records on its own? | No. Chat change requests are proposals for administrator approval. Explicitly opening the CRM form is a separate, authenticated editing workflow: dictation drafts values in memory. A separate review and confirmation submits the displayed changes with the current revision through the existing employee update path. |
 | Can it leak another project's data? | The assistant resolves only Giga Project Names from active placements in the caller’s access. Counts, lists, proposals and CRM all intersect the exact workbook name with assignment ACLs. A missing or ambiguous name never enables a broader search. CRM submit rechecks the placement, CRM/edit grants, editable fields and revision. |

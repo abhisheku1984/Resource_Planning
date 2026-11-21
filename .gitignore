@@ -3,3 +3,6 @@ data/
 *.log
 .DS_Store
 tests/screenshots/
+
+# Optional, downloaded (not user data)
+/voice/.cache/

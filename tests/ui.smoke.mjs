@@ -1036,7 +1036,7 @@ test('voice does not fall back to a cloud-only recognizer or require a mic for t
   window.SpeechRecognition = class { start() { started = true; } };
   try {
     const voice = createLocalVoice({ onCommand: () => assert.fail('must not capture audio'), onState: (s) => { state = s; } });
-    await voice.toggle(); assert.equal(started, false); assert.equal(state.active, false); assert.match(state.text, /type instead/);
+    await voice.toggle(); assert.equal(started, false); assert.equal(state.active, false); assert.match(state.text, /npm run voice:setup/);
   } finally { delete window.SpeechRecognition; delete window.isSecureContext; }
 });
 
@@ -1087,7 +1087,7 @@ test('standalone speaker before a reply: visible with setup closed, stoppable, n
   let micChecks = 0, cancelled = 0; const spoken = [], requests = [];
   replaceForTest(t, window, 'SpeechRecognition', class { constructor() { micChecks++; } });
   replaceForTest(t, window, 'SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
-  replaceForTest(t, window, 'speechSynthesis', { getVoices: () => [{ lang: 'en-US', localService: false }, { lang: 'hi-IN', localService: true }, { lang: 'en-IN', localService: true }],
+  replaceForTest(t, window, 'speechSynthesis', { getVoices: () => [{ lang: 'en-US', localService: true }, { lang: 'en-IN', localService: false }, { lang: 'hi-IN', localService: true }, { lang: 'en-IN', localService: true }],
     speak(u) { spoken.push(u); }, cancel() { cancelled++; } });
   t.mock.method(globalThis, 'fetch', async (url) => { requests.push(url); return jsonResponse({ projectNames: ['Summer Project'] }); });
   core.state.user = { isAdmin: false };
@@ -1118,7 +1118,7 @@ test('both browser audio APIs absent: mic and speaker explain the limitation; ty
   });
   const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
   button(a.el, 'Start voice mode').click(); await settleClicks(); button(a.el, 'Test speaker').click();
-  assert.match(a.el.querySelector('#ask-mic-status').textContent, /type instead/);
+  assert.match(a.el.querySelector('#ask-mic-status').textContent, /npm run voice:setup/);
   assert.match(a.el.querySelector('#ask-speaker-status').textContent, /No local English read-aloud voice/); assert.deepEqual(messages, []);
   const input = a.el.querySelector('.assistant-input'); input.value = 'How many people?'; input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
   assert.deepEqual(messages, [{ message: 'How many people?', projectName: 'Summer Project', language: 'en' }]);
@@ -1141,7 +1141,8 @@ test('unavailable English pack: show Windows dictation steps, accept explicitly 
   const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
   button(a.el, 'Start voice mode').click(); await settleClicks();
   const help = a.el.querySelector('.voice-help');
-  assert.ok(help.open && !help.classList.contains('hidden')); assert.match(flatten(help).join(' '), /Windows 11.*Voice access/);
+  assert.ok(help.open && !help.classList.contains('hidden'));
+  assert.match(flatten(help).join(' '), /setup-voice-windows\.bat/); assert.match(flatten(help).join(' '), /Windows 11.*Voice access/);
   assert.match(flatten(a.el).join(' '), /No local English speech pack is available/);
   button(help, 'Focus message box').click(); const input = document.activeElement; assert.equal(input, a.el.querySelector('.assistant-input'));
   input.value = 'How many people?'; input.dispatchEvent({ type: 'input' }); assert.equal(messages.length, 0);
@@ -1195,7 +1196,7 @@ test('switching voice language supersedes a pending pack check/install and never
   const { createLocalVoice } = await import('../public/js/voice.js');
   let release, finishInstall, ready = false;
   const installed = [];
-  const { starts, states, options } = setupPacks(t, (tag) => tag === 'en-US' ? new Promise((r) => { release = r; })
+  const { starts, states, options } = setupPacks(t, (tag) => tag === 'en-IN' ? new Promise((r) => { release = r; })
     : tag === 'hi' && ready ? 'available' : 'downloadable', (request) => { installed.push(request); return new Promise((r) => { finishInstall = r; }); });
   const voice = createLocalVoice(options);
   const oldCheck = voice.toggle(); voice.setLanguage('hi'); release('available'); await oldCheck;
