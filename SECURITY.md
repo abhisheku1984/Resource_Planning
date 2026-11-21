@@ -166,18 +166,27 @@ These are the controls actually implemented (each has a test):
 ## 5a. The in-app assistant
 
 The assistant raises an obvious question — "does this thing send our data
-somewhere?" Answer: **no.** It is a rules-based parser running inside the same
-Node process, not a language model and not a cloud service.
+somewhere?" Answer: **no.** Intent and field matching run in the app (Node and the browser tab), not in a cloud service.
 
 | Concern | Reality |
 |---|---|
 | Does it call an AI provider? | No. There is no API key, no SDK, no HTTP client for it. `server/agent.js` is plain string matching plus SQL against the local database. |
 | Does it send speech to a provider? | No. The optional Indian English/Hindi packs run Vosk and either Flite or the Studio neural model in browser workers. Partial words are displayed transiently in the tab. Only final transcribed text goes through the existing Ask command path; microphone samples never leave the browser. During command processing and read-back the app is not recording. Without optional files, native recognition requires `processLocally`, and native read-aloud requires a matching `localService` voice. No cloud fallback. OS dictation is controlled by the OS. |
 | What is remembered when I switch languages? | Only the language, speaker mode and volume preferences are stored in browser local storage for this feature, not audio, transcripts or CRM drafts. Switching stops app voice and drops late microphone/read-aloud events. An open draft stays in memory and must be reviewed again before confirmation. |
-| Can it change records on its own? | No. Chat change requests are proposals for administrator approval. Explicitly opening the CRM form is a separate, authenticated editing workflow: dictation drafts values in memory. A separate review and confirmation submits the displayed changes with the current revision through the existing employee update path. |
+| Can it change records on its own? | No. Bench/block requests in general Ask are proposals for administrator approval. A guided employee update fills an authenticated CRM form. Its review route returns a server-validated before/after diff, not a write. Only a separate confirmation uses the employee edit transaction and audit trail. The ordinary Update panel retains its existing autosave behavior. |
 | Can it leak another project's data? | The assistant resolves only Giga Project Names from active placements in the caller’s access. Counts, lists, proposals and CRM all intersect the exact workbook name with assignment ACLs. A missing or ambiguous name never enables a broader search. CRM submit rechecks the placement, CRM/edit grants, editable fields and revision. |
-| Does it weaken the audit trail? | It strengthens it. Proposals and approvals are both logged in `audit_log` with the requester and the approver named. |
+| Does it weaken the audit trail? | Proposals and approvals are logged with the requester and approver. Confirmed guided edits log the authenticated editor, field, old/new values and the reason `Confirmed guided CRM update`. The review does not log dictated draft values as edits. |
 | What if it mis-parses? | The damage is bounded: a wrong proposal needs a human to approve it, and approval is refused if the target field or workbook project changed (`stale`). In the CRM form a dictated value must be reviewed and separately confirmed by the editor. |
+
+A guided review is bound to the session, exact Giga project, employee/placement,
+revision and canonical field diff. The server keeps only digests and an expiry
+in a bounded in-memory map (latest ticket per session, five minutes, single
+use). Tokens are not put in browser storage. Editing the draft, switching
+language, hiding the tab or closing Ask drops the browser's confirmation;
+starting another review supersedes the previous ticket on the server. Confirm
+checks the current scope, form layout, values and revision again. Restarting
+the server invalidates outstanding reviews. This is a safeguard for the guided
+workflow, not a restriction on independently authorized manual edit endpoints.
 
 One honest limitation: because it is pattern matching, it will not understand
 unusual phrasing. It says so plainly ("I did not understand that yet") instead of

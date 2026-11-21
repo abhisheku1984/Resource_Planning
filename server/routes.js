@@ -9,6 +9,7 @@ const query = require('./query');
 const agent = require('./agent');
 const { checkCrmSubmit } = require('./assistant-crm');
 const agentstore = require('./agentstore');
+const guideReview = require('./guide-review');
 const excel = require('./excel');
 const { record, auditScope, recentActivity } = require('./audit');
 
@@ -407,22 +408,24 @@ router.get('/employees/facets', requireAuth, wrap((req, res) => {
  * single transaction, then returns the authoritative row so the table and the
  * export both reflect it immediately.
  */
-router.post('/employees/:id/submit', requireAuth, wrap((req, res) => {
+function submitEmployee(req, res, guided = false) {
   if (!auth.can(req.user, 'employee.edit') && !req.user.isAdmin) {
     return res.status(403).json({ error: 'You do not have permission to update employee records.' });
   }
   const id = Number(req.params.id);
-  if (Object.hasOwn(req.body, 'crmProjectName')) checkCrmSubmit(req.user, id, req.body);
+  const body = req.body || {};
+  const changes = guided ? guideReview.consume(req.user, req.token, id, body) : body.changes || {};
+  if (!guided && Object.hasOwn(body, 'crmProjectName')) checkCrmSubmit(req.user, id, body);
   const before = query.getAssignment(req.user, id, 'can_edit');
   if (!before) return res.status(404).json({ error: 'Employee record not found.' });
 
-  emp.updateAssignment(req.user, id, req.body.changes || {}, {
-    expectedRev: req.body.rev || null,
-    reason: req.body.reason || 'Supervisor submit',
+  emp.updateAssignment(req.user, id, changes, {
+    expectedRev: body.rev || null,
+    reason: guided ? 'Confirmed guided CRM update' : body.reason || 'Supervisor submit',
   });
   const after = query.getAssignment(req.user, id);
 
-  const changedKeys = Object.keys(req.body.changes || {}).filter((k) => {
+  const changedKeys = Object.keys(changes).filter((k) => {
     const a = before.values[k];
     const b = after.values[k];
     return String(a ?? '') !== String(b ?? '');
@@ -436,7 +439,12 @@ router.post('/employees/:id/submit', requireAuth, wrap((req, res) => {
       ? `Saved ${changedKeys.length} field${changedKeys.length === 1 ? '' : 's'}. The next Excel export will include these values.`
       : 'No changes to save.',
   });
+}
+router.post('/employees/:id/submit', requireAuth, wrap((req, res) => submitEmployee(req, res)));
+router.post('/agent/crm/:id/review', requireAuth, requireCap('employee.edit'), wrap((req, res) => {
+  res.json(guideReview.issue(req.user, req.token, Number(req.params.id), req.body || {}));
 }));
+router.post('/agent/crm/:id/confirm', requireAuth, requireCap('employee.edit'), wrap((req, res) => submitEmployee(req, res, true)));
 
 router.get('/employees/:id', requireAuth, wrap((req, res) => {
   const data = query.getAssignment(req.user, Number(req.params.id));
@@ -571,7 +579,13 @@ router.post('/agent/ask', requireAuth, wrap((req, res) => {
   const language = req.body?.language ?? 'en';
   if (!['en', 'hi'].includes(language)) return res.status(422).json({ error: 'Choose English or Hindi.' });
   if (message.length > 1000) return res.status(422).json({ error: language === 'hi' ? 'सवाल 1,000 अक्षरों तक रखें।' : 'Keep your question under 1,000 characters.' });
-  const plan = agent.understand(req.user, message, req.body?.projectName, language);
+  const choice = req.body?.guideChoice;
+  if (choice != null && (typeof choice !== 'object' || Array.isArray(choice) ||
+      typeof choice.person !== 'string' || choice.person.length > 200 ||
+      (choice.placementId != null && (!Number.isSafeInteger(choice.placementId) || choice.placementId < 1)))) {
+    return res.status(422).json({ error: 'Invalid employee or placement choice.' });
+  }
+  const plan = agent.understand(req.user, message, req.body?.projectName, language, choice, req.body?.projectPicked === true);
   let proposal = null;
   if (plan.proposal) {
     // raising a proposal needs the ability to edit at all; approving it is admin-only
@@ -586,6 +600,9 @@ router.post('/agent/ask', requireAuth, wrap((req, res) => {
     understood: !!plan.understood,
     projectName: plan.projectName || null,
     crm: plan.crm || null,
+    ...(plan.guide && { guide: plan.guide }),
+    ...(plan.ambiguousProject && { ambiguousProject: true }),
+    ...(plan.source && { source: plan.source }),
     kind: plan.kind || 'answer',
     table: plan.table || null,
     data: plan.data || null,

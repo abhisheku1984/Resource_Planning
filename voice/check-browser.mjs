@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
 
 if (!process.env.CHROME_PATH) throw new Error('Set CHROME_PATH to a desktop Chromium/Chrome/Edge executable');
+const guided = process.argv.includes('--guided');
 const studio = process.argv.includes('--studio'), engine = studio ? 'studio' : 'standard';
 const require = createRequire(import.meta.url);
 const dir = await mkdtemp(path.join(tmpdir(), 'ask-audio-'));
@@ -90,29 +91,52 @@ async function turn(lang, file) {
       await volume.press('End'); assert.equal(await volume.inputValue(), '200');
     } else await ask.locator('#ask-speaker-mode').selectOption('standard');
     await ask.locator('.voice-help summary').click();
-    // Cold mic: no speaker test, AudioContext warm-up or native language pack first.
+    // In guided mode enter the form first (typing is also an ordinary entry
+    // point), then use REAL recognition to fill a waiting note. No speaker
+    // test, warm-up, injected transcript, or automatic save.
+    const project = 'Giga One'; let target, original;
+    const note = () => require('../server/db').q.get(`SELECT v.value FROM assignment_values v JOIN fields f ON f.id=v.field_id
+      WHERE v.assignment_id=? AND f.key='detail_comments'`, target.id)?.value || '';
+    if (guided) {
+      target = require('../server/db').q.get(`SELECT g.assignment_id id, e.emp_code FROM giga_assignments g
+        JOIN employees e ON e.id=g.employee_id JOIN projects p ON p.id=g.project_id
+        WHERE g.project_name=? AND p.code='NEXUS' GROUP BY e.id HAVING count(*)=1 ORDER BY g.assignment_id LIMIT 1`, project);
+      original = note(); const input = ask.locator('.assistant-input');
+      await input.fill(l(`Update the interview note for ${target.emp_code}`, `${target.emp_code} की टिप्पणी अपडेट करें`)); await input.press('Enter');
+      await ask.getByText(l(/What should Detail Comments say/, /टिप्पणी में क्या दर्ज/)).waitFor();
+    }
     assert.deepEqual(await page.evaluate(() => [tracks.length, playbacks.length]), [0, 0]);
-    const [res] = await Promise.all([page.waitForResponse((r) => r.url() === base + '/api/agent/ask', { timeout: 60_000 }), click(l('Start voice mode', 'बोलना शुरू करें'))]);
+    const apiPath = guided ? `/api/agent/crm/${target.id}/review` : '/api/agent/ask';
+    const [res] = await Promise.all([page.waitForResponse((r) => r.url() === base + apiPath, { timeout: 60_000 }), click(l('Start voice mode', 'बोलना शुरू करें'))]);
     const request = res.request().postDataJSON(), answer = await res.json();
-    assert.equal(request.language, lang); assert.equal(request.projectName, 'Giga One'); assert.equal(answer.kind, 'count', JSON.stringify(request));
-    assert.equal(answer.projectName, request.projectName);
-    await page.waitForFunction(() => playbacks.length === 1 && tracks.length === 2, null, { timeout: 100_000 });
-    assert.deepEqual(await page.evaluate(() => playbacks[0]), ['ended']); await click(l('Stop voice', 'माइक बंद करें'));
+    if (guided) {
+      assert.equal(res.status(), 200); assert.ok(answer.ticket); assert.equal(request.crmProjectName, project);
+      assert.match(request.changes.detail_comments, l(/interview/i, /तैयार/u));
+      assert.equal(await ask.locator('[data-field-key="detail_comments"]').inputValue(), request.changes.detail_comments);
+      assert.equal(note(), original);
+    } else {
+      assert.equal(request.language, lang); assert.equal(request.projectName, project); assert.equal(answer.kind, 'count', JSON.stringify(request));
+      assert.equal(answer.projectName, request.projectName);
+    }
+    await page.waitForFunction(() => playbacks.length >= 1 && tracks.length === 2, null, { timeout: 100_000 });
+    const turnPlaybacks = await page.evaluate(() => playbacks.slice());
+    for (const captures of turnPlaybacks) assert.deepEqual(captures, ['ended']);
+    await click(l('Stop voice', 'माइक बंद करें'));
     assert.deepEqual(await page.evaluate(() => tracks.map((t) => t.readyState)), ['ended', 'ended']);
     await click(l('Close assistant', 'सहायक बंद करें')); await page.locator('.assistant-launch').first().click();
-    await click(l('Test speaker', 'स्पीकर जाँचें')); await page.waitForFunction(() => playbacks.length === 2, null, { timeout: 100_000 });
-    assert.deepEqual(await page.evaluate(() => playbacks[1]), ['ended', 'ended']); await click(l('Stop playback', 'सुनना रोकें'));
+    await click(l('Test speaker', 'स्पीकर जाँचें')); await page.waitForFunction((n) => playbacks.length > n, turnPlaybacks.length, { timeout: 100_000 });
+    assert.deepEqual(await page.evaluate(() => playbacks.at(-1)), ['ended', 'ended']); await click(l('Stop playback', 'सुनना रोकें'));
     for (const { hz, peak } of await page.evaluate(() => levels)) {
       if (studio) assert.equal(hz, 24000, 'no silent fallback to the standard pack');
       assert.ok(peak > 0.1 && peak <= 0.891, `unexpected playback peak ${peak}`);
     }
-    assert.deepEqual(external, []); assert.deepEqual(posts, ['/api/auth/login', '/api/agent/ask']); assert.deepEqual(errors, []);
-    console.log(`${lang}: “${request.message}” → “${answer.reply}” → spoken reply → mic resumed → stopped; standalone speaker did not open the mic`);
+    assert.deepEqual(external, []); assert.deepEqual(posts, ['/api/auth/login', '/api/agent/ask', ...(guided ? [apiPath] : [])]); assert.deepEqual(errors, []);
+    console.log(`${lang}: “${guided ? request.changes.detail_comments : request.message}” → “${guided ? 'visible draft + review; database unchanged' : answer.reply}” → spoken reply → mic resumed → stopped; standalone speaker did not open the mic`);
   } finally { await browser.close(); }
 }
 try {
   const packs = await (await fetch(base + '/speech/status')).json();
-  const cases = { en: 'How many people?', hi: 'कुल कितने कर्मचारी हैं?' };
+  const cases = guided ? { en: 'Ready for the interview', hi: 'साक्षात्कार के लिए तैयार' } : { en: 'How many people?', hi: 'कुल कितने कर्मचारी हैं?' };
   const browser = await launch();
   try {
     const page = await browser.newPage(); await page.goto(base);

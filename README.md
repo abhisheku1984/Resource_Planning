@@ -37,6 +37,10 @@ updates the schema on startup; **do not run `npm run demo` or `npm run seed`
 as part of an update**. Those commands replace data. The large demo is optional
 and intended only for disposable installations.
 
+### Try guided Ask on Windows without using your workforce database
+
+In the checkout containing the guided changes, run **`START-PREVIEW.cmd`** for a typed preview, or **`START-PREVIEW-WITH-VOICE.cmd`** to prepare the English/Hindi speech packs too. Once the server is running, open **<http://localhost:4110>**. Both launchers bind to loopback and use `data/guided-preview.db`, not the normal `data/resource_planning.db`. The first start creates synthetic records; no import or reset is needed. Sign in as the demo NEXUS supervisor below and [try a guided update](#try-a-guided-update). Press **Ctrl+C** to stop the preview.
+
 ### Demo logins
 
 | Role | Email | Password |
@@ -93,7 +97,7 @@ Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere.
 npm test          # integration + UI smoke tests
 ```
 
-## Ask: answers by workbook project name
+## Ask: project answers and guided employee updates
 
 Open **Ask** (or **Ctrl+K**). Say or select a **Giga Project Name** from your
 workbook. This is not the hierarchy project or its code. If several names are
@@ -113,6 +117,44 @@ permissions and live workbook membership are checked on every request.
 Counts, lists and breakdowns use live SQLite data, not an AI provider. Unknown
 names or unsupported filters do not produce estimates. A person with multiple
 matching placements counts once per bucket; distinct buckets can overlap.
+
+After a count, **Show their names** runs a fresh, permission-checked list with
+the same filter. Changing project drops that context. **How do approvals work?**
+and **How do I import a workbook?** give app instructions, not a database action.
+
+### Try a guided update
+
+Open **Ask → Update an employee** (or **कर्मचारी अपडेट करें**). You can also
+start with a goal, without opening a form or memorizing its field keys. Here is
+a conversation you can try in the **fresh demo** as Priya. In your workbook,
+use an employee ID and Giga Project Name from your own Directory instead.
+
+| You | What happens |
+|---|---|
+| `Update the interview note for EMP-01031` | Ask requests a workbook project if needed. Select **Giga One**. With more than one matching placement, say its placement number or click the matching placement chip; it will not guess. |
+| `Ready for a client interview` | Ask fills **Detail Comments** on the visible form and shows the employee, placement and **old → new** value. Nothing is saved. |
+| `Actually, change that to Interview scheduled for Monday` | The field and review change together. You can also type directly in the field and click **Review changes**. |
+| `Yes` / **Confirm save**, or `Cancel` | Only a separate confirmation after the current review writes the update. Cancel discards the draft. |
+
+In Hindi, try **इंटरव्यू नोट अपडेट करें** → choose the workbook project → give
+the employee ID → **साक्षात्कार के लिए तैयार** → **नहीं, इसकी जगह सोमवार को साक्षात्कार लिखें**
+→ check the revised field → **हाँ** or **रद्द करें**. Typing, clicking a
+suggestion and speaking can be mixed. If a name or note is misheard, type the
+ID or correct the visible draft rather than confirming it.
+
+You can also give several fields in one turn: `For EMP-01031 in Giga One, set
+the account owner to Mira and the billing start date to May 12 2027`. An
+ambiguous “billing date” prompts for start or end. Put a literal field-like
+phrase in quotes (for example `set the note to “Research and account owner to
+be discussed”`). This is a local, rules-based guide to the configured fields,
+not an open-ended chatbot. **Guide this form** starts it from an already open
+Ask CRM with no outstanding edits.
+
+The guide is separate from **Update** autosave. It cannot change employee
+identity, a read-only field or the workbook project. For a bench/block status
+request use `Set EMP-01031 to hard block` in general Ask: that is a proposal
+for **administrator approval**, not a guided save. If the record or access
+changes during review, reopen it; the app does not retry the write for you.
 
 ### Voice mode and CRM entry
 
@@ -435,6 +477,9 @@ and past attribution remain. You cannot delete yourself or the last active admin
 | `POST` | `/api/import` | Daily dataset upsert (dry-run supported, optional `projectId`/`subprojectId`/`categoryId` placement) |
 | `GET` | `/api/import/template` | Blank workbook: your 65 headers + the 3 placement columns |
 | `GET` | `/api/audit` | Activity feed scoped by project access |
+| `GET`, `POST` | `/api/agent/projects`, `/api/agent/ask` | Visible workbook names; local questions, update goals and scoped employee/placement choices |
+| `POST` | `/api/agent/crm/:id/review` | Validate `crmProjectName`, numeric `rev`, `before` and `changes`. Returns the normalized field diff and a single-use, five-minute session ticket; no workforce write. `:id` is the placement ID. |
+| `POST` | `/api/agent/crm/:id/confirm` | Recheck the same reviewed draft, session ticket, live permissions and revision; use the normal audited update transaction. An expired or superseded ticket requires a new review. |
 
 Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticated,
 `403` unauthorised, `404` missing, `409` stale write, `422` validation.
@@ -443,7 +488,7 @@ Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticate
 
 ## Tests
 
-`npm test` runs both suites without modifying your application database:
+`npm test` runs the following suites without modifying your application database:
 
 * `tests/api.test.js` — HTTP integration tests against a temporary database, covering all twelve required
   scenarios (shared project with six supervisors, multi-project supervisor,
@@ -458,6 +503,10 @@ Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticate
   drops the connection mid-save and asserts the panel reports `Not saved`,
   keeps the typed value, and succeeds on explicit retry. Administration tests open
   the user and field forms, confirm/cancel deletion, and submit a category layout.
+* `tests/guide.test.mjs` — English/Hindi goal parsing, corrections, multi-field staging and ambiguity. API and UI suites also cover exact placement choices, live permission changes, expired/stale reviews, refusal of unreviewed writes and audit attribution.
+* `tests/speech.test.mjs` — local speech assets, workers, level controls and setup contracts.
+
+**Optional real-browser checks:** Install the existing optional Playwright dependency with `npm ci --prefix voice --include=dev --ignore-scripts` and set `CHROME_PATH` to your Chrome/Edge executable. `npm run ask:check` drives the English and Hindi forms in Chromium against an in-memory demo DB; it needs **no speech packs**. With local speech packs, `npm run voice:check -- --guided` also dictates a note via a file-backed microphone. See [voice test instructions](voice/README.md#reproduce-the-browser-speech-check-optional-for-maintainers). Neither test uses real HR data or proves that the physical microphone works.
 
 ## Project layout
 

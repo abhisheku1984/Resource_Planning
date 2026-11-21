@@ -1258,3 +1258,61 @@ test('Ask remembers speaker settings for the next playback, including after swit
   assert.equal(a.el.querySelector('#ask-speaker-volume').value, '65'); button(a.el, 'स्पीकर जाँचें').click();
   assert.equal(spoken[1].volume, 0.65); assert.equal(spoken[1].lang, 'hi-IN'); a.toggle(false);
 });
+
+test('guided dialogue keeps the requested employee across clarification; only a fresh reviewed yes can save', async (t) => {
+  const { createAssistant } = await import('../public/js/views/assistant.js');
+  core.state.user = { isAdmin: false };
+  localStorage.setItem('rp.askLanguage','en'); t.after(() => localStorage.removeItem('rp.askLanguage'));
+  const ask = [], reviews = [], confirms = [], project = 'QA North', original = 'Update the interview note for QA-007';
+  const form = { assignmentId: 82, rev: 4, name: 'Sample Person', empCode: 'QA-007', projectName: project, placementLabel: 'B / Run / QA',
+    fields: [{ key: 'detail_comments', label: 'Detail Comments', type: 'textarea', editable: true, value: 'old' }] };
+  let release, delay = false;
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url === '/api/agent/projects') return jsonResponse({projectNames:[project, 'QA South']});
+    const body = JSON.parse(opts.body);
+    if (url === '/api/agent/ask') {
+      ask.push(body);
+      if (!body.projectName) return jsonResponse({kind:'choose_project',reply:'Which project?',suggestions:[project]});
+      if (!body.guideChoice) return jsonResponse({kind:'crm_lookup',projectName:project, reply:'Which placement?', guide:{step:'placement',person:'QA-007'}, suggestions:['Placement 81','Placement 82'],table:{title:'Placements', columns:['Placement'], rows:[[81],[82]]}});
+      return jsonResponse({kind:'crm', projectName:project, reply:'Scoped draft.', crm:form, guide:{step:'form',instruction:'the interview note'}});
+    }
+    if (url === '/api/agent/crm/82/review') {
+      reviews.push(body); const n = reviews.length;
+      if (delay) await new Promise(r => { release = r; });
+      return jsonResponse({ticket:'receipt-'+n, interpretation:{...form, fields:[{key:'detail_comments',label:'Detail Comments',after:body.changes.detail_comments}]}});
+    }
+    assert.equal(url, '/api/agent/crm/82/confirm'); confirms.push(body); return jsonResponse({record:{rev:5,values:body.changes}});
+  });
+  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
+  const type = async (s) => { const input = a.el.querySelector('.assistant-input'); input.value = s; input.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}}); await settleClicks(); };
+  await type(original);
+  const pick = a.el.querySelector('.assistant-scope').querySelector('select'); pick.value=project; pick.dispatchEvent({type:'change',target:pick}); await settleClicks();
+  const n = ask.length; await type('placement 99'); assert.equal(ask.length,n,'cannot select a placement not offered');
+  await type('the second one'); assert.deepEqual(ask.at(-1),{message:original, projectName:project,language:'en',guideChoice:{person:'QA-007',placementId:82}});
+  await type('yes'); assert.equal(confirms.length,0); assert.equal(reviews.length,0,'a yes is not a note');
+  await type('Ready for interview'); assert.equal(reviews.length,1); assert.equal(confirms.length,0);
+  await type('Actually, say “Monday”'); assert.equal(reviews.length,2);
+  const input = a.el.querySelector('.assistant-crm').querySelector('textarea'); input.value='manual correction'; input.dispatchEvent({type:'input'});
+  await type('yes'); assert.equal(confirms.length,0,'typing into a reviewed field invalidates the receipt');
+  delay = true; await type('Review changes'); assert.equal(typeof release, 'function');
+  a.toggle(false); a.open(); release(); await settleClicks(); await type('yes'); assert.equal(confirms.length,0,'late reviews cannot authorize a reopened form');
+  delay=false; await type('Review changes'); button(a.el,'हिन्दी').click(); await type('हाँ'); assert.equal(confirms.length,0,'switching language requires a fresh review');
+  await type('बदलाव की समीक्षा करें'); await type('हाँ'); assert.equal(confirms.length,1);
+  assert.deepEqual(confirms[0],{crmProjectName:project,rev:4,before:{detail_comments:'old'},changes:{detail_comments:'manual correction'},ticket:'receipt-'+reviews.length});
+  assert.equal(a.el.querySelector('.assistant-crm').children.length,0); a.toggle(false);
+});
+
+test('“show their names” re-queries the same report scope, and switching project forgets the previous filter', async (t) => {
+  const { createAssistant } = await import('../public/js/views/assistant.js'); core.state.user={isAdmin:false};
+  const calls=[]; t.mock.method(globalThis,'fetch',async (url,opts)=>{
+    if(url==='/api/agent/projects') return jsonResponse({projectNames:['Giga One','Giga Two']});
+    const b=JSON.parse(opts.body);calls.push(b);
+    return jsonResponse({kind:'count',projectName:b.projectName,reply:'2 people.',data:{project:b.projectName,field:'bench_category',value:'Bench'}});
+  });
+  const a=createAssistant();documentShim.body.replaceChildren(a.el);a.open();await settleClicks();
+  const select=(name)=>{const p=a.el.querySelector('.assistant-scope').querySelector('select');p.value=name;p.dispatchEvent({type:'change',target:p});};
+  const send=async (value)=>{const i=a.el.querySelector('.assistant-input');i.value=value;i.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}});await settleClicks();};
+  select('Giga One'); await send('How many on bench?'); await send('Who are they?');
+  assert.equal(calls.at(-1).message,'List people bench category Bench');assert.equal(calls.at(-1).projectName,'Giga One');
+  select('Giga Two'); await send('Who are they?'); assert.equal(calls.at(-1).message,'Who are they?'); a.toggle(false);
+});

@@ -33,8 +33,12 @@ With the main app dependencies and both language packs installed, from the repos
 ```powershell
 npm.cmd ci --prefix voice --include=dev --ignore-scripts
 $env:CHROME_PATH = 'C:\Program Files\Google\Chrome\Application\chrome.exe'  # or your Edge executable
+npm.cmd run ask:check                    # typed English/Hindi guided forms; no speech packs needed
+npm.cmd run voice:check -- --guided      # type the update goal, dictate a note, verify review without a write
 npm.cmd run voice:check                  # Standard speaker + Vosk in both languages
 npm.cmd run voice:check -- --studio      # after voice:studio: Auto / Studio + Vosk in both languages
 ```
 
 This starts a temporary loopback server with **in-memory demo data** and launches headless Chromium with native speech APIs disabled. It generates questions using the selected real engine, reports raw/leveled RMS and peak in dBFS, passes the leveled WAV through Chromium's file-backed microphone, and checks the scoped response. The microphone is the first audio action, not warmed up by Test speaker. The check observes actual playback, peak headroom, release during reply/after Stop and standalone speaker testing without any new mic request. These measurements test the app signal, not a laptop's acoustic volume or subjective listening quality. It does **not** test physical hardware or require a browser binary download. The ordinary `npm test` suite requires neither these packs nor a browser.
+
+In `--guided` mode a typed employee goal selects a verified demo placement first. The first audio action is still the cold microphone. The check compares the recognized words to the visible note and the review request, checks that SQLite is unchanged, then observes spoken review, resumed listening and Stop. Recognition is not verbatim: inspect the draft before confirming.

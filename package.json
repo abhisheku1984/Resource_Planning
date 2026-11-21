@@ -9,10 +9,11 @@
     "start": "node --disable-warning=ExperimentalWarning server/index.js",
     "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
     "demo": "node --disable-warning=ExperimentalWarning server/gen-dummy.js",
-    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 tests/api.test.js tests/ui.smoke.mjs tests/speech.test.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 tests/api.test.js tests/ui.smoke.mjs tests/speech.test.mjs tests/guide.test.mjs",
     "seed": "node --disable-warning=ExperimentalWarning server/seed.js --reset",
     "check:filters": "node --disable-warning=ExperimentalWarning scripts/check-filters.js",
     "voice:setup": "npm ci --prefix voice --omit=dev --ignore-scripts --no-audit --no-fund && node voice/setup.js",
+    "ask:check": "node --disable-warning=ExperimentalWarning tests/guide.browser.mjs",
     "voice:check": "node --disable-warning=ExperimentalWarning voice/check-browser.mjs",
     "voice:studio": "npm ci --prefix voice/studio --omit=dev --ignore-scripts --no-audit --no-fund && node voice/setup.js --studio",
     "voice:prepare": "node voice/prepare.js"
