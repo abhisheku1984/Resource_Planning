@@ -28,33 +28,48 @@ function blockedByPolicy(feature) {
   return policy?.features?.().includes(feature) && !policy.allowsFeature(feature);
 }
 
-export function createLocalVoice({ onCommand, onState, language: initial = 'en' }) {
+export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, language: initial = 'en' }) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let language = initial === 'hi' ? 'hi' : 'en';
   const t = (en, hi) => language === 'hi' ? hi : en;
   let epoch = 0, active = false, mic = null, speaking = null, installLang = null;
   const status = (text, action = active ? 'stop' : 'start', help = false) => onState({ active, text, action, help });
+  function cancelSpeech() {
+    if (!speaking) return;
+    speaking = null; // ignore late end/error events from this utterance
+    window.speechSynthesis?.cancel();
+  }
   function stop(text = t('Voice off. You can still type.', 'माइक बंद है। आप हिन्दी में लिख सकते हैं।'), help = false) {
     ++epoch; active = false; installLang = null;
     const old = mic; mic = null;
     try { old?.abort(); } catch { /* already ended */ }
-    if (speaking) { speaking = null; window.speechSynthesis?.cancel(); }
+    cancelSpeech();
     status(text, 'start', help);
   }
   function setLanguage(next) {
     language = next === 'hi' ? 'hi' : 'en';
     stop(t('English selected. Start voice mode or type a question.', 'हिन्दी चुनी गई है। बोलना शुरू करें या अपना सवाल लिखें।'));
   }
+  function prepareSpeaker() {
+    // Some browsers populate the catalogue asynchronously after the first query.
+    // This neither plays sound nor requests microphone access.
+    try { window.speechSynthesis?.getVoices(); } catch { /* speaker is optional */ }
+  }
+  // False means there is no matching device voice. Otherwise done reports
+  // success/failure, unless this utterance has since been cancelled.
   function speak(text, done, preferredLang) {
-    const synth = window.speechSynthesis;
-    const voices = synth?.getVoices().filter((v) => v.localService === true && family(v.lang) === language) || [];
-    const voice = voices.find((v) => v.lang === preferredLang) || voices[0];
-    if (!voice || !window.SpeechSynthesisUtterance) return false;
-    const u = new window.SpeechSynthesisUtterance(text);
-    speaking = u; u.voice = voice; u.lang = voice.lang;
-    const finish = (ok) => { if (speaking === u) { speaking = null; done(ok); } };
-    u.onend = () => finish(true); u.onerror = () => finish(false);
-    try { synth.speak(u); return true; } catch { speaking = null; return false; }
+    try {
+      const synth = window.speechSynthesis;
+      const voices = synth?.getVoices().filter((v) => v.localService === true && family(v.lang) === language) || [];
+      const voice = voices.find((v) => v.lang === preferredLang) || voices[0];
+      if (!voice || !window.SpeechSynthesisUtterance) return false;
+      const u = new window.SpeechSynthesisUtterance(text);
+      speaking = u; u.voice = voice; u.lang = voice.lang;
+      const finish = (ok) => { if (speaking === u) { speaking = null; done(ok); } };
+      u.onend = () => finish(true); u.onerror = () => finish(false);
+      synth.speak(u);
+    } catch { speaking = null; done(false); }
+    return true;
   }
   function listen(id, lang, note = '') {
     if (id !== epoch) return;
@@ -103,14 +118,13 @@ export function createLocalVoice({ onCommand, onState, language: initial = 'en' 
   }
   async function toggle() {
     if (active) return stop();
-    if (speaking) return stop(t('Stopped reading. The app microphone is off.', 'पढ़ना बंद है। ऐप का माइक बंद है।'), true);
+    if (speaking) return; // standalone playback is stopped by its own button, never by opening the mic
     if (!window.isSecureContext) return stop(t('Voice needs localhost on this computer, or HTTPS. Opening a remote HTTP address is not enough.', 'इस कंप्यूटर पर localhost या HTTPS का उपयोग करें। दूसरे कंप्यूटर के HTTP पते पर माइक उपलब्ध नहीं होगा।'), true);
     const id = ++epoch, requested = installLang;
     try {
       if (blockedByPolicy('on-device-speech-recognition') || blockedByPolicy('microphone')) {
         return stop(t('This page’s permissions policy blocks local speech or microphone access. Open the app in its own tab. If it is managed, check with IT.', 'इस पेज की नीति माइक या स्थानीय वाक् पहचान की अनुमति नहीं देती। ऐप को अलग टैब में खोलें या अपने आईटी व्यवस्थापक से पूछें।'), true);
       }
-      window.speechSynthesis?.getVoices(); // prime local read-back even if recognition is unavailable
       if (!Recognition || !('processLocally' in new Recognition())) return stop(t('This browser does not provide on-device recognition. Use a current desktop browser, device dictation, or type instead.', 'इस ब्राउज़र में स्थानीय वाक् पहचान उपलब्ध नहीं है। हिन्दी में टाइप करें या समर्थित डेस्कटॉप ब्राउज़र आज़माएँ।'), true);
       active = true; installLang = null;
       status(requested ? t(`Installing the ${requested} speech pack…`, `${requested} स्पीच पैक इंस्टॉल हो रहा है…`) : t('Checking local English speech packs…', 'स्थानीय हिन्दी स्पीच पैक की जाँच हो रही है…'));
@@ -139,14 +153,24 @@ export function createLocalVoice({ onCommand, onState, language: initial = 'en' 
         : t('Could not check or install a browser speech pack. Open the app in its own tab and try again.', 'स्पीच पैक की जाँच या स्थापना नहीं हो सकी। ऐप को अलग टैब में खोलकर फिर कोशिश करें।'), true);
     }
   }
-  function readReply(text) {
-    if (active || speaking || !text) return;
-    installLang = null;
-    status(t('Reading the last reply. The app microphone is off.', 'पिछला जवाब पढ़ा जा रहा है। ऐप का माइक बंद है।'), 'stop-reading', true);
-    if (!speak(text, (ok) => status(ok ? t('Finished reading. The app microphone is off.', 'जवाब पढ़ लिया गया। ऐप का माइक बंद है।')
-      : t('Could not read aloud. The reply is in the conversation.', 'जवाब पढ़कर नहीं सुनाया जा सका। चैट में पढ़ें।'), 'start', true))) {
-      status(t('No local English read-aloud voice is available. The reply is in the conversation.', 'पढ़कर सुनाने के लिए हिन्दी की स्थानीय आवाज़ उपलब्ध नहीं है। जवाब चैट में पढ़ें।'), 'start', true);
+  // Standalone output doesn't touch the microphone, its preflight action, or
+  // installLang. A speaker test must never grant consent to a pack download.
+  function togglePlayback(reply) {
+    if (active) return; // hands-free mode already handles its own spoken replies
+    if (speaking) {
+      cancelSpeech();
+      return onPlayback({ playing: false, text: t('Playback stopped. The app microphone is off.', 'आवाज़ बंद कर दी गई है। ऐप का माइक बंद है।') });
     }
+    const sample = t('This is the English speaker test. To speak, select Start voice mode. Or type a question and press Enter.', 'यह हिन्दी आवाज़ की जाँच है। माइक के लिए बोलना शुरू करें चुनें, या सवाल लिखकर एंटर दबाएँ।');
+    onPlayback({ playing: true, text: reply ? t('Reading the last reply. The app microphone is off.', 'पिछला जवाब पढ़ा जा रहा है। ऐप का माइक बंद है।')
+      : t('Playing a speaker test. The app microphone is off.', 'स्पीकर की जाँच हो रही है। ऐप का माइक बंद है।') });
+    const finished = reply ? t('Finished reading. The app microphone is off.', 'जवाब पढ़ लिया गया। ऐप का माइक बंद है।')
+      : t('Speaker test finished. No sound? Check your speakers or headphones and volume.', 'स्पीकर की जाँच पूरी हुई। आवाज़ नहीं आई? स्पीकर या हेडफ़ोन और वॉल्यूम जाँचें।');
+    const done = (ok) => onPlayback({ playing: false, help: !ok, text: ok ? finished
+      : t('Could not play sound. Check your output device and volume, or use text.', 'आवाज़ नहीं चलाई जा सकी। आउटपुट डिवाइस और वॉल्यूम जाँचें या लिखकर पूछें।') });
+    if (!speak(reply || sample, done)) onPlayback({ playing: false, help: true, text: t(
+      'No local English read-aloud voice is available. Try again after a local English voice is ready, or type and read replies here.',
+      'पढ़कर सुनाने के लिए हिन्दी की स्थानीय आवाज़ उपलब्ध नहीं है। स्थानीय आवाज़ तैयार होने पर फिर कोशिश करें या लिखकर पूछें और जवाब यहीं पढ़ें।') });
   }
-  return { toggle, stop, readReply, setLanguage, isActive: () => active || !!speaking };
+  return { toggle, stop, togglePlayback, prepareSpeaker, setLanguage, isActive: () => active || !!speaking };
 }

@@ -122,7 +122,9 @@ it does not change the rest of the site or translate workbook names. Ask remembe
 the choice in this browser. Switching stops listening/read-aloud; it preserves
 unsaved CRM values but requires a fresh review before confirmation.
 
-On **localhost or HTTPS**, click **Start voice mode** / **बोलना शुरू करें**.
+Two buttons sit above the Ask message box, even when setup help is closed.
+The **microphone** is **Start voice mode** / **बोलना शुरू करें**. Use it on
+**localhost or HTTPS**.
 The browser must support on-device recognition for **the chosen language**.
 Allow the microphone when prompted. It pauses during spoken replies and listens
 again for the next command. You can also just type the same commands and press
@@ -160,10 +162,15 @@ languages. Closing Ask, hiding the tab or signing out stops app voice mode.
   Choosing a language never installs anything. If a pack is unavailable to this
   site, the app cannot supply it; it does not switch to English or cloud speech.
   A missing pack and denied microphone permission are different problems.
-* **Read-aloud:** requires a local system voice for the selected language, separate
-  from the recognition pack. Without one, read replies in the conversation. Under
-  **Voice setup and device dictation**, **Read last reply** / **पिछला जवाब सुनें**
-  works without turning on the app microphone.
+* **Speaker (read-aloud):** before the first reply, click **Test speaker** /
+  **स्पीकर जाँचें** to hear a short sample. After a typed question, the same
+  button becomes **Read last reply** / **पिछला जवाब सुनें**. Click it again
+  to stop playback. Neither action uses the microphone or its recognition pack.
+  Read-aloud needs a local system voice in the chosen language. If the test
+  finishes silently, check the output device and volume. In hands-free voice
+  mode, replies play automatically when a local voice is available.
+* **No microphone or speakers?** Type your question and press **Enter**; the
+  reply appears in Ask. Typed CRM commands use the same review and confirm steps.
 * **Device dictation:** if your OS supports *offline* dictation in your language,
   focus the Ask message box, dictate, then submit. For English on supported Windows
   11 PCs: **Start → Voice access**, finish English setup, focus the box, dictate
