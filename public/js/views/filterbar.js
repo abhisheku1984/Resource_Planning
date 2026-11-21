@@ -32,7 +32,6 @@ export function createFilterBar({ onChange }) {
   let showAll = false;      // reveal the secondary columns
 
   const buttons = new Map();     // key -> button
-  const panels = new Map();      // key -> panel element
   const menu = h('div', { class: 'facet-menu hidden', role: 'menu' });
 
   const activeCount = () => Object.values(active).reduce((a, v) => a + (v ? v.length : 0), 0);
