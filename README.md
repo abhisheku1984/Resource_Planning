@@ -13,7 +13,7 @@ import/export only, supervisors update records in the app.
 ```bash
 git clone https://github.com/abhisheku1984/Resource_Planning.git
 cd Resource_Planning
-git checkout arena/bd816d6f-resource-planning
+git checkout arena/086f5947-resource-planning
 npm install
 npm run demo      # builds the 12,000-employee demo database (about 10 seconds)
 npm start         # http://localhost:4000
@@ -37,10 +37,24 @@ want a clean dataset. `npm run demo -- --rows 500` makes a smaller one.
 
 Windows: `start-windows.bat` does the install, demo build and start in one step.
 
+### Checking the five filter dropdowns
+
+With the server running in one window, open a second one:
+
+```bash
+npm run check:filters
+```
+
+It signs in as the administrator, loads the Employee Directory the same way the
+browser does, and prints the values plus counts behind **Billing Status, Bench
+Category, BL Status, Offsite/Onsite** and **Giga Project Name**. Then it selects
+one value in each and confirms the row total becomes exactly the number the
+dropdown advertised. Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere.
+
 ### Tests
 
 ```bash
-npm test          # 31 integration + UI smoke tests
+npm test          # 35 integration + UI smoke tests
 ```
 
 ## The assistant (in-app, offline, propose-only)
