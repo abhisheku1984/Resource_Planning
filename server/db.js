@@ -280,6 +280,16 @@ CREATE TABLE IF NOT EXISTS import_jobs (
   user_id     INTEGER REFERENCES users(id)
 );
 
+-- Small key/value store for platform settings (e.g. which columns the CRM
+-- panel shows). Kept in the database so the choice travels with the data
+-- rather than living in code.
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_by INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS imports (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   filename    TEXT NOT NULL,

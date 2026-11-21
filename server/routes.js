@@ -76,6 +76,8 @@ router.get('/bootstrap', requireAuth, wrap((req, res) => {
     tree,
     fields,
     suppliers: q.all('SELECT * FROM suppliers WHERE active = 1 ORDER BY name'),
+    // the columns the CRM / Update panel shows, in order
+    crmKeys: schema.crmKeys(),
     statusCounts: statusCounts(req.user),
     totals: totals(req.user),
   });
@@ -680,6 +682,27 @@ router.post('/agent/proposals/:id/approve', requireAuth, requireAdmin, wrap((req
 
 router.post('/agent/proposals/:id/reject', requireAuth, requireAdmin, wrap((req, res) => {
   res.json({ proposal: agentstore.reject(req.user, Number(req.params.id), req.body?.note || null), message: 'Rejected. Nothing was changed.' });
+}));
+
+// ---------------------------------------------------------------------------
+// CRM panel configuration
+// ---------------------------------------------------------------------------
+/**
+ * Which columns the CRM / Update panel offers. Read by every role (the panel has
+ * to render), written only by an administrator.
+ */
+router.get('/settings/crm-fields', requireAuth, wrap((req, res) => {
+  const keys = schema.crmKeys();
+  res.json({
+    keys,
+    fields: schema.listFields().filter((f) => keys.includes(f.key)),
+    available: schema.listFields().map((f) => ({ key: f.key, label: f.label, type: f.type, group: f.group })),
+  });
+}));
+
+router.put('/settings/crm-fields', requireAuth, requireCap('schema.manage'), wrap((req, res) => {
+  const keys = schema.setCrmKeys(req.body?.keys || [], req.user);
+  res.json({ keys, fields: schema.listFields().filter((f) => keys.includes(f.key)) });
 }));
 
 // ---------------------------------------------------------------------------

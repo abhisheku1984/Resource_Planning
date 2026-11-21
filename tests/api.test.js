@@ -748,3 +748,125 @@ test('a supervisor with no project selected only counts rows they may see', asyn
   );
   assert.equal(filtered.data.total, pick.count);
 });
+
+/* ------------------------------------------------ CRM panel column set */
+test('the CRM panel offers the workbook supervisor columns and nothing else', async () => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const res = await admin('GET', '/settings/crm-fields');
+  assert.equal(res.status, 200);
+
+  const want = ['leader_input_last_week', 'leader_input_this_week', 'leader_input_pid_account',
+    'billing_start_date', 'billing_end_date', 'pid_awaited_account', 'pid_awaited_blocked_date',
+    'opp_id', 'account_owner', 'allocation_closure_eta', 'role_of_month', 'role_of_responses',
+    'detail_comments', 'block_status', 'account_name', 'interviewed_by', 'demand_number',
+    'giga_project_name'];
+  assert.deepEqual(res.data.keys, want, 'the panel shows exactly these columns, in workbook order');
+  // identity is not one of them: Employee ID and the names are the header, not editable fields
+  for (const k of ['emp_code', 'first_name', 'last_name']) assert.ok(!res.data.keys.includes(k));
+
+  const labels = res.data.fields.map((f) => f.label);
+  assert.ok(labels.includes('Leader Input Last Week'));
+  assert.ok(labels.includes('Hard Block / Soft Block'));
+  assert.ok(labels.includes('Giga Project Name'));
+});
+
+test('an administrator can change the CRM columns without a code change', async () => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const before = (await admin('GET', '/settings/crm-fields')).data.keys;
+
+  const saved = await admin('PUT', '/settings/crm-fields', {
+    keys: ['opp_id', 'detail_comments', 'nonsense_key'],
+  });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.data.keys.filter((k) => k === 'opp_id' || k === 'detail_comments'),
+    ['opp_id', 'detail_comments']);
+  assert.ok(!saved.data.keys.includes('nonsense_key'), 'unknown columns are rejected, not stored');
+
+  // a supervisor may read the setting but not write it
+  const priya = client(await login('priya.nair@resourceplanning.io'));
+  assert.equal((await priya('GET', '/settings/crm-fields')).status, 200);
+  assert.equal((await priya('PUT', '/settings/crm-fields', { keys: ['opp_id'] })).status, 403);
+
+  // restore for the tests that follow
+  await admin('PUT', '/settings/crm-fields', { keys: before });
+});
+
+test('a supervisor submit reaches the export with the value, the author and the time', async () => {
+  const priya = client(await login('priya.nair@resourceplanning.io'));
+  const row = (await priya('GET', '/employees?pageSize=1')).data.rows[0];
+  const rec = (await priya('GET', `/employees/${row.assignmentId}`)).data.record;
+
+  const res = await priya('POST', `/employees/${row.assignmentId}/submit`, {
+    changes: {
+      leader_input_this_week: 'Awaiting client sign-off on the PID',
+      opp_id: 'OPP-777001',
+      demand_number: 'DEM-55012',
+    },
+    rev: rec.rev,
+    reason: 'Supervisor submit',
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.record.values.opp_id, 'OPP-777001');
+
+  // the workbook the administrator fetches shows the new values, who set them,
+  // and when - the round trip the brief asks for
+  const out = path.join(TMP, 'crm-export.xlsx');
+  const token = await login('admin@resourceplanning.io', 'Admin@12345');
+  const raw = await fetch(`${base}/api/export?projectId=${row.projectId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(raw.status, 200);
+  fs.writeFileSync(out, Buffer.from(await raw.arrayBuffer()));
+
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(out);
+  const ws = wb.getWorksheet('Employees');
+  const head = ws.getRow(1).values.slice(1);
+  for (const label of ['Employee ID', 'First Name', 'Last Name',
+    'Leader Input Last Week', 'Leader Input This Week', 'PID Awaited Account',
+    'PID Awaited Blocked Date', 'Opp ID', 'Allocation Closure ETA', 'Role of Month',
+    'Role of Responses', 'Detail Comments', 'Hard Block / Soft Block',
+    'Account Name', 'Interviewed By', 'Demand Number', 'Giga Project Name']) {
+    assert.ok(head.includes(label), `the export must carry the ${label} column`);
+  }
+  const byCol = head.indexOf('Leader Input This Week — Updated By');
+  const atCol = head.indexOf('Leader Input This Week — Updated At');
+  const stampCol = head.indexOf('Last Supervisor Update');
+  assert.ok(byCol >= 0, 'a per-field author column exists');
+
+  let found = null;
+  ws.eachRow((r, i) => {
+    if (i === 1) return;
+    if (String(r.values[head.indexOf('Opp ID') + 1]) === 'OPP-777001') found = r.values;
+  });
+  assert.ok(found, 'the submitted row is in the workbook');
+  assert.equal(found[byCol + 1], 'Priya Nair');
+  assert.ok(found[atCol + 1], 'the change carries a timestamp');
+  assert.match(String(found[stampCol + 1]), /Priya Nair/);
+});
+
+test('re-importing our own export does not create fields from the change stamps', async () => {
+  const adminToken = await login('admin@resourceplanning.io', 'Admin@12345');
+  const admin = client(adminToken);
+  const before = (await admin('GET', '/bootstrap')).data.fields.length;
+  assert.ok(before > 50, 'the field catalogue loaded');
+
+  const raw = await fetch(`${base}/api/export`, { headers: { Authorization: `Bearer ${adminToken}` } });
+  assert.equal(raw.status, 200);
+  const buf = Buffer.from(await raw.arrayBuffer());
+
+  const preview = await admin('POST', '/import', {
+    filename: 'round-trip.xlsx',
+    content: buf.toString('base64'),
+    dryRun: true,
+  });
+  assert.equal(preview.status, 200);
+  const report = preview.data.result;
+  assert.equal(report.errors.length, 0, JSON.stringify(report.errors[0] || {}));
+
+  const after = (await admin('GET', '/bootstrap')).data.fields.map((f) => f.key);
+  assert.ok(Array.isArray(after) && after.length > 50, `field catalogue after import: ${JSON.stringify(after).slice(0, 120)}`);
+  assert.equal(after.length, before, `the import did not add fields (before ${before}, after ${after.length})`);
+  assert.ok(!after.some((k) => /updated_by$|updated_at$|last_supervisor_update/.test(k)),
+    '"— Updated By" / "Last Supervisor Update" are ignored, not turned into fields');
+});

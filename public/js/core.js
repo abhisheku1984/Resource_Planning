@@ -157,6 +157,8 @@ export const state = {
   tree: [],
   fields: [],
   suppliers: [],
+  // columns the CRM / Update panel shows (from /bootstrap, admin-configurable)
+  crmKeys: [],
   route: { name: 'dashboard', params: {} },
 };
 

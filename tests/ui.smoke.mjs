@@ -217,6 +217,13 @@ globalThis.fetch = async (url, opts = {}) => {
         { id: 3, key: 'training_status', label: 'Training Status', type: 'select', options: ['Not Started', 'In Progress', 'Completed'] },
         { id: 4, key: 'status', label: 'Current Status', type: 'select', options: ['Active', 'On Leave'] },
         { id: 5, key: 'remarks', label: 'Remarks', type: 'textarea' },
+        // the workbook supervisor columns the CRM panel is configured with
+        { id: 6, key: 'leader_input_last_week', label: 'Leader Input Last Week', type: 'textarea', group: 'Leadership' },
+        { id: 7, key: 'leader_input_this_week', label: 'Leader Input This Week', type: 'textarea', group: 'Leadership' },
+        { id: 8, key: 'opp_id', label: 'Opp ID', type: 'text', group: 'Demand' },
+        { id: 9, key: 'demand_number', label: 'Demand Number', type: 'text', group: 'Demand' },
+        { id: 10, key: 'block_status', label: 'Hard Block / Soft Block', type: 'select', options: ['No Block', 'Soft Block', 'Hard Block'] },
+        { id: 11, key: 'giga_project_name', label: 'Giga Project Name', type: 'text', group: 'Demand' },
       ],
       suppliers: [{ id: 3, name: 'TechCore Staffing' }],
       totals: { employees: 60, assignments: 60, projects: 1, suppliers: 1, pendingReviews: 2 },
@@ -279,6 +286,12 @@ globalThis.fetch = async (url, opts = {}) => {
       { key: 'status', label: 'Current Status', type: 'select', editable: true, options: ['Active', 'On Leave'] },
       { key: 'training_status', label: 'Training Status', type: 'select', editable: true, options: ['Not Started', 'In Progress', 'Completed'] },
       { key: 'remarks', label: 'Remarks', type: 'textarea', editable: true },
+      { key: 'leader_input_last_week', label: 'Leader Input Last Week', type: 'textarea', editable: true },
+      { key: 'leader_input_this_week', label: 'Leader Input This Week', type: 'textarea', editable: true },
+      { key: 'opp_id', label: 'Opp ID', type: 'text', editable: true },
+      { key: 'demand_number', label: 'Demand Number', type: 'text', editable: true },
+      { key: 'block_status', label: 'Hard Block / Soft Block', type: 'select', editable: true, options: ['No Block', 'Soft Block', 'Hard Block'] },
+      { key: 'giga_project_name', label: 'Giga Project Name', type: 'text', editable: true },
     ];
     return jsonResponse({ record: rec });
   }
@@ -464,6 +477,7 @@ test('CRM keeps values and reports "Not saved" when the network fails, then retr
   await new Promise((r) => setTimeout(r, 80));
 
   const originalFetch = globalThis.fetch;
+  try {
   // simulate a dropped connection on the next PATCH only
   globalThis.fetch = async (url, opts) => {
     if ((opts?.method || 'GET') === 'PATCH') throw new TypeError('Failed to fetch');
@@ -498,6 +512,11 @@ test('CRM keeps values and reports "Not saved" when the network fails, then retr
   const afterRetry = flatten(crm.el).join(' ');
   assert.ok(afterRetry.includes('Saved') || !afterRetry.includes('Not saved'), 'a successful retry reports Saved');
   assert.ok(calls.filter((c) => c.startsWith('PATCH')).length >= 1);
+  } finally {
+    // a failed assertion here used to leave the broken stub in place for the
+    // tests that follow, which is its own bug
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('the assistant opens from the Ask event and answers a question', async () => {
@@ -521,6 +540,7 @@ test('the assistant opens from the Ask event and answers a question', async () =
     reply: '446 people in bench category "Bench" in Nexus Digital Transformation.',
     understood: true, kind: 'count', table: null, suggestions: [],
   });
+  const assistantFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     assert.match(String(url), /\/api\/agent\/ask/);
     // core.api() reads res.text() and parses it itself, so the body comes back
@@ -544,6 +564,7 @@ test('the assistant opens from the Ask event and answers a question', async () =
   const walk = (n) => (n.children || []).map((c) => (c.textContent || '') + walk(c)).join(' ');
   const text = walk(assistant.el);
   assert.match(text, /446 people/, 'the answer is rendered in the panel');
+  globalThis.fetch = assistantFetch;
 });
 
 test('the filter bar is five dropdowns, and picking a value narrows the rows', async () => {
@@ -586,4 +607,31 @@ test('the filter bar is five dropdowns, and picking a value narrows the rows', a
 
   bar.clearAll();
   assert.deepEqual(seen.at(-1), {});
+});
+
+test('the Update panel shows the employee ID, the name and exactly the CRM columns', async () => {
+  const { createSubmitPanel } = await import('../public/js/views/submit.js');
+  const { state } = await import('../public/js/core.js');
+  state.crmKeys = ['leader_input_last_week', 'leader_input_this_week', 'opp_id',
+    'demand_number', 'block_status', 'giga_project_name'];
+  const panel = createSubmitPanel({ getScope: () => ({ projectId: 1 }), onSaved() {} });
+  documentShim.body.replaceChildren(panel.el);
+  await panel.show(1);
+  await new Promise((r) => setTimeout(r, 80));
+
+  const text = flatten(panel.el).join(' ');
+  assert.ok(text.includes('EMP-01001'), 'the employee ID is shown');
+  assert.ok(text.includes('Worker 1'), 'the person is shown');
+  assert.ok(text.includes('Leader Input This Week'), 'a configured CRM column is rendered');
+  assert.ok(!text.includes('Email Address'), 'identity fields are not part of the update form');
+  assert.ok(!text.includes('Supplier'), 'the panel is not the whole record');
+
+  // only the configured columns produce an input
+  // the shim understands single tag selectors only, so query each tag
+  const keys = ['input', 'select', 'textarea']
+    .flatMap((tag) => panel.el.querySelectorAll(tag))
+    .map((i) => i.dataset.fieldKey).filter(Boolean);
+  assert.deepEqual([...new Set(keys)].sort(), [...state.crmKeys].sort(),
+    'exactly the configured columns are editable');
+  state.crmKeys = [];
 });

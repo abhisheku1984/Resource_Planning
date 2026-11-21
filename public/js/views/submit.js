@@ -9,7 +9,22 @@ import {
   emptyState, statusBadge, initials,
 } from '../core.js';
 
-const GROUP_ORDER = ['Allocation', 'Supervisor Update', 'Notes'];
+/**
+ * The panel is deliberately a short, ordered list, not the whole record: the
+ * person (Employee ID + name) and the workbook's supervisor columns from Leader
+ * Input Last Week through Giga Project Name. Submit writes them in one
+ * transaction; the next export carries the new value plus who changed it.
+ *
+ * The list comes from the server (`state.crmKeys`, admin-configurable), so this
+ * constant is only the fallback for an old cached page.
+ */
+const FALLBACK_KEYS = [
+  'leader_input_last_week', 'leader_input_this_week', 'leader_input_pid_account',
+  'billing_start_date', 'billing_end_date', 'pid_awaited_account',
+  'pid_awaited_blocked_date', 'opp_id', 'account_owner', 'allocation_closure_eta',
+  'role_of_month', 'role_of_responses', 'detail_comments', 'block_status',
+  'account_name', 'interviewed_by', 'demand_number', 'giga_project_name',
+];
 
 export function createSubmitPanel({ onSaved, getScope }) {
   const el = h('aside', { class: 'card crm-panel submit-panel', 'aria-label': 'Update employee record' });
@@ -29,7 +44,7 @@ export function createSubmitPanel({ onSaved, getScope }) {
       h('div', { class: 'grow', style: { minWidth: '0' } },
         h('div', { class: 'card-title' }, icon('edit', 15), 'Update record'),
         h('div', { class: 'card-sub' }, record
-          ? `${record.values.name} · ${record.values.emp_code}`
+          ? `${record.values.emp_code} · ${record.values.name}`
           : 'Select a row to update'),
       ),
       h('button', {
@@ -57,7 +72,7 @@ export function createSubmitPanel({ onSaved, getScope }) {
           count ? `${count} unsaved change${count === 1 ? '' : 's'}` : 'No pending changes'),
         savedAt
           ? h('div', { class: 'subtle', style: { fontSize: '11px' } }, `Last saved ${fmtRelative(savedAt)}`)
-          : h('div', { class: 'subtle', style: { fontSize: '11px' } }, 'Changes apply to the next export'),
+          : h('div', { class: 'subtle', style: { fontSize: '11px' } }, 'Submitted changes appear in the next Excel export, with your name'),
       ),
       h('div', { class: 'row', style: { gap: '6px' } },
         count
@@ -98,19 +113,17 @@ export function createSubmitPanel({ onSaved, getScope }) {
     const v = record.values || {};
     const canEditNow = canEdit();
 
-    // which fields appear: the category's submit fields, in group order
-    const submitCols = (record.columns || []).filter((c) => c.submitField);
-    const groups = new Map();
-    for (const c of submitCols) {
-      const g = c.group || 'Other';
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(c);
-    }
-    const orderedGroups = [
-      ...[...groups.keys()].filter((g) => GROUP_ORDER.includes(g))
-        .sort((a, b) => GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b)),
-      ...[...groups.keys()].filter((g) => !GROUP_ORDER.includes(g)),
-    ];
+    // Exactly the configured CRM columns, in that order. A column the category
+    // does not list still resolves through the catalogue, so a category created
+    // by an import gets the same form as a seeded one.
+    const byKey = new Map((record.columns || []).map((c) => [c.key, c]));
+    const catalogue = new Map((state.fields || []).map((f) => [f.key, f]));
+    const wanted = (state.crmKeys && state.crmKeys.length ? state.crmKeys : FALLBACK_KEYS);
+    const submitCols = wanted
+      .map((k) => byKey.get(k) || catalogue.get(k))
+      .filter(Boolean)
+      .map((c) => ({ ...c, submitField: true }));
+    const orderedGroups = submitCols.length ? [['Supervisor update', submitCols]] : [];
 
     const buildField = (col) => {
       const original = v[col.key] ?? '';
@@ -135,6 +148,7 @@ export function createSubmitPanel({ onSaved, getScope }) {
       } else {
         input = h('input', { class: 'input', type: 'text', value: original, ...common });
       }
+      input.dataset.fieldKey = col.key;
       const wrap = h('div', { class: 'field submit-field' },
         h('label', { class: 'field-label', for: id }, col.label,
           col.required ? h('span', { class: 'req' }, '*') : null),
@@ -164,10 +178,10 @@ export function createSubmitPanel({ onSaved, getScope }) {
     };
 
     const summary = h('div', { class: 'submit-summary' },
+      summaryItem('Employee ID', v.emp_code || '—'),
       summaryItem('Project', record.projectName),
       summaryItem('Category', record.categoryName),
       summaryItem('Bench category', v.bench_category || '—'),
-      summaryItem('Allocation', v.allocation_percentage ? `${v.allocation_percentage}%` : '—'),
     );
 
     mount(bodyHost,
@@ -186,9 +200,9 @@ export function createSubmitPanel({ onSaved, getScope }) {
         ? h('div', { class: 'note warn', style: { marginBottom: '12px' } }, icon('shield', 15),
           h('span', null, 'You have read-only access here. The Submit button is disabled.'))
         : null,
-      ...orderedGroups.map((g) => h('div', { class: 'submit-group' },
-        h('div', { class: 'submit-group-title' }, g),
-        ...groups.get(g).map(buildField),
+      ...orderedGroups.map(([title, fields]) => h('div', { class: 'submit-group' },
+        h('div', { class: 'submit-group-title' }, title),
+        ...fields.map(buildField),
       )),
       submitCols.length === 0
         ? h('div', { class: 'note' }, icon('info', 15),

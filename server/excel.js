@@ -27,10 +27,23 @@ const BASE_HEADERS = [
 /** A flat, ordered row set for every employee assignment the user may export. */
 function collectRows(user, scope = {}) {
   const fields = schema.listFields().filter((f) => !BASE_HEADERS.some((h) => h.key === f.key));
+  // the CRM columns first after the identity block, in the order the supervisor
+  // sees them, so the administrator reads the same layout they filled in
+  const crmKeys = schema.crmKeys();
+  const crmFields = crmKeys.map((k) => fields.find((f) => f.key === k)).filter(Boolean);
+  const otherFields = fields.filter((f) => !crmKeys.includes(f.key));
   const headers = [
     ...BASE_HEADERS,
-    ...fields.map((f) => ({ key: f.key, label: f.label, width: f.type === 'textarea' ? 40 : 18 })),
+    ...crmFields.map((f) => ({ key: f.key, label: f.label, width: f.type === 'textarea' ? 40 : 18 })),
+    ...otherFields.map((f) => ({ key: f.key, label: f.label, width: f.type === 'textarea' ? 40 : 18 })),
   ];
+  // per-field change stamps, written beside the CRM value they describe
+  const extraHeaders = [];
+  for (const f of crmFields) {
+    extraHeaders.push({ key: `${f.key}__updated_by`, label: `${f.label} — Updated By`, width: 20 });
+    extraHeaders.push({ key: `${f.key}__updated_at`, label: `${f.label} — Updated At`, width: 20 });
+  }
+  extraHeaders.push({ key: 'last_supervisor_update', label: 'Last Supervisor Update', width: 46 });
 
   const allowedProjects = user.isAdmin ? q.all('SELECT id FROM projects').map((r) => r.id) : user.projects.map((p) => p.id);
   const where = ['a.active = 1', 'e.active = 1'];
@@ -63,7 +76,7 @@ function collectRows(user, scope = {}) {
     ...args
   );
 
-  if (!rows.length) return { headers, rows: [], fields };
+  if (!rows.length) return { headers, rows: [], fields, extraHeaders };
 
   const ids = rows.map((r) => r.id);
   const values = new Map();
@@ -80,6 +93,25 @@ function collectRows(user, scope = {}) {
     )) {
       if (!values.has(v.assignment_id)) values.set(v.assignment_id, {});
       values.get(v.assignment_id)[v.key] = v.value;
+    }
+  }
+
+  // Who last touched a supervisor-editable value on each row, and when: the
+  // administrator's report has to show the update, not only the new text.
+  const lastEdits = new Map();
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const chunk = ids.slice(i, i + BATCH);
+    for (const e of q.all(
+      `SELECT al.entity_id AS assignment_id, al.field_key, al.actor_name, al.at,
+              f.label AS field_label
+         FROM audit_log al JOIN fields f ON f.key = al.field_key
+        WHERE al.entity = 'assignment' AND al.action = 'update'
+          AND al.entity_id IN (${chunk.map(() => '?').join(',')})
+        ORDER BY al.id`,
+      ...chunk
+    )) {
+      if (!lastEdits.has(e.assignment_id)) lastEdits.set(e.assignment_id, {});
+      lastEdits.get(e.assignment_id)[e.field_key] = { by: e.actor_name, at: e.at, label: e.field_label };
     }
   }
 
@@ -102,9 +134,20 @@ function collectRows(user, scope = {}) {
     };
     const extra = values.get(r.id) || {};
     for (const f of fields) flat[f.key] = extra[f.key] ?? null;
+    // one extra column per submitted field pair, plus a single summary line, so
+    // "what changed and who changed it" survives the round trip through Excel
+    let latest = null;
+    for (const [key, edit] of Object.entries(lastEdits.get(r.id) || {})) {
+      flat[`${key}__updated_by`] = edit.by;
+      flat[`${key}__updated_at`] = edit.at;
+      if (!latest || String(edit.at) > String(latest.at)) latest = { ...edit, key };
+    }
+    flat.last_supervisor_update = latest
+      ? `${latest.label} → ${latest.by} on ${latest.at}`
+      : '';
     return flat;
   });
-  return { headers, rows: out, fields };
+  return { headers, rows: out, fields, extraHeaders };
 }
 
 function styleHeader(ws) {
@@ -140,9 +183,10 @@ async function buildWorkbook(user, scope = {}) {
   meta.addRow(['This workbook is a generated snapshot. Do not edit it as a live database —', '']);
   meta.addRow(['imports are applied through the application so transactions and audit history are preserved.', '']);
 
-  const { headers, rows } = collectRows(user, scope);
+  const { headers, rows, extraHeaders } = collectRows(user, scope);
   const data = wb.addWorksheet('Employees');
-  data.columns = headers.map((h) => ({ header: h.label, key: h.key, width: h.width }));
+  const allHeaders = [...headers, ...extraHeaders];
+  data.columns = allHeaders.map((h) => ({ header: h.label, key: h.key, width: h.width }));
   for (const r of rows) {
     const flat = { ...r };
     flat['project.code'] = r.project.code;
@@ -200,6 +244,17 @@ function headerKey(h) {
 }
 
 /**
+ * The export writes change stamps beside each CRM value ("Leader Input This
+ * Week — Updated By"). Those columns are derived, not data, so an import of the
+ * workbook we generated has to ignore them instead of creating 37 new fields.
+ */
+function isDerivedHeader(header) {
+  const h = String(header || '').trim();
+  if (/\s+—\s+(Updated By|Updated At)$/i.test(h)) return true;
+  return headerKey(h) === 'last_supervisor_update';
+}
+
+/**
  * Import a daily dataset.
  *
  * Rules:
@@ -219,7 +274,11 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
   // map header labels -> keys
   const headerRow = sheet.getRow(1);
   const labels = [];
-  headerRow.eachCell((cell, col) => labels[col] = headerKey(cell.value));
+  const derived = new Set();
+  headerRow.eachCell((cell, col) => {
+    if (isDerivedHeader(cell.value)) { derived.add(headerKey(cell.value)); return; }
+    labels[col] = headerKey(cell.value);
+  });
   const allFields = schema.listFields();
   const labelToField = new Map();
   for (const f of allFields) {
@@ -240,7 +299,7 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
     if (!row.hasValues) continue;
     const rec = { _row: r, values: {}, identity: {}, meta: {} };
     labels.forEach((label, col) => {
-      if (!label) return;
+      if (!label || derived.has(label)) return;
       const cell = row.getCell(col);
       let v = cell.value;
       if (v && typeof v === 'object') {

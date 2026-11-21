@@ -13,6 +13,44 @@ const fielddefs = require('./fielddefs');
 const CORE_FIELDS = fielddefs.CORE;
 const DEFAULT_FIELDS = [...fielddefs.IMPORTED, ...fielddefs.LEGACY];
 
+const CRM_SETTING = 'crm_fields';
+
+/**
+ * Which columns the CRM / Update panel shows, in order.
+ *
+ * Stored as a setting so an administrator can change the panel without a code
+ * change; the catalogue default is used for a fresh database. Unknown keys are
+ * dropped and the result is always returned in the stored order.
+ */
+function crmKeys() {
+  const row = q.get('SELECT value FROM settings WHERE key = ?', CRM_SETTING);
+  const known = new Set(DEFAULT_FIELDS.concat(CORE_FIELDS).map((f) => f.key));
+  const fallback = fielddefs.CRM_KEYS.filter((k) => known.has(k));
+  if (!row || !row.value) return fallback;
+  let parsed;
+  try { parsed = JSON.parse(row.value); } catch { return fallback; }
+  if (!Array.isArray(parsed)) return fallback;
+  const clean = parsed.filter((k) => typeof k === 'string' && known.has(k));
+  if (!clean.length) return fallback;
+  // anything newly added to the catalogue but not yet configured still appears,
+  // at the end, so an upgrade never silently hides a column
+  for (const k of fallback) if (!clean.includes(k) && fielddefs.CRM_KEYS.includes(k)) clean.push(k);
+  return clean;
+}
+
+function setCrmKeys(keys, actor) {
+  const known = new Set(DEFAULT_FIELDS.concat(CORE_FIELDS).map((f) => f.key));
+  const clean = [...new Set((keys || []).filter((k) => known.has(k)))];
+  if (!clean.length) throw Object.assign(new Error('Choose at least one column for the CRM panel.'), { status: 422 });
+  q.run(
+    `INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, datetime('now'), ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), updated_by = excluded.updated_by`,
+    CRM_SETTING, JSON.stringify(clean), actor ? actor.id : null
+  );
+  record({ entity: 'setting', action: 'update', fieldKey: CRM_SETTING, newValue: `${clean.length} columns`, actor });
+  return clean;
+}
+
 /**
  * Idempotent: inserts any catalogue field that is missing and refreshes the
  * presentation metadata (group, filterable) without touching stored values.
@@ -38,9 +76,12 @@ function seedFields() {
       f.group || null
     );
   }
-  // keep the facet/submit flags on the catalogue definition
+  // keep the facet/submit flags on the catalogue definition. Every CRM column
+  // is editable by a supervisor even when it is not one of the "submit" fields,
+  // so the panel can be configured to show any of them.
+  const crmKeys = fielddefs.CRM_KEYS;
   for (const f of [...CORE_FIELDS, ...DEFAULT_FIELDS]) {
-    if (!f.filterable && !f.submit) continue;
+    if (!f.filterable && !f.submit && !crmKeys.includes(f.key)) continue;
     const row = q.get('SELECT id FROM fields WHERE key = ?', f.key);
     if (!row) continue;
     for (const cat of q.all('SELECT id FROM categories')) {
@@ -49,11 +90,11 @@ function seedFields() {
         q.run(
           `INSERT INTO category_fields (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order)
            VALUES (?, ?, 1, 1, 0, ?, ?, ?)`,
-          cat.id, row.id, f.filterable ? 1 : 0, f.submit ? 1 : 0, 900 + row.id
+          cat.id, row.id, f.filterable ? 1 : 0, (f.submit || crmKeys.includes(f.key)) ? 1 : 0, 900 + row.id
         );
       } else {
         q.run('UPDATE category_fields SET filterable = ?, submit_field = ? WHERE category_id = ? AND field_id = ?',
-          f.filterable ? 1 : 0, f.submit ? 1 : 0, cat.id, row.id);
+          f.filterable ? 1 : 0, (f.submit || crmKeys.includes(f.key)) ? 1 : 0, cat.id, row.id);
       }
     }
   }
@@ -242,6 +283,8 @@ module.exports = {
   supplierOptions,
   columnsForCategory,
   setCategoryFields,
+  crmKeys,
+  setCrmKeys,
   hierarchy,
   scopeLabels,
 };

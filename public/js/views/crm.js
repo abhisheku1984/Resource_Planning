@@ -304,12 +304,15 @@ export function createCrm({ onChanged, getScope }) {
           ),
           fieldControl('supplier'),
         ),
-        h('div', { class: 'crm-section-title' }, 'Status & notes'),
+        // The CRM panel edits the configured supervisor columns (the workbook's
+        // Leader Input … through Giga Project Name), not every column the table
+        // happens to show: a short, purposeful form instead of a 70-field wall.
+        h('div', { class: 'crm-section-title' }, 'Supervisor update'),
         h('div', { class: 'crm-grid' },
+          ...(state.crmKeys && state.crmKeys.length ? state.crmKeys : [])
+            .filter((k) => k !== 'remarks')
+            .map((k) => fieldControl(k, { span2: (colMap.get(k)?.type || state.fields?.find((f) => f.key === k)?.type) === 'textarea' })),
           fieldControl('status'),
-          ...columns
-            .filter((c) => !['emp_code', 'name', 'designation', 'email', 'phone', 'supplier', 'status', 'remarks'].includes(c.key))
-            .map((c) => fieldControl(c.key)),
           h('div', { class: 'field span-2' }, h('label', { class: 'field-label' }, 'Remarks & follow-up'),
             (() => {
               const input = h('textarea', { class: 'textarea', rows: 3, disabled: !canEdit }, v.remarks || '');

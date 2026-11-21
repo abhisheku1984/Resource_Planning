@@ -10,6 +10,7 @@ import {
 const TABS = [
   { key: 'hierarchy', label: 'Projects & hierarchy', icon: 'layers' },
   { key: 'columns', label: 'Data model', icon: 'columns' },
+  { key: 'crm', label: 'CRM panel', icon: 'contact' },
   { key: 'suppliers', label: 'Suppliers', icon: 'truck' },
   { key: 'groups', label: 'Employee groups', icon: 'users' },
   { key: 'access', label: 'Users & access', icon: 'shield' },
@@ -54,6 +55,7 @@ export async function renderAdmin(content, ctx) {
   function paint() {
     if (tab === 'hierarchy') renderHierarchy(bodyHost);
     else if (tab === 'columns') renderDataModel(bodyHost);
+    else if (tab === 'crm') renderCrmColumns(bodyHost);
     else if (tab === 'suppliers') renderSuppliers(bodyHost);
     else if (tab === 'groups') renderGroups(bodyHost);
     else renderAccess(bodyHost);
@@ -61,6 +63,98 @@ export async function renderAdmin(content, ctx) {
 
   paintTabs();
   paint();
+}
+
+/* ============================================================ CRM panel */
+/**
+ * Choose which columns the CRM / Update panel offers, and in what order.
+ * These are the columns a supervisor edits and submits; the export carries the
+ * same list in the same order, plus who changed each value and when.
+ */
+async function renderCrmColumns(host) {
+  mount(host, h('div', { class: 'row', style: { padding: '16px' } }, spinner(), h('span', { class: 'muted' }, 'Loading panel columns…')));
+
+  let current;
+  try {
+    current = await api('/settings/crm-fields');
+  } catch (err) {
+    mount(host, emptyState({ title: 'Could not load the panel columns', message: err.message, iconName: 'alert' }));
+    return;
+  }
+
+  // ordered list of the chosen keys, plus everything else available
+  let keys = [...current.keys];
+  const byKey = new Map(current.available.map((f) => [f.key, f]));
+  const label = (k) => byKey.get(k)?.label || k;
+
+  const listHost = h('div', { class: 'col', style: { gap: '6px' } });
+  const addSelect = h('select', { class: 'select', style: { maxWidth: '260px' } },
+    h('option', { value: '' }, 'Add a column…'),
+    ...current.available.filter((f) => !keys.includes(f.key)).map((f) => h('option', { value: f.key }, f.label)));
+  addSelect.addEventListener('change', () => {
+    if (!addSelect.value) return;
+    keys.push(addSelect.value);
+    addSelect.value = '';
+    paintList();
+  });
+
+  function paintList() {
+    mount(listHost, ...keys.map((k, i) => h('div', {
+      class: 'row',
+      style: { gap: '8px', padding: '7px 10px', border: '1px solid var(--line)', borderRadius: '8px', background: 'var(--surface)' },
+    },
+      h('span', { class: 'mono subtle', style: { fontSize: '11px', width: '22px' } }, String(i + 1)),
+      h('span', { class: 'grow', style: { fontSize: '12.5px' } }, label(k)),
+      h('div', { class: 'row', style: { gap: '2px' } },
+        h('button', {
+          class: 'btn btn-ghost btn-xs', title: 'Move up', disabled: i === 0,
+          onclick: () => { const [x] = keys.splice(i, 1); keys.splice(i - 1, 0, x); paintList(); },
+        }, icon('chevronDown', 12)),
+        h('button', {
+          class: 'btn btn-ghost btn-xs', title: 'Move down', disabled: i === keys.length - 1,
+          onclick: () => { const [x] = keys.splice(i, 1); keys.splice(i + 1, 0, x); paintList(); },
+        }, icon('chevronDown', 12)),
+        h('button', {
+          class: 'btn btn-ghost btn-xs', title: 'Remove from the panel',
+          onclick: () => { keys = keys.filter((x) => x !== k); paintList(); },
+        }, icon('x', 12)),
+      ),
+    )));
+    if (!keys.length) mount(listHost, h('div', { class: 'subtle' }, 'No columns selected — the panel will fall back to its default list.'));
+  }
+  paintList();
+
+  const save = h('button', { class: 'btn btn-primary' }, icon('check', 14), 'Save panel columns');
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    try {
+      const res = await api('/settings/crm-fields', { method: 'PUT', body: { keys } });
+      state.crmKeys = res.keys;
+      toast('CRM panel updated', `${res.keys.length} columns. Supervisors see them immediately; the export uses the same order.`, 'success', 5000);
+    } catch (err) {
+      toast('Not saved', err.message, 'error');
+    } finally {
+      save.disabled = false;
+    }
+  });
+
+  mount(host, h('div', { class: 'card', style: { padding: '16px' } },
+    h('div', { class: 'card-title', style: { marginBottom: '4px' } }, icon('contact', 15), 'CRM / Update panel columns'),
+    h('div', { class: 'card-sub', style: { marginBottom: '12px' } },
+      'Employee ID and the name are always shown at the top. Everything below is what a supervisor can edit and submit — keep it to what they own.'),
+    listHost,
+    h('div', { class: 'row', style: { gap: '8px', marginTop: '12px' } },
+      addSelect,
+      h('div', { class: 'grow' }),
+      h('button', {
+        class: 'btn',
+        onclick: () => { keys = [...current.keys]; paintList(); },
+      }, 'Reset'),
+      save,
+    ),
+    h('div', { class: 'note', style: { marginTop: '12px' } }, icon('info', 15),
+      h('span', null, 'Submitted values are written in one transaction, audited with the supervisor\'s name, and appear in the next Excel export alongside a per-field "who changed it and when" column.')),
+  ));
 }
 
 /* ================================================================= hierarchy */

@@ -81,6 +81,7 @@ async function loadBootstrap() {
   state.tree = data.tree;
   state.fields = data.fields;
   state.suppliers = data.suppliers;
+  state.crmKeys = data.crmKeys || [];
   state.totals = data.totals;
   state.statusCounts = data.statusCounts;
 }

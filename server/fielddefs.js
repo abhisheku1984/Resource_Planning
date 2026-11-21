@@ -166,8 +166,45 @@ const LEGACY = [
 
 const ALL = [...CORE, ...IMPORTED, ...LEGACY];
 
+/**
+ * The CRM / Update panel.
+ *
+ * A supervisor sees the person (Employee ID, First Name, Last Name) and then
+ * exactly these columns - the ones the brief calls out in the workbook, from
+ * Leader Input Last Week through Demand Number. Submit writes them in one
+ * transaction; the next Excel export carries the new values plus who changed
+ * them and when.
+ *
+ * The list is a setting, not a hard-coded form: it lives in the `settings`
+ * table (key `crm_fields`) and an administrator can change it without a code
+ * change. This constant is only the default for a fresh database.
+ *
+ * Order matters - it is the order the fields appear in the panel and in the
+ * workbook, not alphabetical.
+ */
+const CRM_KEYS = [
+  'leader_input_last_week',
+  'leader_input_this_week',
+  'leader_input_pid_account',
+  'billing_start_date',
+  'billing_end_date',
+  'pid_awaited_account',
+  'pid_awaited_blocked_date',
+  'opp_id',
+  'account_owner',
+  'allocation_closure_eta',
+  'role_of_month',
+  'role_of_responses',
+  'detail_comments',
+  'block_status',
+  'account_name',
+  'interviewed_by',
+  'demand_number',
+  'giga_project_name',
+];
+
 module.exports = {
   BENCH_CATEGORIES, ALLOCATION_STATUS, BLOCK_STATUS,
   BILLING_STATUS, MANAGEMENT_LEVEL, CAPABILITY, ROW_STATUS, SERVICE_STATUS, SOURCE,
-  CORE, IMPORTED, LEGACY, ALL,
+  CORE, IMPORTED, LEGACY, ALL, CRM_KEYS,
 };
