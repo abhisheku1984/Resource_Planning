@@ -4,6 +4,7 @@ const { q, tx } = require('./db');
 const auth = require('./auth');
 const schema = require('./schema');
 const emp = require('./employees');
+const query = require('./query');
 const excel = require('./excel');
 const { record, historyFor, recentActivity } = require('./audit');
 
@@ -443,13 +444,65 @@ router.get('/employees', requireAuth, wrap((req, res) => {
     categoryId: asInt(req.query.categoryId || req.query.category_id),
     supplierId: asInt(req.query.supplierId || req.query.supplier_id),
   };
-  res.json(emp.listEmployees(req.user, params));
+  res.json(query.listEmployees(req.user, { ...params, ...req.body?.filters }));
+}));
+
+/**
+ * Filter facets for the bench board: for each filterable column in scope, the
+ * distinct values and counts. Drives the "space filter" chips.
+ */
+router.get('/employees/facets', requireAuth, wrap((req, res) => {
+  const params = {
+    projectId: asInt(req.query.projectId || req.query.project_id),
+    subprojectId: asInt(req.query.subprojectId || req.query.subproject_id),
+    categoryId: asInt(req.query.categoryId || req.query.category_id),
+  };
+  const { scope } = query.resolveScope(req.user, params);
+  const columns = query.columnsFor(scope);
+  res.json({ facets: query.facetsFor(scope, columns), scope: schema.scopeLabels(scope) });
+}));
+
+/**
+ * Supervisor submit: one explicit Save that writes every field on the form in a
+ * single transaction, then returns the authoritative row so the table and the
+ * export both reflect it immediately.
+ */
+router.post('/employees/:id/submit', requireAuth, wrap((req, res) => {
+  if (!auth.can(req.user, 'employee.edit') && !req.user.isAdmin) {
+    return res.status(403).json({ error: 'You do not have permission to update employee records.' });
+  }
+  const id = Number(req.params.id);
+  const before = query.getAssignment(id);
+  if (!before) return res.status(404).json({ error: 'Employee record not found.' });
+  // §23: scope is enforced on the server, not only by which projects we render.
+  query.assertProjectAccess(req.user, before.projectId);
+
+  emp.updateAssignment(req.user, id, req.body.changes || {}, {
+    expectedRev: req.body.rev || null,
+    reason: req.body.reason || 'Supervisor submit',
+  });
+  const after = query.getAssignment(id);
+
+  const changedKeys = Object.keys(req.body.changes || {}).filter((k) => {
+    const a = before.values[k];
+    const b = after.values[k];
+    return String(a ?? '') !== String(b ?? '');
+  });
+
+  res.json({
+    record: after,
+    changed: changedKeys,
+    savedAt: new Date().toISOString(),
+    message: changedKeys.length
+      ? `Saved ${changedKeys.length} field${changedKeys.length === 1 ? '' : 's'}. The next Excel export will include these values.`
+      : 'No changes to save.',
+  });
 }));
 
 router.get('/employees/:id', requireAuth, wrap((req, res) => {
-  const data = emp.getAssignment(Number(req.params.id));
+  const data = query.getAssignment(Number(req.params.id));
   if (!data) return res.status(404).json({ error: 'Employee record not found.' });
-  emp.assertProjectAccess(req.user, data.projectId);
+  query.assertProjectAccess(req.user, data.projectId);
   res.json({ record: data });
 }));
 

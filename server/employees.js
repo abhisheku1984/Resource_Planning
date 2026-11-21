@@ -67,6 +67,7 @@ function buildRowQuery({ projectId, subprojectId, categoryId }) {
     "a.category_id",
     'a.supplier_id',
     'a.updated_at AS assignment_updated_at',
+    'a.rev AS assignment_rev',
     'a.created_at AS assignment_created_at',
     'e.id AS employee_id',
     'e.updated_at AS employee_updated_at',
@@ -263,7 +264,7 @@ function normalizeRow(r, columns, dynamic) {
     categoryName: r.category_name,
     updatedAt: r.assignment_updated_at,
     updatedBy: r.updated_by_name || '—',
-    rev: r.assignment_updated_at,
+    rev: r.assignment_rev ?? null,
     values: {},
   };
   for (const c of columns) {
@@ -353,9 +354,12 @@ function updateAssignment(user, assignmentId, changes, { expectedRev = null, sou
   const byKey = new Map(categoryColumns.map((c) => [c.key, c]));
   const employee = q.get('SELECT * FROM employees WHERE id = ?', assignment.employee_id);
 
-  if (expectedRev && source === 'manual') {
-    const currentRev = assignment.updated_at;
-    if (currentRev !== expectedRev) {
+  if (expectedRev !== null && expectedRev !== undefined && source === 'manual') {
+    const currentRev = assignment.rev;
+    // accept both the numeric revision and the legacy timestamp form
+    const expected = /^\d+$/.test(String(expectedRev)) ? Number(expectedRev) : null;
+    const stale = expected !== null ? currentRev !== expected : assignment.updated_at !== String(expectedRev);
+    if (stale) {
       const err = new Error('This record was changed by someone else. Review the latest values and retry.');
       err.status = 409;
       err.code = 'STALE';
@@ -394,11 +398,11 @@ function updateAssignment(user, assignmentId, changes, { expectedRev = null, sou
 
         if (key === 'supplier') {
           const sid = supplierIdFor(after, user);
-          q.run('UPDATE assignments SET supplier_id = ?, updated_at = datetime(\'now\'), updated_by = ? WHERE id = ?', sid, user.id, assignmentId);
+          q.run("UPDATE assignments SET supplier_id = ?, updated_at = datetime('now'), updated_by = ?, rev = rev + 1 WHERE id = ?", sid, user.id, assignmentId);
           assignmentTouched = true;
         } else if (key === 'status' || key === 'remarks') {
           q.run(
-            `UPDATE assignments SET ${key} = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`,
+            `UPDATE assignments SET ${key} = ?, updated_at = datetime('now'), updated_by = ?, rev = rev + 1 WHERE id = ?`,
             after === null ? null : String(after),
             user.id,
             assignmentId
@@ -477,7 +481,7 @@ function updateAssignment(user, assignmentId, changes, { expectedRev = null, sou
       // still bump nothing; return snapshot so the client can show Saved
     } else {
       if (!assignmentTouched) {
-        q.run(`UPDATE assignments SET updated_at = datetime('now'), updated_by = ? WHERE id = ?`, user.id, assignmentId);
+        q.run("UPDATE assignments SET updated_at = datetime('now'), updated_by = ?, rev = rev + 1 WHERE id = ?", user.id, assignmentId);
       }
       if (!employeeTouched) {
         q.run(`UPDATE employees SET updated_at = datetime('now') WHERE id = ?`, employee.id);

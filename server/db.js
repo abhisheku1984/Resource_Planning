@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS assignments (
   status       TEXT NOT NULL DEFAULT 'Active',
   remarks      TEXT,
   active       INTEGER NOT NULL DEFAULT 1,
+  rev          INTEGER NOT NULL DEFAULT 1,
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
   updated_by   INTEGER REFERENCES users(id),
@@ -281,6 +282,9 @@ function migrate() {
   add('fields', 'group_name', 'group_name TEXT');
   add('fields', 'imported', 'imported INTEGER NOT NULL DEFAULT 0');
   add('employees', 'name_source', "name_source TEXT DEFAULT 'manual'");
+  // Optimistic-concurrency token. A timestamp is only second-precise, so two
+  // saves inside the same second would compare equal and silently clobber.
+  add('assignments', 'rev', 'rev INTEGER NOT NULL DEFAULT 1');
   // value lookups by field are the hot path for filters
   db.exec('CREATE INDEX IF NOT EXISTS idx_av_field_value ON assignment_values(field_id, value)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_assign_proj ON assignments(project_id, category_id, active)');
@@ -300,10 +304,18 @@ function tx(fn) {
   }
 }
 
+// Prepared statements are cached, so the cache is bounded: the query engine
+// builds a handful of statements per request (variable IN-lists, facets) and an
+// unbounded cache would grow with every distinct page size.
 const stmtCache = new Map();
+const STMT_CACHE_MAX = 400;
 function prepare(sql) {
   let st = stmtCache.get(sql);
-  if (!st) { st = db.prepare(sql); stmtCache.set(sql, st); }
+  if (!st) {
+    if (stmtCache.size >= STMT_CACHE_MAX) stmtCache.delete(stmtCache.keys().next().value);
+    st = db.prepare(sql);
+    stmtCache.set(sql, st);
+  }
   return st;
 }
 
@@ -314,4 +326,27 @@ const q = {
   prepare,
 };
 
-module.exports = { db, q, tx, DB_FILE, DATA_DIR, SCHEMA };
+/**
+ * Per-request memo. Config (project -> subproject -> category trees, column
+ * layouts, the field catalogue) is read on nearly every call; without this the
+ * same rows are re-queried dozens of times per request.
+ */
+let memo = null;
+function batch(fn) {
+  if (memo) return fn();
+  memo = new Map();
+  try {
+    return fn();
+  } finally {
+    memo = null;
+  }
+}
+function remember(key, fn) {
+  if (!memo) return fn();
+  if (memo.has(key)) return memo.get(key);
+  const value = fn();
+  memo.set(key, value);
+  return value;
+}
+
+module.exports = { db, q, tx, DB_FILE, DATA_DIR, SCHEMA, batch, remember };

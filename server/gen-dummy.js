@@ -200,7 +200,11 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
           // column layout for this category
           let order = 10;
           for (const f of fields) {
-            const visible = def.show.includes(f.key);
+            // Filterable and supervisor-editable columns must always be
+            // resolvable, so facets and the Submit form work even when the
+            // column is not displayed as a table column by default.
+            const isSubmit = !!fielddefs.ALL.find((x) => x.key === f.key)?.submit;
+            const visible = def.show.includes(f.key) || def.filterable.includes(f.key) || isSubmit;
             q.run(
               `INSERT INTO category_fields
                  (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order)
@@ -209,7 +213,7 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
               f.key === 'emp_code' ? 0 : 1,
               f.key === 'bench_category' && catName === 'Delivery Status' ? 1 : 0,
               def.filterable.includes(f.key) ? 1 : 0,
-              fieldByKey.get(f.key) && fielddefs.ALL.find((x) => x.key === f.key)?.submit ? 1 : 0,
+              isSubmit ? 1 : 0,
               visible ? order++ : 900 + f.id
             );
           }
@@ -240,8 +244,11 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
     }
 
     /* ---------------- employees & assignments ---------------- */
-    const usedNames = new Set();
+    // Names are deliberately NOT unique: real HR data has duplicate names and
+    // the employee ID is the identity. Requiring uniqueness here would both be
+    // unrealistic and make generation combinatorially impossible.
     let empSeq = 10001;
+    let nameSuffix = 0;
 
     // distribute rows across categories proportionally to project weight
     const totalWeight = plates.reduce((a, p) => a + p.weight, 0);
@@ -260,9 +267,10 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
     for (const plate of plan) {
       for (let n = 0; n < plate.target; n++) {
         // ---- identity ----
-        let first; let last; let full;
-        do { first = pick(FIRST); last = pick(LAST); full = `${first} ${last}`; } while (usedNames.has(full));
-        usedNames.add(full);
+        const first = pick(FIRST);
+        const last = pick(LAST);
+        // ~8% share a plain name with someone else, as often happens in practice
+        const full = chance(0.08) ? `${first} ${last} ${++nameSuffix}` : `${first} ${last}`;
         const code = `EMP-${String(empSeq++).padStart(5, '0')}`;
         const join = addDays(TODAY, -int(60, 2200));
         const r = q.run(
@@ -482,7 +490,6 @@ async function writeWorkbook(file) {
   header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3A5F' } };
   header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   header.commit();
-  ws.views = [{ state: 'frozen', ySplit: 1 }];
 
   const rows = q.all(
     `SELECT a.id, p.name pname, s.name sname, c.name cname,

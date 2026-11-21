@@ -1,20 +1,42 @@
-# Resource Planning
+# Resource Planning Platform
 
-Enterprise workforce data platform for delivery organisations: project
-drill-down, per-category dynamic employee tables, an embedded employee CRM, and
-Excel exports generated from a central database.
+Single source of truth for the workforce master: one SQLite database, Excel as
+import/export only, supervisors update records in the app.
 
-* **Stack** — Node.js 22 (built-in `node:sqlite`), Express 4, ExcelJS, vanilla ES
-  modules on the frontend. No build step, no frontend framework.
-* **Storage** — a single SQLite database is the source of truth. Excel workbooks
-  are generated *from* it and imported *into* it; a shared workbook is never used
-  as a live store.
-* **Design** — see [DESIGN.md](DESIGN.md) for navigation, wireframes and the
-  design system.
-* **Data safety** — see [SECURITY.md](SECURITY.md): what the app touches, what it
-  sends (nothing), and the limitations to know before loading real HR data.
+## Quick start (Node 22.5 or newer — nothing else)
 
----
+```bash
+git clone https://github.com/abhisheku1984/Resource_Planning.git
+cd Resource_Planning
+git checkout arena/bd816d6f-resource-planning
+npm install
+npm run demo      # builds the 12,000-employee demo database (about 10 seconds)
+npm start         # http://localhost:4000
+```
+
+`npm run demo` wipes `data/` and regenerates everything, so re-run it any time you
+want a clean dataset. `npm run demo -- --rows 500` makes a smaller one.
+
+### Demo logins
+
+| Role | Email | Password |
+|---|---|---|
+| Administrator | `admin@resourceplanning.io` | `Admin@12345` |
+| Supervisor — NEXUS | `priya.nair@resourceplanning.io` | `Super@12345` |
+| Supervisor — ATLAS + HORIZON | `rohit.verma@resourceplanning.io` | `Super@12345` |
+| Supervisor — ORBIT | `meera.iyer@resourceplanning.io` | `Super@12345` |
+| Supervisor — NEXUS/ATLAS/ORBIT/VERTEX | `sameer.khan@resourceplanning.io` | `Super@12345` |
+| Supervisor — VERTEX + ZENITH | `arun.pillai@resourceplanning.io` | `Super@12345` |
+| Read-only reviewer | `kavita.rao@resourceplanning.io` | `Super@12345` |
+| HR uploader | `hr.upload@resourceplanning.io` | `Hr@1234567` |
+
+Windows: `start-windows.bat` does the install, demo build and start in one step.
+
+### Tests
+
+```bash
+npm test          # 28 integration + UI smoke tests
+```
 
 ## Quick start
 

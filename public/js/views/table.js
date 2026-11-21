@@ -7,10 +7,11 @@ import {
   h, mount, icon, api, state, statusBadge, fmtRelative, fmtDate, spinner,
   emptyState, toast, debounce, fmtNum,
 } from '../core.js';
+import { createFilterBar } from './filterbar.js';
 
 const STATUS_FIELDS = new Set(['status', 'training_status', 'completion_status', 'billing_status', 'allocation_status']);
 
-export function createTable({ onSelect, onSaved, compact = false, showScope = true }) {
+export function createTable({ onSelect, onSaved, compact = false, showScope = true, withFilters = true }) {
   const el = h('div', { class: 'card', style: { overflow: 'hidden' } });
 
   const q = {
@@ -32,6 +33,38 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   let selectedId = null;
   let controller = null;
   let lastScopeKey = '';
+  let facets = [];
+  const facetFilters = {};   // key -> [values]
+  // §19: supervisors pick a small working set out of the 70-80 imported
+  // columns. Choice is remembered per category in localStorage.
+  let hiddenCols = new Set(loadHidden());
+
+  function hiddenKey() {
+    return `rp.hidden.${state.user?.id || 'anon'}.${q.categoryId || 'all'}`;
+  }
+  function loadHidden() {
+    try {
+      return JSON.parse(localStorage.getItem(hiddenKey()) || '[]');
+    } catch { return []; }
+  }
+  function saveHidden() {
+    try { localStorage.setItem(hiddenKey(), JSON.stringify([...hiddenCols])); } catch { /* private mode */ }
+  }
+  function shownColumns() {
+    return data.columns.filter((c) => !hiddenCols.has(c.key));
+  }
+
+  const filterBar = withFilters
+    ? createFilterBar({
+      onChange: (next) => {
+        for (const k of Object.keys(facetFilters)) delete facetFilters[k];
+        for (const [k, vals] of Object.entries(next)) facetFilters[k] = vals;
+        q.page = 1;
+        load();
+      },
+      getActive: () => facetFilters,
+    })
+    : null;
 
   const searchInput = h('input', {
     class: 'input',
@@ -91,7 +124,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   const bodyHost = h('div', { id: 'table-host' });
   const chipsHost = h('div', { class: 'row', style: { padding: '0 14px 10px', gap: '6px', flexWrap: 'wrap', background: 'var(--surface)' } });
 
-  mount(el, head, toolbar, chipsHost, bodyHost, foot);
+  mount(el, head, ...(filterBar ? [filterBar.el] : []), toolbar, chipsHost, bodyHost, foot);
 
   /* ------------------------------------------------------------- loading */
   async function load({ silent = false } = {}) {
@@ -111,9 +144,16 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     if (q.supplierId) params.set('supplierId', q.supplierId);
     if (q.status) params.set('status', q.status);
     for (const [k, v] of Object.entries(q.filters)) if (v) params.set(k, v);
+    for (const [k, vals] of Object.entries(facetFilters)) {
+      if (vals && vals.length) params.set(`f_${k}`, vals.join('|'));
+    }
     try {
       const res = await api(`/employees?${params}`, { signal: controller.signal });
       data = res;
+      if (filterBar && res.facets) {
+        facets = res.facets;
+        filterBar.setFacets(facets, res.scope?.category?.name || res.scope?.project?.name || '');
+      }
       loading = false;
       render();
     } catch (err) {
@@ -162,7 +202,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
       return;
     }
 
-    const cols = data.columns;
+    const cols = shownColumns();
     const table = h('table', { class: 'data' });
     const thead = h('thead');
     const tr = h('tr');
@@ -240,6 +280,12 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
       const col = data.columns.find((c) => c.key === k.slice(2));
       add(`${col ? col.label : k}: ${v}`, () => { delete q.filters[k]; });
     }
+    for (const [k, vals] of Object.entries(facetFilters)) {
+      if (!vals || !vals.length) continue;
+      const facet = (facets || []).find((f) => f.key === k);
+      const label = facet ? facet.label : k;
+      add(`${label}: ${vals.join(', ')}`, () => { delete facetFilters[k]; if (filterBar) filterBar.setActive(facetFilters); });
+    }
     if (chips.length) {
       chips.push(h('button', {
         class: 'btn btn-ghost btn-xs', onclick: clearFilters,
@@ -254,6 +300,8 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     q.status = '';
     q.supplierId = null;
     q.filters = {};
+    for (const k of Object.keys(facetFilters)) delete facetFilters[k];
+    if (filterBar) filterBar.setActive({});
     q.page = 1;
     searchInput.value = '';
     statusSelect.value = '';
@@ -610,70 +658,85 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   /* ------------------------------------------------------------- columns */
   async function openColumnChooser() {
     const { modal } = await import('../core.js');
-    const visible = new Map(data.columns.map((c) => [c.key, true]));
-    const all = state.fields || [];
-    const rows = all.map((f) => {
-      const configured = data.columns.find((c) => c.key === f.key);
-      const cb = h('input', { type: 'checkbox', checked: visible.has(f.key) || !!configured });
-      return { f, cb, configured };
-    });
-    const note = h('div', { class: 'note', style: { marginBottom: '12px' } },
-      icon('info', 15),
-      h('span', null, state.user.isAdmin
-        ? 'Column visibility is stored per category. Saving here updates this category for every supervisor.'
-        : 'You can hide columns for this session. Persistent per-category layouts are managed by an administrator.'),
-    );
+    const all = data.columns.length
+      ? data.columns
+      : (state.fields || []).map((f) => ({ ...f, key: f.key }));
+    if (!all.length) {
+      toast('Columns still loading', 'Reload the table and try again.', 'warn');
+      return;
+    }
+    const boxes = new Map();
+    const search = h('input', { class: 'input', type: 'search', placeholder: 'Search columns…' });
+    const list = h('div', { class: 'col', style: { gap: '2px' } });
+
+    const renderList = (term) => {
+      const t = term.trim().toLowerCase();
+      const rows = all.filter((c) => !t || c.label.toLowerCase().includes(t) || c.key.includes(t));
+      mount(list, ...(rows.length ? rows.map((c) => {
+        const cb = h('input', {
+          type: 'checkbox',
+          checked: !hiddenCols.has(c.key),
+          onchange: () => { cb.checked ? hiddenCols.delete(c.key) : hiddenCols.add(c.key); },
+        });
+        boxes.set(c.key, cb);
+        return h('label', { class: 'list-item', style: { cursor: 'pointer' } }, cb,
+          h('div', { class: 'grow' },
+            h('div', { class: 'li-name' }, c.label),
+            h('div', { class: 'li-meta' }, [c.key, c.type, c.group].filter(Boolean).join(' · ')),
+          ),
+          c.submitField ? h('span', { class: 'pill', style: { fontSize: '10px' } }, 'editable') : null,
+        );
+      }) : [h('div', { class: 'subtle', style: { padding: '10px' } }, 'No columns match.')]));
+    };
+    renderList('');
+    search.addEventListener('input', debounce(() => renderList(search.value), 120));
+
+    const countLabel = h('div', { class: 'subtle', style: { fontSize: '11.5px' } });
+    const syncCount = () => {
+      countLabel.textContent = `${all.length - hiddenCols.size} of ${all.length} columns visible`;
+    };
+    syncCount();
+    list.addEventListener('change', syncCount);
+
+    const preset = (keys) => {
+      hiddenCols = new Set(all.map((c) => c.key).filter((k) => !keys.includes(k)));
+      for (const [k, cb] of boxes) cb.checked = !hiddenCols.has(k);
+      syncCount();
+    };
+
     modal({
-      title: 'Visible columns',
-      subtitle: data.scope?.category ? `Category: ${data.scope.category.name}` : 'Apply to the current selection',
-      body: h('div', null, note,
-        h('div', { class: 'col', style: { gap: '2px' } },
-          ...rows.map(({ f, cb }) => h('label', {
-            class: 'list-item', style: { cursor: 'pointer' },
-          }, cb,
-            h('div', { class: 'grow' },
-              h('div', { class: 'li-name' }, f.label),
-              h('div', { class: 'li-meta' }, `${f.key} · ${f.type}${f.core ? ' · core' : ''}`),
-            ),
-          )),
+      title: 'Columns to show',
+      subtitle: data.scope?.category ? `Category: ${data.scope.category.name}` : 'Your working set',
+      size: 'lg',
+      body: h('div', null,
+        h('div', { class: 'note', style: { marginBottom: '10px' } }, icon('info', 15),
+          h('span', null, 'The imported file has 78 columns. Pick the handful you actually use — your choice is remembered on this computer.')),
+        h('div', { class: 'row', style: { gap: '6px', marginBottom: '10px', flexWrap: 'wrap' } },
+          h('button', { class: 'btn btn-sm', onclick: () => preset(['emp_code', 'name', 'designation', 'bench_category', 'allocation_percentage', 'allocation_start_date', 'allocation_end_date', 'eta_available']) }, 'Bench working set'),
+          h('button', { class: 'btn btn-sm', onclick: () => preset(['emp_code', 'name', 'supplier', 'bench_category', 'allocation_plan', 'pid', 'opid', 'eta_available', 'risk_flag']) }, 'Planning set'),
+          h('button', { class: 'btn btn-sm', onclick: () => preset(all.map((c) => c.key)) }, 'Show all'),
+          h('span', { class: 'grow' }),
+          countLabel,
         ),
+        search,
+        h('div', { class: 'col', style: { gap: '2px', maxHeight: '46vh', overflowY: 'auto', marginTop: '8px' } }, list),
       ),
       footer: h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '8px', width: '100%' } },
-        state.user.isAdmin && data.scope?.category
+        state.user?.isAdmin && data.scope?.category
           ? h('a', {
             class: 'btn btn-ghost btn-sm',
             href: `#/admin?tab=columns&category=${data.scope.category.id}`,
             onclick: () => document.querySelector('.overlay')?.remove(),
-          }, icon('sliders', 14), 'Edit layout & permissions')
+          }, icon('sliders', 14), 'Set defaults for everyone')
           : null,
         h('button', { class: 'btn', onclick: () => document.querySelector('.overlay')?.remove() }, 'Cancel'),
         h('button', {
           class: 'btn btn-primary',
-          onclick: async (e) => {
-            const chosen = rows.filter((r) => r.cb.checked).map((r) => r.f.key);
-            if (state.user.isAdmin && data.scope?.category) {
-              e.target.disabled = true;
-              try {
-                const cat = data.scope.category.id;
-                const detail = await api(`/categories/${cat}/columns`);
-                const payload = detail.fields.map((f) => ({
-                  field_id: f.id,
-                  visible: chosen.includes(f.key),
-                  editable: f.editable,
-                  required: f.required,
-                }));
-                await api(`/categories/${cat}/columns`, { method: 'PUT', body: { fields: payload } });
-                document.querySelector('.overlay')?.remove();
-                toast('Layout saved', 'All supervisors will see this column set.', 'success');
-                load();
-              } catch (err) {
-                toast('Could not save layout', err.message, 'error');
-                e.target.disabled = false;
-              }
-            } else {
-              document.querySelector('.overlay')?.remove();
-              toast('Columns hidden', 'This preference applies to your session.', 'success');
-            }
+          onclick: () => {
+            saveHidden();
+            document.querySelector('.overlay')?.remove();
+            render();
+            toast('Columns updated', `${all.length - hiddenCols.size} columns shown.`, 'success', 2600);
           },
         }, 'Apply'),
       ),
@@ -695,6 +758,9 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
         lastScopeKey = key;
         q.page = 1;
         q.filters = {};
+        for (const k of Object.keys(facetFilters)) delete facetFilters[k];
+        if (filterBar) filterBar.setActive({});
+        hiddenCols = new Set(loadHidden());
       }
       return load();
     },
@@ -707,6 +773,15 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
       if (row) select(row);
     },
     getRow: (id) => data.rows.find((r) => r.assignmentId === Number(id)),
+    getFacets: () => facets,
+    selectedId: () => selectedId,
+    setFacetFilters(next) {
+      for (const k of Object.keys(facetFilters)) delete facetFilters[k];
+      for (const [k, vals] of Object.entries(next || {})) facetFilters[k] = vals;
+      if (filterBar) filterBar.setActive(facetFilters);
+      q.page = 1;
+      return load();
+    },
     focusSearch() { searchInput.focus(); },
   };
 }

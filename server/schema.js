@@ -1,5 +1,5 @@
 'use strict';
-const { q, tx } = require('./db');
+const { q, tx, remember } = require('./db');
 const { record } = require('./audit');
 const fielddefs = require('./fielddefs');
 
@@ -90,7 +90,7 @@ function fieldDef(row) {
 }
 
 function listFields() {
-  return q.all('SELECT * FROM fields ORDER BY id').map(fieldDef);
+  return remember('fields:all', () => q.all('SELECT * FROM fields ORDER BY id').map(fieldDef));
 }
 
 /** Field catalogue grouped for the "show columns" picker. */
@@ -110,6 +110,9 @@ function groupedFields() {
  * so new categories are instantly usable.
  */
 function columnsForCategory(categoryId) {
+  const key = `cols:${categoryId}`;
+  const cached = remember(key, () => null);
+  if (cached) return cached;
   const fields = q.all('SELECT * FROM fields ORDER BY id').map(fieldDef);
   const config = new Map(
     q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId).map((r) => [r.field_id, r])
@@ -131,7 +134,10 @@ function columnsForCategory(categoryId) {
       section: c ? c.section : null,
     });
   }
-  return out.sort((a, b) => a.sort - b.sort || a.id - b.id);
+  const sorted = out.sort((a, b) => a.sort - b.sort || a.id - b.id);
+  // cache inside the current request only
+  remember(key, () => sorted);
+  return sorted;
 }
 
 function setCategoryFields(categoryId, rows, actor) {

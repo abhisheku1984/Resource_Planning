@@ -353,8 +353,9 @@ test('scenario 10 + 11: exports contain fresh data and imports preserve supervis
   let found = false;
   sheet.eachRow((r, i) => {
     if (i === 1) return;
+    // an employee can hold several assignments; the edited one carries the marker
     if (String(r.getCell(idCol).value) === row.values.emp_code) {
-      found = String(r.getCell(remarksCol).value) === marker;
+      found = found || String(r.getCell(remarksCol).value) === marker;
     }
   });
   assert.ok(found, 'the consolidated export must include the latest saved value');
@@ -485,8 +486,11 @@ test('server-side sort, search, filter and pagination', async () => {
   const desc = await api('GET', '/employees?pageSize=5&sort=name&dir=desc');
   assert.notEqual(desc.data.rows[0].values.name, p1.data.rows[0].values.name);
 
-  const filtered = await api('GET', '/employees?status=Released&pageSize=100');
-  assert.ok(filtered.data.rows.every((r) => r.values.status === 'Released'));
+  // assignment status is a mapped column, filtered with the f_ prefix
+  const st = p1.data.rows[0].values.status;
+  const filtered = await api('GET', `/employees?pageSize=100&f_status=${encodeURIComponent(st)}`);
+  assert.ok(filtered.data.total >= 1);
+  assert.ok(filtered.data.rows.every((r) => r.values.status === st));
 
   const searched = await api('GET', `/employees?search=${encodeURIComponent('EMP-01001')}&pageSize=100`);
   assert.ok(searched.data.total >= 1);
@@ -511,4 +515,75 @@ test('concurrent updates never corrupt the database (transactional writes)', asy
       assert.match(r.values.remarks, /^parallel-\d+$/);
     }
   }
+});
+
+/* ------------------------------------------------------------------ 12k scale */
+test('bench category facets and facet filtering work on the full column set', async () => {
+  const api = client(await login('priya.nair@resourceplanning.io'));
+  const first = await api('GET', '/employees?pageSize=1');
+  const projectId = first.data.rows[0].projectId;
+
+  const res = await api('GET', `/employees?projectId=${projectId}&pageSize=5`);
+  assert.ok(res.data.facets.length >= 5, 'facets are returned with the page');
+  const bench = res.data.facets.find((f) => f.key === 'bench_category');
+  assert.ok(bench && bench.values.length >= 3);
+  assert.ok(bench.values.every((v) => typeof v.count === 'number'));
+
+  const value = bench.values[0].value;
+  const scoped = await api('GET', `/employees?projectId=${projectId}&pageSize=200&f_bench_category=${encodeURIComponent(value)}`);
+  assert.equal(scoped.data.total, bench.values[0].count);
+  assert.ok(scoped.data.rows.every((r) => r.values.bench_category === value));
+});
+
+test('every category exposes the full supervisor submit field set', async () => {
+  const api = client(await login('priya.nair@resourceplanning.io'));
+  const row = (await api('GET', '/employees?pageSize=1')).data.rows[0];
+  const rec = await api('GET', `/employees/${row.assignmentId}`);
+  const keys = rec.data.record.columns.filter((c) => c.submitField).map((c) => c.key);
+  for (const k of ['allocation_plan', 'pid', 'opid', 'project_role', 'eta_available',
+    'follow_up_notes', 'critical_flag', 'risk_flag', 'bench_category',
+    'allocation_status', 'allocation_percentage', 'allocation_start_date']) {
+    assert.ok(keys.includes(k), `submit field ${k} must be configurable`);
+  }
+});
+
+test('supervisor submit writes every changed field in one transaction', async () => {
+  const api = client(await login('priya.nair@resourceplanning.io'));
+  const row = (await api('GET', '/employees?pageSize=1')).data.rows[0];
+  const before = (await api('GET', `/employees/${row.assignmentId}`)).data.record;
+
+  const res = await api('POST', `/employees/${row.assignmentId}/submit`, {
+    changes: { pid: 'PID-4242', opid: 'OPID-77', eta_available: '2026-12-15', risk_flag: 'High' },
+    rev: before.rev,
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.data.changed.sort(), ['eta_available', 'opid', 'pid', 'risk_flag']);
+  assert.equal(res.data.record.values.pid, 'PID-4242');
+
+  // the saved values are what the table and the export read
+  const after = (await api('GET', `/employees/${row.assignmentId}`)).data.record;
+  assert.equal(after.values.opid, 'OPID-77');
+
+  // a submit against the old revision is rejected instead of silently clobbering
+  const stale = await api('POST', `/employees/${row.assignmentId}/submit`, {
+    changes: { pid: 'PID-0000' }, rev: before.rev,
+  });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.data.code, 'STALE');
+  assert.ok(stale.data.current, 'the latest record is returned for review');
+});
+
+test('access control on submit: read-only grants and other projects are refused', async () => {
+  const viewer = client(await login('kavita.rao@resourceplanning.io'));
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const row = (await admin('GET', '/employees?pageSize=1')).data.rows[0];
+
+  const readOnly = await viewer('POST', `/employees/${row.assignmentId}/submit`, { changes: { pid: 'X' } });
+  assert.equal(readOnly.status, 403);
+
+  const intruder = client(await login('arun.pillai@resourceplanning.io'));
+  const foreign = await intruder('GET', `/employees/${row.assignmentId}`);
+  assert.equal(foreign.status, 403);
+  const foreignSubmit = await intruder('POST', `/employees/${row.assignmentId}/submit`, { changes: { pid: 'X' } });
+  assert.equal(foreignSubmit.status, 403);
 });

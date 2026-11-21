@@ -67,8 +67,11 @@ function collectRows(user, scope = {}) {
 
   const ids = rows.map((r) => r.id);
   const values = new Map();
-  if (ids.length) {
-    const chunk = ids.slice(0, 4000);
+  // Batched so a 12,000-row export stays inside SQLite's parameter limit and
+  // never silently drops values past the first chunk.
+  const BATCH = 500;
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const chunk = ids.slice(i, i + BATCH);
     for (const v of q.all(
       `SELECT av.assignment_id, f.key, av.value
          FROM assignment_values av JOIN fields f ON f.id = av.field_id

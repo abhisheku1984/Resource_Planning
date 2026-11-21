@@ -14,6 +14,7 @@ const path = require('node:path');
 const { q, tx, DB_FILE } = require('./db');
 const auth = require('./auth');
 const schema = require('./schema');
+const fielddefs = require('./fielddefs');
 const { record } = require('./audit');
 
 const rnd = (seed) => {
@@ -129,6 +130,13 @@ const SUPPLIERS = [
   ['SUMMIT', 'Summit Consulting', 'Neha Kapoor', 'neha@summit.example', '+91 11 2000 3344'],
 ];
 
+const BENCH_CATEGORIES = ['Allocated', 'Bench', 'PID Allocated', 'Available', 'Not Available',
+  'Shadow', 'Partially Allocated', 'Rolling Off', 'Onboarding'];
+const FILTER_KEYS = ['bench_category', 'primary_skill', 'allocation_status', 'allocation_start_date',
+  'allocation_end_date', 'pid', 'risk_flag', 'grade', 'work_location', 'skill_category'];
+const SUBMIT_KEYS = fielddefs.SUBMIT_KEYS || fielddefs.ALL.filter((f) => f.submit).map((f) => f.key);
+const SKILLS = ['Java', 'Salesforce', 'SAP', 'Data Engineering', 'Testing', 'DevOps', 'Oracle Fusion', 'UI/UX'];
+
 const USERS = [
   { email: 'admin@resourceplanning.io', name: 'Ananya Deshmukh', role: 'admin', title: 'Platform Administrator', password: 'Admin@12345', projects: '*' },
   { email: 'priya.nair@resourceplanning.io', name: 'Priya Nair', role: 'supervisor', title: 'Delivery Supervisor — Nexus', password: 'Super@12345', projects: ['NEXUS'] },
@@ -235,13 +243,22 @@ function run({ reset = false, quiet = false } = {}) {
           const layout = layoutFor(c.name);
           let order = 10;
           for (const f of fields) {
-            const visible = layout.show.includes(f.key);
+            // Test seed: the bench board is filterable and every supervisor
+            // field is reachable, mirroring the demo generator.
+            const filterable = FILTER_KEYS.includes(f.key);
+            const submitField = SUBMIT_KEYS.includes(f.key);
+            // a supervisor field does not have to be a table column, but it
+            // must be resolvable so the Submit form can render it
+            const visible = layout.show.includes(f.key) || submitField;
             q.run(
-              `INSERT INTO category_fields (category_id, field_id, visible, editable, required, sort_order)
-               VALUES (?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO category_fields
+                 (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
               cid, f.id, visible ? 1 : 0,
               layout.readonly.includes(f.key) ? 0 : 1,
               layout.required.includes(f.key) ? 1 : 0,
+              filterable ? 1 : 0,
+              submitField ? 1 : 0,
               layout.show.includes(f.key) ? order++ : 900 + f.id
             );
           }
@@ -281,10 +298,11 @@ function run({ reset = false, quiet = false } = {}) {
     }
 
     // ---------- employees & assignments ----------
+    // Tests use a small, fast seed; the demo uses the full working size.
     const usedNames = new Set();
     const employees = [];
     let empSeq = 1001;
-    const totalTarget = 170;
+    const totalTarget = Number(process.env.RP_SEED_ROWS || 170);
 
     const supervisors = USERS.filter((u) => u.role === 'supervisor');
 
@@ -376,6 +394,16 @@ function run({ reset = false, quiet = false } = {}) {
           aid, f.id, String(value), admin.id
         );
       };
+
+      // mandatory columns from the brief: bench category, allocation % and
+      // the allocation window are always populated
+      setValue('bench_category', pick(BENCH_CATEGORIES));
+      setValue('allocation_percentage', pick([0, 25, 50, 50, 75, 100, 100]));
+      setValue('allocation_start_date', `2026-${String(int(1, 11)).padStart(2, '0')}-01`);
+      setValue('allocation_end_date', `2027-${String(int(1, 6)).padStart(2, '0')}-28`);
+      setValue('primary_skill', pick(SKILLS));
+      setValue('grade', pick(['L1', 'L2', 'L3', 'L4', 'L5']));
+      setValue('work_location', pick(['Hyderabad', 'Pune', 'Bengaluru', 'Chennai', 'Remote']));
 
       if (placement.catName === 'Training Cohort') {
         setValue('training_status', pick(['Not Started', 'In Progress', 'Completed', 'Completed', 'Failed']));

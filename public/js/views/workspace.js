@@ -9,6 +9,7 @@ import {
 } from '../core.js';
 import { createTable } from './table.js';
 import { createCrm } from './crm.js';
+import { createSubmitPanel } from './submit.js';
 import { openExportModal } from './datahub.js';
 
 export function renderWorkspace(content, ctx) {
@@ -27,21 +28,49 @@ export function renderWorkspace(content, ctx) {
   const rail = h('div', { class: 'drill-rail' }, railHead, railBody);
 
   let crmVisible = !ctx.crmCollapsed;
+
+  // The supervisor's daily job is filling in the update fields and pressing
+  // Submit. The fuller CRM panel stays available for people management
+  // (contact details, new joiners, histories).
+  const submit = createSubmitPanel({
+    getScope: () => scope,
+    onSaved: () => { table.refresh(); },
+  });
+
   const crm = createCrm({
     getScope: () => scope,
     onChanged: () => { table.refresh(); },
   });
-  void crm;
+  crm.el.classList.add('hidden');
+  let panel = 'submit';   // submit | crm
   const table = createTable({
-    onSelect: (row) => { crm.showAssignment(row.assignmentId); },
-    onSaved: () => { if (crm.currentId() === null) crm.showAssignment(null); },
+    onSelect: (row) => {
+      if (panel === 'submit') submit.show(row.assignmentId);
+      else crm.showAssignment(row.assignmentId);
+    },
+    onSaved: () => {},
   });
-  crm.el.classList.toggle('hidden', !crmVisible);
+  submit.el.classList.toggle('hidden', !crmVisible);
 
   const workspace = h('div', { class: `workspace ${crmVisible ? '' : 'crm-collapsed'}` },
     table.el,
+    submit.el,
     crm.el,
   );
+
+  function setPanel(next) {
+    panel = next;
+    const showSubmit = next === 'submit';
+    submit.el.classList.toggle('hidden', !crmVisible || !showSubmit);
+    crm.el.classList.toggle('hidden', !crmVisible || showSubmit);
+    for (const b of workspace.querySelectorAll('.panel-toggle')) {
+      b.classList.toggle('active', b.dataset.panel === next);
+    }
+    if (crmVisible) {
+      if (showSubmit) submit.show(table.selectedId?.());
+      else crm.showList();
+    }
+  }
 
   mount(content, h('div', { class: 'page' },
     h('div', { class: 'page-head' },
@@ -50,18 +79,30 @@ export function renderWorkspace(content, ctx) {
         h('div', { class: 'page-sub' }, 'Pick a project, then walk down through subprojects and categories. Columns and permissions adapt to each category.'),
       ),
       h('div', { class: 'page-actions' },
+        h('div', { class: 'panel-switch', role: 'group', 'aria-label': 'Side panel' },
+          h('button', {
+            class: 'panel-toggle active', dataset: { panel: 'submit' },
+            onclick: () => setPanel('submit'),
+          }, icon('edit', 14), 'Update'),
+          h('button', {
+            class: 'panel-toggle', dataset: { panel: 'crm' },
+            onclick: () => setPanel('crm'),
+          }, icon('contact', 14), 'CRM'),
+        ),
         h('button', {
           class: 'btn',
           onclick: () => {
             crmVisible = !crmVisible;
-            crm.el.classList.toggle('hidden', !crmVisible);
+            submit.el.classList.toggle('hidden', !crmVisible || panel !== 'submit');
+            crm.el.classList.toggle('hidden', !crmVisible || panel !== 'crm');
             workspace.classList.toggle('crm-collapsed', !crmVisible);
             ctx.crmCollapsed = !crmVisible;
+            if (crmVisible) setPanel(panel);
           },
-        }, icon('contact', 15), crmVisible ? 'Hide CRM panel' : 'Show CRM panel'),
+        }, icon('columns', 15), crmVisible ? 'Hide panel' : 'Show panel'),
         h('button', {
           class: 'btn btn-primary',
-          onclick: () => crm.newPerson(),
+          onclick: () => { setPanel('crm'); crm.newPerson(); },
         }, icon('plus', 15), 'Add person'),
       ),
     ),
@@ -293,11 +334,16 @@ export function renderWorkspace(content, ctx) {
     if (e.detail?.collapsed) {
       crmVisible = false;
       crm.el.classList.add('hidden');
+      submit.el.classList.add('hidden');
       workspace.classList.add('crm-collapsed');
     }
   };
   document.addEventListener('rp:toggle-crm', closeHandler);
-  const cleanup = () => document.removeEventListener('rp:toggle-crm', closeHandler);
+  const cleanup = () => {
+    document.removeEventListener('rp:toggle-crm', closeHandler);
+    document.removeEventListener('rp:close-panel', closeHandler);
+  };
+  document.addEventListener('rp:close-panel', closeHandler);
   window.addEventListener('hashchange', cleanup, { once: true });
 
   renderRail();
