@@ -744,6 +744,7 @@ test('Data Hub offers the import template and asks where new rows go', async () 
     subprojects: [{ id: 2, name: 'Core Banking Migration', categories: [{ id: 4, name: 'Training Cohort' }] }],
   }];
   core.state.imports = [];
+  const start = calls.length;
 
   const { renderDataHub } = await import('../public/js/views/datahub.js');
   const content = new El('div');
@@ -756,6 +757,9 @@ test('Data Hub offers the import template and asks where new rows go', async () 
   assert.ok(text.includes('Import template'), 'the blank template with the 65 headers is downloadable from here');
   assert.ok(text.includes('Where should new rows go?'), 'the placement picker is offered for files without a Project column');
   assert.ok(text.includes('Upload a daily dataset'));
+  assert.ok(text.includes('Administrator review'), 'supervisors see an explanation, not a permanent spinner');
+  assert.equal(content.querySelector('#dup-body').querySelector('.spinner'), null);
+  assert.ok(!calls.slice(start).some(c => c.includes('/api/duplicates')), 'do not fetch an admin-only queue');
 
   const selects = content.querySelectorAll('select');
   assert.ok(selects.length >= 3, 'project / subproject / category are selectable');
@@ -763,6 +767,7 @@ test('Data Hub offers the import template and asks where new rows go', async () 
 
   core.state.user = { ...core.state.user, isAdmin: true };
   await renderDataHub(content, {});
+  assert.ok(flatten(content.querySelector('#dup-body')).includes('Nothing to review'));
   const replace = content.querySelectorAll('button').find(b => flatten(b).join('').includes('Replace entire roster'));
   assert.ok(replace); replace.click();
   const dialog = documentShim.body.querySelector('.modal');
@@ -770,6 +775,67 @@ test('Data Hub offers the import template and asks where new rows go', async () 
   assert.doesNotMatch(flatten(dialog).join(' '), /Delete old roster and import/);
   assert.equal(dialog.querySelector('#roster-file'), null, 'a complete export comes before picking a file');
   core.closeModal();
+});
+
+test('duplicate queue on first visit loads pending rows and refreshes after a decision', async (t) => {
+  const { renderDataHub } = await import('../public/js/views/datahub.js');
+  core.state.user = { isAdmin: true };
+  core.state.tree = [];
+  const content = new El('div'); documentShim.body.replaceChildren(content);
+  const first = Promise.withResolvers(), decisions = [];
+  const original = globalThis.fetch;
+  let reads = 0;
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url === '/api/duplicates?status=pending') {
+      return ++reads === 1 ? first.promise : jsonResponse({ reviews: [] });
+    }
+    if (url === '/api/duplicates/17/resolve') {
+      decisions.push([opts.method, JSON.parse(opts.body)]); return jsonResponse({ ok: true });
+    }
+    return original(url, opts);
+  });
+  const loading = renderDataHub(content, {});
+  await settleClicks();
+  const queue = content.querySelector('#dup-body');
+  assert.ok(queue.querySelector('.spinner'), 'show progress while the request is pending');
+  assert.equal(reads, 1, 'opening the card actually requests the pending reviews');
+  first.resolve(jsonResponse({ reviews: [{ id: 17, name: 'Incoming person', candidate_name: 'Existing candidate' }] }));
+  await loading;
+  assert.equal(queue.querySelector('.spinner'), null);
+  assert.ok(flatten(queue).includes('Incoming person'));
+  assert.deepEqual(queue.querySelectorAll('button').map(b => flatten(b).join('')), ['Separate', 'Link', 'Dismiss']);
+  assert.deepEqual(decisions, [], 'loading the list is read-only');
+  button(queue, 'Dismiss').click(); await settleClicks();
+  assert.deepEqual(decisions, [['POST', { action: 'dismiss' }]]);
+  assert.equal(reads, 2); assert.ok(flatten(queue).includes('Nothing to review'));
+  assert.equal(queue.querySelector('.spinner'), null);
+});
+
+test('duplicate queue stops loading on timeout or server failure and can retry just the list', async (t) => {
+  const { renderDataHub } = await import('../public/js/views/datahub.js');
+  core.state.user = { isAdmin: true }; core.state.tree = [];
+  const content = new El('div'); documentShim.body.replaceChildren(content);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const original = globalThis.fetch;
+  let reads = 0;
+  t.mock.method(globalThis, 'fetch', (url, opts) => {
+    if (url !== '/api/duplicates?status=pending') return original(url, opts);
+    ++reads;
+    if (reads === 1) return new Promise((_, reject) => opts.signal.addEventListener('abort', () => reject(opts.signal.reason), { once: true }));
+    if (reads === 2) return jsonResponse({ error: 'Queue service unavailable' }, 503);
+    return jsonResponse({ reviews: [] });
+  });
+  const loading = renderDataHub(content, {}); await settleClicks();
+  const queue = content.querySelector('#dup-body');
+  assert.equal(reads, 1); t.mock.timers.tick(30_000); await loading;
+  assert.match(flatten(queue).join(' '), /timed out/i);
+  assert.equal(queue.querySelector('.spinner'), null);
+  button(queue, 'Retry').click(); await settleClicks();
+  assert.ok(flatten(queue).includes('Queue service unavailable'));
+  assert.equal(queue.querySelector('.spinner'), null);
+  button(queue, 'Retry').click(); await settleClicks();
+  assert.equal(reads, 3); assert.ok(flatten(queue).includes('Nothing to review'));
+  assert.equal(queue.querySelector('.spinner'), null);
 });
 
 test('typing in the update panel saves itself: no Submit, no export, straight to the database', async () => {

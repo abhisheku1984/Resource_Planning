@@ -11,6 +11,8 @@ import { openRosterReplacement, readWorkbook } from './replace-roster.js';
 export async function renderDataHub(content, ctx) {
   const giga = state.user?.gigaAccess;
   const canExport = !giga || state.user.capabilities['export.data'];
+  const host = h('div', { id: 'hub-body' }, h('div', { class: 'card' },
+    h('div', { class: 'card-body row' }, spinner(), h('span', { class: 'muted' }, 'Loading…'))));
   mount(content, h('div', { class: 'page' },
     h('div', { class: 'page-head' },
       h('div', null,
@@ -22,11 +24,10 @@ export async function renderDataHub(content, ctx) {
         h('button', { class: 'btn btn-primary', disabled: !canExport, onclick: () => openExportModal({}) }, icon('download', 15), 'Generate export'),
       ),
     ),
-    h('div', { id: 'hub-body' }, h('div', { class: 'card' }, h('div', { class: 'card-body row' }, spinner(), h('span', { class: 'muted' }, 'Loading…')))),
+    host,
   ));
 
   if (giga) {
-    const host = content.querySelector('#hub-body');
     mount(host, canExport ? exportCard() : emptyState({ title: 'Export not permitted', message: 'Ask your administrator if you need an Excel export of your Giga project.', iconName: 'shield' }));
     return; // master imports and duplicate reviews span Giga projects
   }
@@ -37,16 +38,16 @@ export async function renderDataHub(content, ctx) {
     imports = res.imports || [];
   } catch { /* imports list is non-critical */ }
 
-  const host = document.getElementById('hub-body');
-  if (!host) return;
-
+  if (!host.isConnected) return; // a newer visit must own its own queue
+  const duplicates = createDuplicateCard();
   mount(host,
     h('div', { class: 'grid grid-2', style: { marginBottom: '14px' } },
       exportCard(),
       importCard(imports),
     ),
-    h('div', { id: 'dup-host', style: { marginTop: '14px' } }, duplicateCard(imports)),
+    h('div', { id: 'dup-host', style: { marginTop: '14px' } }, duplicates.el),
   );
+  await duplicates.load(); // the card is now on the page
 }
 
 /* ------------------------------------------------------------------ export */
@@ -405,23 +406,22 @@ function renderReport(host, r, { dryRun }) {
 }
 
 /* ------------------------------------------------------------------ duplicates */
-function duplicateCard() {
-  const host = h('div', { class: 'card' },
+function createDuplicateCard() {
+  const body = h('div', { id: 'dup-body', class: 'card-body' });
+  const el = h('div', { class: 'card' },
     h('div', { class: 'card-head' },
       h('div', null,
         h('div', { class: 'card-title' }, icon('merge', 15), 'Duplicate review queue'),
         h('div', { class: 'card-sub' }, 'Name-only or contact matches are never auto-merged. An administrator decides.'),
       ),
     ),
-    h('div', { id: 'dup-body', class: 'card-body' }, h('div', { class: 'row' }, spinner(), h('span', { class: 'muted' }, 'Loading…'))),
+    body,
   );
-  loadDuplicates();
-  return host;
+  return { el, load: loadDuplicates };
 
   async function loadDuplicates() {
-    const body = document.getElementById('dup-body');
-    if (!body) return;
-    if (!state.user.isAdmin) {
+    if (!body.isConnected) return;
+    if (!state.user?.isAdmin) {
       mount(body, emptyState({
         title: 'Administrator review',
         message: 'Possible duplicates are queued here for an administrator. Your additions are always matched against existing Employee IDs first.',
@@ -429,11 +429,16 @@ function duplicateCard() {
       }));
       return;
     }
+    const loading = h('div', { class: 'row muted', role: 'status' }, spinner(), 'Checking for duplicates…');
+    mount(body, loading);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
-      const res = await api('/duplicates?status=pending');
-      const rows = res.reviews || [];
+      const { reviews: rows } = await api('/duplicates?status=pending', { signal: controller.signal });
+      if (!loading.isConnected) return; // superseded by navigation, refresh or another read
+      if (!Array.isArray(rows)) throw new Error('The server did not return a review list.');
       if (!rows.length) {
-        mount(body, emptyState({ title: 'Nothing to review', message: 'No uncertain matches are pending. Imports and CRM additions matched cleanly.', iconName: 'checkCircle' }));
+        mount(body, emptyState({ title: 'Nothing to review', message: 'No possible duplicates are waiting for a decision.', iconName: 'checkCircle' }));
         return;
       }
       const table = h('table', { class: 'data' },
@@ -470,15 +475,23 @@ function duplicateCard() {
       );
       mount(body, h('div', { class: 'table-wrap', style: { maxHeight: 'none' } }, table));
     } catch (err) {
-      mount(body, emptyState({ title: 'Could not load queue', message: err.message, iconName: 'alert' }));
+      if (!loading.isConnected) return;
+      mount(body, emptyState({
+        title: 'Could not load queue', iconName: 'alert',
+        message: controller.signal.aborted ? 'The request timed out. Check your connection and retry.'
+          : err.status === 0 ? 'Cannot reach the server. Check your connection and retry.' : err.message,
+        action: h('button', { class: 'btn', onclick: loadDuplicates }, 'Retry'),
+      }));
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
   async function resolve(id, action, done) {
     try {
-      const res = await api(`/duplicates/${id}/resolve`, { method: 'POST', body: { action } });
+      await api(`/duplicates/${id}/resolve`, { method: 'POST', body: { action } });
       done(action === 'link' ? 'Record linked to the existing employee.' : action === 'create' ? 'Kept as a separate employee.' : 'Flag dismissed.');
-      loadDuplicates();
+      await loadDuplicates();
     } catch (err) {
       toast('Could not resolve', err.message, 'error');
     }
