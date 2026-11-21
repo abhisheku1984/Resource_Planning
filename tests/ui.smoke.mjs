@@ -95,6 +95,18 @@ class El {
     return walk(this);
   }
   querySelectorAll(sel) {
+    // support comma-separated selector lists ("input, textarea"), which the
+    // real DOM does and the views use
+    if (String(sel).includes(',')) {
+      const seen = new Set();
+      const out = [];
+      for (const part of String(sel).split(',')) {
+        for (const el of this.querySelectorAll(part.trim())) {
+          if (!seen.has(el)) { seen.add(el); out.push(el); }
+        }
+      }
+      return out;
+    }
     const out = [];
     const cls = sel.startsWith('.') ? sel.replace(/^\./, '') : null;
     const tagOnly = /^[a-z]+$/.test(sel) ? sel.toUpperCase() : null;
@@ -437,8 +449,38 @@ test('inline cell edit saves through the API', async () => {
   assert.ok(calls.some((c) => c.startsWith('PATCH /api/employees/')), 'the edit is persisted with a PATCH');
 });
 
+test('the CRM panel offers only the configured update columns', async () => {
+  const { createCrm } = await import('../public/js/views/crm.js');
+  const { state } = await import('../public/js/core.js');
+  state.crmKeys = ['leader_input_last_week', 'leader_input_this_week', 'opp_id',
+    'demand_number', 'block_status', 'giga_project_name'];
+  const crm = createCrm({ getScope: () => ({ projectId: 1 }), onChanged() {} });
+  documentShim.body.replaceChildren(crm.el);
+  crm.showAssignment(1);
+  await new Promise((r) => setTimeout(r, 90));
+
+  const text = flatten(crm.el).join(' ');
+  // identity and placement are context, not inputs
+  assert.ok(text.includes('Worker 1'), 'the person is shown');
+  assert.ok(text.includes('EMP-01001'), 'the employee ID is shown');
+  assert.ok(!text.includes('Designation'), 'the job title is not an update field');
+
+  const edited = ['input', 'select', 'textarea']
+    .flatMap((tag) => crm.el.querySelectorAll(tag))
+    .map((i) => i.dataset.fieldKey)
+    .filter(Boolean);
+  // the placement switcher is a read-only navigation control and carries no key
+  assert.deepEqual([...new Set(edited)].sort(), [...state.crmKeys].sort(),
+    'only the six configured columns are editable in the leader panel');
+  state.crmKeys = [];
+});
+
 test('CRM autosaves with explicit Saving -> Saved states', async () => {
   const { createCrm } = await import('../public/js/views/crm.js');
+  const { state } = await import('../public/js/core.js');
+  state.crmKeys = ['leader_input_last_week', 'leader_input_this_week', 'opp_id',
+    'demand_number', 'block_status', 'giga_project_name'];
+  if (!state.user) state.user = { id: 1, name: 'Priya Nair', isAdmin: false, capabilities: { 'employee.edit': true } };
   const crm = createCrm({ getScope: () => ({ projectId: 1 }), onChanged() {} });
   documentShim.body.replaceChildren(crm.el);
   crm.showAssignment(1);
@@ -448,11 +490,13 @@ test('CRM autosaves with explicit Saving -> Saved states', async () => {
   assert.ok(text.includes('Worker 1'), 'the CRM shows the selected person');
   assert.ok(text.includes('Update history'), 'history section is present');
 
-  const input = crm.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'training_status' || i.tagName === 'SELECT');
-  const nameInput = crm.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'name');
-  assert.ok(nameInput, 'name field is editable');
-  nameInput.value = 'Worker One Updated';
-  nameInput.dispatchEvent({ type: 'input', target: nameInput });
+  // the panel edits only the configured supervisor columns, so the autosave is
+  // exercised through one of those rather than the name
+  const editInput = crm.el.querySelectorAll('input, textarea')
+    .find((i) => i.dataset.fieldKey === 'leader_input_this_week');
+  assert.ok(editInput, 'a configured supervisor column is editable');
+  editInput.value = 'Client sign-off pending';
+  editInput.dispatchEvent({ type: 'input', target: editInput });
 
   const states = [];
   const observer = setInterval(() => {
@@ -465,12 +509,13 @@ test('CRM autosaves with explicit Saving -> Saved states', async () => {
   assert.ok(calls.some((c) => c.startsWith('PATCH /api/employees/')), 'autosave issued a PATCH');
   const finalText = flatten(crm.el).join(' ');
   assert.ok(/Saved|Saving/.test(finalText) || states.length > 0, 'a save indicator is shown');
-  void input;
 });
 
 test('CRM keeps values and reports "Not saved" when the network fails, then retries safely', async () => {
   const { createCrm } = await import('../public/js/views/crm.js');
   core.state.user = { id: 1, name: 'Priya Nair', isAdmin: false, capabilities: { 'employee.edit': true } };
+  core.state.crmKeys = ['leader_input_last_week', 'leader_input_this_week', 'opp_id',
+    'demand_number', 'block_status', 'giga_project_name'];
   const crm = createCrm({ getScope: () => ({ projectId: 1 }), onChanged() {} });
   documentShim.body.replaceChildren(crm.el);
   crm.showAssignment(1);
@@ -487,13 +532,14 @@ test('CRM keeps values and reports "Not saved" when the network fails, then retr
   crm.showAssignment(1);
   await new Promise((r) => setTimeout(r, 150));
 
-  const nameInput = crm.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'name');
-  if (!nameInput) {
+  const findEditable = () => crm.el.querySelectorAll('input, textarea')
+    .find((i) => i.dataset.fieldKey === 'leader_input_this_week');
+  if (!findEditable()) {
     // form has not painted yet in the shim; wait and retry once
     await new Promise((r) => setTimeout(r, 250));
   }
-  const retryInput = crm.el.querySelectorAll('input').find((i) => i.dataset.fieldKey === 'name');
-  assert.ok(retryInput, 'the CRM exposes the name field for editing');
+  const retryInput = findEditable();
+  assert.ok(retryInput, 'the CRM exposes a supervisor field for editing');
   retryInput.value = 'Offline Edit';
   retryInput.dispatchEvent({ type: 'input', target: retryInput });
   await new Promise((r) => setTimeout(r, 1400));
@@ -634,4 +680,19 @@ test('the Update panel shows the employee ID, the name and exactly the CRM colum
   assert.deepEqual([...new Set(keys)].sort(), [...state.crmKeys].sort(),
     'exactly the configured columns are editable');
   state.crmKeys = [];
+});
+
+test('clicking a person name opens the update form for that row', async () => {
+  const { createTable } = await import('../public/js/views/table.js');
+  let picked = null;
+  const t = createTable({ onSelect: (row) => { picked = row; }, onSaved() {} });
+  documentShim.body.replaceChildren(t.el);
+  t.el.parentElement = documentShim.body;
+  await t.setScope({ projectId: 1, subprojectId: 2, categoryId: 4 });
+  await new Promise((r) => setTimeout(r, 120));
+
+  const link = t.el.querySelectorAll('button').find((b) => b.classList.contains('emp-name-link'));
+  assert.ok(link, 'the name is rendered as a link into the updater');
+  link.click();
+  assert.ok(picked && picked.assignmentId, 'clicking the name selects that person');
 });

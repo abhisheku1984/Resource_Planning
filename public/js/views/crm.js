@@ -11,6 +11,15 @@ import {
 
 const AUTOSAVE_MS = 900;
 
+/** Only used if bootstrap has not supplied the configured list (e.g. old cache). */
+const FALLBACK_KEYS = [
+  'leader_input_last_week', 'leader_input_this_week', 'leader_input_pid_account',
+  'billing_start_date', 'billing_end_date', 'pid_awaited_account',
+  'pid_awaited_blocked_date', 'opp_id', 'account_owner', 'allocation_closure_eta',
+  'role_of_month', 'role_of_responses', 'detail_comments', 'block_status',
+  'account_name', 'interviewed_by', 'demand_number', 'giga_project_name',
+];
+
 export function createCrm({ onChanged, getScope }) {
   const el = h('aside', { class: 'crm-panel', 'aria-label': 'Employee CRM panel' });
 
@@ -270,11 +279,23 @@ export function createCrm({ onChanged, getScope }) {
         onchange: (e) => openPerson(rec.employeeId, Number(e.target.value)),
       }, ...rec.placements.map((p) => h('option', { value: p.assignment_id, selected: p.assignment_id === rec.assignmentId }, `${p.project_name} · ${p.category_name}`)))
       : null;
+    // The panel is deliberately only the workbook's supervisor columns: a
+    // leader opens a person to update Leader Input / PID / Opp / Demand fields,
+    // and nothing else competes for attention. Identity and placement appear as
+    // read-only context at the top, never as inputs.
+    const crmKeys = (state.crmKeys && state.crmKeys.length ? state.crmKeys : FALLBACK_KEYS)
+      .filter((k) => k !== 'remarks');
+    const typeOf = (k) => colMap.get(k)?.type || state.fields?.find((f) => f.key === k)?.type;
+    const context = [
+      ['Employee ID', v.emp_code],
+      ['Name', v.name],
+      ['Placement', `${rec.projectName} · ${rec.subprojectName} · ${rec.categoryName}`],
+    ].filter(([, val]) => val);
 
     mount(bodyHost,
       h('div', { class: 'crm-form' },
         h('div', { class: 'row', style: { gap: '11px', paddingBottom: '12px', borderBottom: '1px solid var(--line)' } },
-          h('div', { class: 'avatar avatar-lg' }, initials(v.name)),
+          h('div', { class: 'avatar avatar-lg' }, initials(v.name || '')),
           h('div', { class: 'col grow', style: { minWidth: '0' } },
             h('div', { class: 'truncate', style: { fontWeight: '650', fontSize: '14px' } }, v.name),
             h('div', { class: 'mono subtle', style: { fontSize: '11.5px' } }, v.emp_code),
@@ -284,48 +305,19 @@ export function createCrm({ onChanged, getScope }) {
             ),
           ),
         ),
-        h('div', { class: 'crm-section-title' }, 'Identity'),
-        h('div', { class: 'crm-grid' },
-          fieldControl('emp_code', { forceType: 'text' }),
-          fieldControl('name'),
-          fieldControl('designation'),
-          fieldControl('email'),
-          fieldControl('phone'),
+        h('div', { class: 'crm-context' },
+          ...context.map(([label, val]) => h('span', null,
+            h('b', { style: { fontWeight: '650' } }, `${label}: `), val)),
+          placementSwitcher,
         ),
-        h('div', { class: 'crm-section-title' }, 'Placement'),
-        h('div', { class: 'crm-grid' },
-          h('div', { class: 'field span-2' },
-            h('label', { class: 'field-label' }, 'Project / subproject / category'),
-            h('div', {
-              class: 'input',
-              style: { display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface-3)', height: 'auto', minHeight: '34px', padding: '6px 10px' },
-            }, icon('layers', 13), `${rec.projectName} · ${rec.subprojectName} · ${rec.categoryName}`),
-            placementSwitcher,
-          ),
-          fieldControl('supplier'),
-        ),
-        // The CRM panel edits the configured supervisor columns (the workbook's
-        // Leader Input … through Giga Project Name), not every column the table
-        // happens to show: a short, purposeful form instead of a 70-field wall.
         h('div', { class: 'crm-section-title' }, 'Supervisor update'),
         h('div', { class: 'crm-grid' },
-          ...(state.crmKeys && state.crmKeys.length ? state.crmKeys : [])
-            .filter((k) => k !== 'remarks')
-            .map((k) => fieldControl(k, { span2: (colMap.get(k)?.type || state.fields?.find((f) => f.key === k)?.type) === 'textarea' })),
-          fieldControl('status'),
-          h('div', { class: 'field span-2' }, h('label', { class: 'field-label' }, 'Remarks & follow-up'),
-            (() => {
-              const input = h('textarea', { class: 'textarea', rows: 3, disabled: !canEdit }, v.remarks || '');
-              input.dataset.fieldKey = 'remarks';
-              currentInputs.set('remarks', { input, field: { key: 'remarks', type: 'textarea' }, type: 'textarea' });
-              setTimeout(() => {
-                input.addEventListener('input', () => queueChange('remarks'));
-                input.addEventListener('blur', () => { if (pending.size) flushPending(); });
-              }, 0);
-              return input;
-            })(),
-          ),
+          ...crmKeys.map((k) => fieldControl(k, { span2: typeOf(k) === 'textarea' })),
         ),
+        !crmKeys.length
+          ? h('div', { class: 'note' }, icon('info', 15),
+            h('span', null, 'No update columns are configured. An administrator can set them under Administration → CRM panel.'))
+          : null,
         !canEdit ? h('div', { class: 'note warn', style: { marginTop: '12px' } }, icon('shield', 15),
           h('span', null, 'You have read-only access to this project. Ask an administrator for edit permission.')) : null,
         h('div', { class: 'crm-section-title' }, 'Update history'),

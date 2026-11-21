@@ -346,6 +346,18 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
     if (col.key === 'emp_code') {
       return h('span', { class: 'mono', style: { color: 'var(--text-2)' } }, raw || '—');
     }
+    // The person's name is the way into the updater: a plain, readable click
+    // target that opens the leader's form (the rest of the row still selects).
+    if (col.key === 'name' || col.key === 'first_name' || col.key === 'last_name') {
+      const target = (row.values.first_name || row.values.last_name)
+        ? `${row.values.first_name || ''} ${row.values.last_name || ''}`.trim()
+        : raw;
+      return h('button', {
+        class: 'emp-name-link',
+        title: 'Open the update form for this person',
+        onclick: (e) => { e.stopPropagation(); select(row); },
+      }, target || '—');
+    }
     if (!col.editable) {
       return staticView(col, raw);
     }
