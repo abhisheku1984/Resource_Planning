@@ -446,8 +446,8 @@ async function renderAccess(host) {
         ? h('span', { class: 'badge badge-brand' }, 'All capabilities')
         : h('span', { class: 'badge badge-outline' }, `${Object.values(u.capabilities).filter(Boolean).length} granted`)),
       h('td', null, h('div', { class: 'row', style: { gap: '4px', justifyContent: 'flex-end' } },
-        h('button', { class: 'btn btn-ghost btn-xs', disabled: u.role === 'admin',
-          title: u.role === 'admin' ? 'Administrators have unrestricted access' : `Edit access for ${u.name}`,
+        h('button', { class: 'btn btn-ghost btn-xs',
+          title: u.role === 'admin' ? `Edit the display name for ${u.name}` : `Edit name and access for ${u.name}`,
           onclick: () => openEditor(u) }, icon('edit', 12), 'Edit access'),
         u.id === state.user.id
           ? h('span', { class: 'subtle', title: 'You cannot delete your own account.' }, 'Your account')
@@ -458,7 +458,7 @@ async function renderAccess(host) {
 
   mount(host, h('div', null,
     h('div', { class: 'note', style: { marginBottom: '14px' } }, icon('shield', 15),
-      h('span', null, 'Assign a supervisor one Giga Project Name from the workbook. Use Edit access to change or revoke it.')),
+      h('span', null, 'Use Edit access to rename any account, or to change a supervisor’s project access and permissions.')),
     h('div', { class: 'card' },
       h('div', { class: 'card-head' },
         h('div', null,
@@ -557,16 +557,23 @@ async function renderAccess(host) {
   }
 
   function openEditor(u) {
-    const controls = buildAccessControls(u);
-    modal({
+    const name = h('input', { class: 'input', type: 'text', maxlength: 160, required: true });
+    name.value = u.name;
+    const error = h('div', { class: 'note warn hidden', role: 'alert' });
+    const controls = u.role === 'admin' ? null : buildAccessControls(u);
+    // Capture values, not references to the editable grants. Renaming must
+    // not replay an old copy of someone's permissions over a newer grant.
+    const originalAccess = controls && JSON.stringify(controls.payload());
+    const { box } = modal({
       title: 'Edit access',
-      subtitle: `${u.name} · ${u.email}`,
-      size: 'modal-lg',
-      body: h('div', null,
-        h('div', { class: 'crm-section-title' }, 'Project access'),
-        controls.grantHost,
-        h('div', { class: 'crm-section-title' }, 'Capabilities'),
-        controls.capHost,
+      subtitle: `${u.role === 'admin' ? 'Administrator' : 'Supervisor'} · ${u.email}`,
+      size: controls ? 'modal-lg' : '',
+      body: h('div', { class: 'col', style: { gap: '12px' } },
+        error, field('Display name', name, 'The sign-in email stays the same.'),
+        controls ? [
+          h('div', { class: 'crm-section-title' }, 'Project access'), controls.grantHost,
+          h('div', { class: 'crm-section-title' }, 'Capabilities'), controls.capHost,
+        ] : h('div', { class: 'note' }, icon('shield', 15), 'Administrators always have full access. Only the display name can be changed here.'),
       ),
       footer: h('div', { class: 'row', style: { gap: '8px', justifyContent: 'flex-end', width: '100%' } },
         h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
@@ -574,25 +581,37 @@ async function renderAccess(host) {
           class: 'btn btn-primary',
           onclick: async (event) => {
             const button = event.currentTarget;
-            button.disabled = true;
+            button.disabled = true; error.classList.add('hidden');
             try {
-              await api(`/users/${u.id}/access`, {
-                method: 'PUT',
-                body: controls.payload(),
-              });
-              closeModal();
-              toast('Access updated', `${u.name}'s permissions are now enforced by the backend.`, 'success', 5000);
+              const nextName = name.value.trim();
+              if (!nextName) { name.focus(); throw new Error('Enter a display name for this account.'); }
+              const access = controls?.payload();
+              const changes = access && JSON.stringify(access) !== originalAccess ? access : {};
+              if (nextName !== u.name) changes.name = nextName;
+              if (!Object.keys(changes).length) { closeModal(); return; }
+              const saved = await api(`/users/${u.id}/access`, { method: 'PUT', body: changes });
+              if (changes.name && saved.user?.name !== nextName) {
+                throw new Error('The server did not confirm the new name. Restart the updated server and try again.');
+              }
+              if (changes.name && u.id === state.user?.id) {
+                state.user.name = saved.user.name;
+                document.dispatchEvent(new Event('rp:account-renamed'));
+              }
+              if (box.isConnected) closeModal();
+              toast('Account updated', saved.user?.name || u.name, 'success');
               await renderAccess(host);
-            } catch (err) { toast('Could not save access', err.message, 'error'); }
-            finally { button.disabled = false; }
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove('hidden');
+            } finally { button.disabled = false; }
           },
-        }, 'Save access'),
+        }, 'Save changes'),
       ),
     });
   }
 
   function newUser() {
-    const name = h('input', { class: 'input', placeholder: 'Full name' });
+    const name = h('input', { class: 'input', placeholder: 'Full name', maxlength: 160, required: true });
     const email = h('input', { class: 'input', type: 'email', placeholder: 'name@company.com' });
     const title = h('input', { class: 'input', placeholder: 'Job title (optional)' });
     const pw = h('input', { class: 'input', type: 'password', placeholder: 'At least 8 characters' });

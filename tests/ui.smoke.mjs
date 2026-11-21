@@ -850,26 +850,66 @@ test('New user submits the form with its grants; Delete requires confirmation', 
   assert.equal(fetch.mock.calls.at(-1).arguments[1].method, 'GET', 'refresh the user list after deletion');
 });
 
-test('Edit access can replace existing hierarchy grants with one workbook Giga project', async (t) => {
+test('Edit access can rename a supervisor and replace hierarchy grants in one save', async (t) => {
   const { renderAdmin } = await import('../public/js/views/admin.js');
   core.state.user = { id: 1, isAdmin: true };
   core.state.tree = [{ id: 1, name: 'Nexus', subprojects: [] }];
   const content = new El('div');
   documentShim.body.replaceChildren(content);
-  const fetch = t.mock.method(globalThis, 'fetch');
+  const originalFetch = globalThis.fetch;
+  const fetch = t.mock.method(globalThis, 'fetch', async (url, opts) => url === '/api/users/7/access' && opts.method === 'PUT'
+    ? jsonResponse({ ok: true, user: { id: 7, name: 'New Leader' } }) : originalFetch(url, opts));
   await renderAdmin(content, { tab: 'access' });
   button(content, 'Edit access').click();
   const dialog = body.querySelector('.overlay');
+  const name = dialog.querySelector('input'); assert.equal(name.value, 'Test Leader'); name.value = '  New Leader  ';
   const picker = dialog.querySelector('select');
   assert.equal(picker.value, 'legacy');
   picker.value = 'g:Giga Pear'; picker.dispatchEvent({ type: 'change' });
-  button(dialog, 'Save access').click();
+  button(dialog, 'Save changes').click();
   await settleClicks();
   const put = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/users/7/access' && opts.method === 'PUT');
   const saved = JSON.parse(put.arguments[1].body);
+  assert.equal(fetch.mock.calls.filter(({ arguments: [, opts] }) => opts.method !== 'GET').length, 1);
+  assert.equal(saved.name, 'New Leader');
   assert.equal(saved.gigaProjectName, 'Giga Pear');
   assert.equal(saved.projects, undefined);
   assert.equal(saved.capabilities['employee.edit'], true);
+});
+
+test('Edit access pre-fills both account types, rejects blank names, and sends only a name for a rename', async (t) => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  core.state.user = { id: 1, role: 'admin', isAdmin: true, name: 'Current Admin' };
+  const users = [
+    { id: 1, role: 'admin', email: 'admin@example.test', name: 'Current Admin', projects: [], capabilities: {} },
+    { id: 7, role: 'supervisor', email: 'lead@example.test', name: 'Project Lead', gigaAccess: { name: 'Giga Apple' }, projects: [], capabilities: {} },
+  ];
+  const saves = [];
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url === '/api/users') return jsonResponse({ users, capabilities: [], gigaProjectNames: ['Giga Apple'], gigaCapabilities: ['project.view'] });
+    const body = JSON.parse(opts.body), user = users.find((u) => url === `/api/users/${u.id}/access`);
+    assert.equal(opts.method, 'PUT'); assert.ok(user); saves.push(body); user.name = body.name;
+    return jsonResponse({ ok: true, user: { id: user.id, name: user.name } });
+  });
+  const content = new El('div'); documentShim.body.replaceChildren(content);
+  await renderAdmin(content, { tab: 'access' });
+  for (const user of users) {
+    const row = () => content.querySelectorAll('tr').find((tr) => flatten(tr).includes(user.email));
+    const open = () => { const edit = button(row(), 'Edit access'); assert.equal(edit.disabled, false); edit.click(); return body.querySelector('.overlay'); };
+    const count = saves.length;
+    let dialog = open(); assert.equal(dialog.querySelector('input').value, user.name);
+    dialog.querySelector('input').value = 'Not kept'; button(dialog, 'Cancel').click();
+    assert.equal(saves.length, count); dialog = open();
+    const input = dialog.querySelector('input'); assert.equal(input.value, user.name);
+    assert.equal(dialog.querySelectorAll('select').length, user.role === 'admin' ? 0 : 1);
+    input.value = '  '; button(dialog, 'Save changes').click(); await settleClicks();
+    assert.equal(saves.length, count); assert.match(flatten(dialog).join(' '), /Enter a display name/);
+    const name = user.role === 'admin' ? 'New Admin' : 'New Lead';
+    input.value = `  ${name} `; button(dialog, 'Save changes').click(); await settleClicks();
+    assert.deepEqual(saves[count], { name }); assert.equal(saves.length, count + 1);
+    assert.ok(!body.querySelector('.overlay')); assert.ok(flatten(row()).includes(name));
+    assert.equal(core.state.user.name, 'New Admin');
+  }
 });
 
 test('Data model renders a populated category, opens the field form and saves the selected layout', async (t) => {

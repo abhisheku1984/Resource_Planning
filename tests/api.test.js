@@ -1076,6 +1076,71 @@ test('a new user is created with their project access and capabilities in the sa
   assert.equal(relogin.status, 401, 'a deleted user cannot sign in');
 });
 
+test('Edit access: administrators can rename themselves and other administrators without changing access', async (t) => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const email = 'rename.admin@example.test', password = 'Example123';
+  const made = await admin('POST', '/users', { name: 'Original Admin', email, password, role: 'admin' });
+  assert.equal(made.status, 200);
+  const id = made.data.user.id, url = `/users/${id}/access`;
+  t.after(() => admin('DELETE', `/users/${id}`));
+  const self = client(await login(email, password));
+  const before = (await self('GET', '/auth/me')).data.user;
+  for (const [actor, name] of [[admin, 'Other Admin'], [self, 'आर्या राव']]) {
+    const saved = await actor('PUT', url, { name: `  ${name}  ` });
+    assert.equal(saved.status, 200, JSON.stringify(saved.data));
+    assert.deepEqual(saved.data.user, { id, name });
+    assert.deepEqual((await self('GET', '/auth/me')).data.user, { ...before, name });
+    assert.equal((await self('GET', '/users')).data.users.find((u) => u.id === id).name, name);
+  }
+  for (const extra of [{ gigaProjectName: null }, { projects: [] }, { capabilities: {} }, { role: 'supervisor' }]) {
+    assert.equal((await self('PUT', url, { name: 'Must not persist', ...extra })).status, 422);
+  }
+  const relogin = client(await login(email, password));
+  assert.deepEqual((await relogin('GET', '/auth/me')).data.user, { ...before, name: 'आर्या राव' });
+  const history = (await admin('GET', `/audit/user/${id}`)).data.history;
+  const renames = history.filter((r) => r.field_key === 'name');
+  assert.equal(renames.length, 2);
+  const ownRename = renames.find((r) => r.old_value === 'Other Admin' && r.new_value === 'आर्या राव');
+  assert.equal(ownRename?.actor_name, 'Other Admin');
+  assert.equal(q.get('SELECT actor_id FROM audit_log WHERE id = ?', ownRename.id).actor_id, id);
+  assert.ok(history.some((r) => r.action === 'login' && r.actor_name === 'Original Admin'), 'past attribution stays intact');
+  assert.ok(!history.some((r) => r.field_key === 'access'), 'renaming does not write an access change');
+});
+
+test('Edit access: supervisor renames are admin-only; name and grant edits succeed or fail together', async (t) => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const email = 'rename.lead@example.test', password = 'Example123';
+  const project = q.get('SELECT id FROM projects LIMIT 1').id;
+  const made = await admin('POST', '/users', { name: 'Original Lead', email, password,
+    projects: [{ project_id: project, can_edit: false, can_export: true }], capabilities: { 'export.data': true } });
+  assert.equal(made.status, 200);
+  const id = made.data.user.id, url = `/users/${id}/access`;
+  t.after(() => admin('DELETE', `/users/${id}`));
+  const lead = client(await login(email, password));
+  const me = async () => (await lead('GET', '/auth/me')).data.user;
+  const before = await me();
+  assert.equal((await lead('PUT', url, { name: 'Not authorized' })).status, 403);
+  assert.equal((await lead('PATCH', `/users/${id}`, { name: 'Not authorized' })).status, 403);
+  assert.equal((await fetch(base + '/api' + url, { method: 'PUT' })).status, 401);
+  assert.equal((await admin('PUT', '/users/-1/access', { name: 'Missing' })).status, 404);
+  for (const name of [' ', null, 123, 'x'.repeat(161)]) {
+    assert.equal((await admin('PUT', url, { name, projects: [] })).status, 422);
+    assert.equal((await admin('PATCH', `/users/${id}`, { name })).status, 422);
+  }
+  assert.equal((await admin('PUT', url, { name: 'Rollback', projects: [{ project_id: -1 }] })).status, 422);
+  assert.deepEqual(await me(), before);
+  assert.ok(!(await admin('GET', `/audit/user/${id}`)).data.history.some((r) => r.action === 'update'));
+
+  const first = await admin('PUT', url, { name: '  Renamed Lead  ' });
+  assert.equal(first.status, 200); assert.deepEqual(await me(), { ...before, name: 'Renamed Lead' });
+  const gigaProjectName = q.get('SELECT project_name FROM giga_assignments LIMIT 1').project_name;
+  assert.equal((await admin('PUT', url, { name: 'Giga Lead', gigaProjectName, capabilities: { 'employee.edit': true } })).status, 200);
+  const changed = await me();
+  assert.equal(changed.name, 'Giga Lead'); assert.equal(changed.gigaAccess.name, gigaProjectName); assert.equal(changed.capabilities['employee.edit'], true);
+  assert.equal((await admin('PUT', url, { name: 'Final Lead' })).status, 200);
+  assert.deepEqual(await me(), { ...changed, name: 'Final Lead' }, 'renaming preserves the live Giga grant too');
+});
+
 test('an administrator cannot delete their own account, but can delete another admin', async () => {
   const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
   const list = await admin('GET', '/users');

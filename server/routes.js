@@ -777,13 +777,38 @@ function writeUserAccess(id, { projects, capabilities, gigaProjectName }) {
   }
 }
 
+function accountName(value) {
+  const name = typeof value === 'string' ? value.trim() : '';
+  if (!name) throw access.invalid('Enter a display name for this account.');
+  if (name.length > 160) throw access.invalid('The display name must be 160 characters or fewer.');
+  return name;
+}
+
+function accountForEdit(id) {
+  const user = q.get('SELECT id, email, role, name FROM users WHERE id = ?', id);
+  if (!user) throw Object.assign(new Error('User not found.'), { status: 404 });
+  return user;
+}
+
+// Call inside the edit transaction: a failed grant change must also roll back
+// the rename and its audit entry. The email and session identity never change.
+function renameAccount(user, value, actor) {
+  const name = accountName(value);
+  if (name !== user.name) {
+    q.run('UPDATE users SET name = ? WHERE id = ?', name, user.id);
+    record({ entity: 'user', entityId: user.id, ref: user.email, action: 'update', fieldKey: 'name',
+      oldValue: user.name, newValue: name, actor });
+  }
+  return name;
+}
+
 router.post('/users', requireAuth, requireAdmin, wrap((req, res) => {
   const body = req.body || {};
   const email = String(body.email || '').trim();
-  const name = String(body.name || '').trim();
+  const name = accountName(body.name);
   const role = body.role === 'admin' ? 'admin' : 'supervisor';
   if (role === 'admin' && body.gigaProjectName !== undefined) throw access.invalid('Administrator accounts cannot be restricted to a Giga project.');
-  if (!email || !name) return res.status(422).json({ error: 'Name and email are required.' });
+  if (!email) throw access.invalid('Email is required.');
   if (typeof body.password !== 'string' || body.password.length < 8) return res.status(422).json({ error: 'Use a password of at least 8 characters.' });
   const user = tx(() => {
     if (q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email)) {
@@ -827,38 +852,50 @@ router.delete('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
 }));
 
 router.patch('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
-  const id = Number(req.params.id);
-  const before = q.get('SELECT * FROM users WHERE id = ?', id);
-  if (!before) return res.status(404).json({ error: 'User not found.' });
-  const allowed = ['name', 'role', 'title', 'active'];
-  const sets = []; const args = [];
-  for (const k of allowed) {
-    if (req.body[k] === undefined) continue;
-    sets.push(`${k} = ?`); args.push(req.body[k]);
-  }
-  if (req.body.password) {
-    if (String(req.body.password).length < 8) return res.status(422).json({ error: 'Use a password of at least 8 characters.' });
-    sets.push('password_hash = ?'); args.push(auth.hashPassword(String(req.body.password)));
-  }
-  if (sets.length) q.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, ...args, id);
-  record({ entity: 'user', entityId: id, ref: before.email, action: 'update', actor: req.user });
-  res.json({ user: q.get('SELECT id, email, name, role, title, active FROM users WHERE id = ?', id) });
+  const id = Number(req.params.id), body = req.body || {};
+  const user = tx(() => {
+    const target = accountForEdit(id);
+    if (Object.hasOwn(body, 'name')) renameAccount(target, body.name, req.user);
+    const sets = [], args = [];
+    for (const k of ['role', 'title', 'active']) {
+      if (body[k] === undefined) continue;
+      sets.push(`${k} = ?`); args.push(body[k]);
+    }
+    if (body.password) {
+      if (String(body.password).length < 8) throw access.invalid('Use a password of at least 8 characters.');
+      sets.push('password_hash = ?'); args.push(auth.hashPassword(String(body.password)));
+    }
+    if (sets.length) {
+      q.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, ...args, id);
+      record({ entity: 'user', entityId: id, ref: target.email, action: 'update', actor: req.user });
+    }
+    return q.get('SELECT id, email, name, role, title, active FROM users WHERE id = ?', id);
+  });
+  res.json({ user });
 }));
 
 router.put('/users/:id/access', requireAuth, requireAdmin, wrap((req, res) => {
-  const id = Number(req.params.id);
-  const target = q.get('SELECT role, email FROM users WHERE id = ?', id);
-  if (!target) return res.status(404).json({ error: 'User not found.' });
-  if (target.role === 'admin' && req.body?.gigaProjectName !== undefined) throw access.invalid('Administrators have full access.');
-  tx(() => {
-    const before = access.gigaGrant(id);
-    writeUserAccess(id, req.body || {});
-    const after = access.gigaGrant(id);
-    const label = (grant) => grant ? grant.name || 'No project access' : 'Hierarchy grants';
-    record({ entity: 'user', entityId: id, ref: target.email, action: 'update', fieldKey: 'access',
-      oldValue: label(before), newValue: label(after), actor: req.user });
+  const id = Number(req.params.id), body = req.body || {};
+  const user = tx(() => {
+    const target = accountForEdit(id);
+    const grantKeys = ['projects', 'capabilities', 'gigaProjectName'];
+    const editGrants = grantKeys.some((k) => Object.hasOwn(body, k));
+    if (Object.keys(body).some((k) => k !== 'name' && !grantKeys.includes(k))) {
+      throw access.invalid('Only the display name and access settings can be changed here.');
+    }
+    if (editGrants && target.role === 'admin') throw access.invalid('Administrators have full access. Only the display name can be changed here.');
+    const name = Object.hasOwn(body, 'name') ? renameAccount(target, body.name, req.user) : target.name;
+    if (editGrants) {
+      const before = access.gigaGrant(id);
+      writeUserAccess(id, body);
+      const after = access.gigaGrant(id);
+      const label = (grant) => grant ? grant.name || 'No project access' : 'Hierarchy grants';
+      record({ entity: 'user', entityId: id, ref: target.email, action: 'update', fieldKey: 'access',
+        oldValue: label(before), newValue: label(after), actor: req.user });
+    }
+    return { id, name };
   });
-  res.json({ ok: true });
+  res.json({ ok: true, user });
 }));
 
 // ---------------------------------------------------------------------------

@@ -323,6 +323,10 @@ kept: the second copy is stored under `… (2nd column)`.
 `GET /api/import/template` returns the same blank workbook
 (requires `import.data`).
 
+### Rename an account
+
+As an administrator, go to **Administration → Users & access**, click **Edit access** on the account’s row, change **Display name**, and click **Save changes**. This works for supervisors, other administrators, and your own account. A name-only change leaves the login email, password, and permissions untouched. Your own name and initials update immediately; another signed-in user can refresh to see their new name. Past audit entries keep the name recorded at the time.
+
 ### Assign or change one Giga project
 
 1. Sign in as an **Administrator**. Open **Administration → Users & access → New user**.
@@ -335,7 +339,7 @@ kept: the second copy is stored under `… (2nd column)`.
    or audit permissions only if needed. Click **Create user**. Account and access
    are saved together: an invalid project leaves no partial account behind.
 4. To change it later, find that person's row and click **Edit access**. The
-   picker shows the current selection. Choose a different name and **Save access**,
+   picker shows the current selection. Choose a different Giga project and **Save changes**,
    or choose **No project access** to keep the login and revoke workforce access.
    The change applies on the next request, including in existing sessions. Refresh
    an already open page to reload its navigation and rows; no new sign-in is needed.
@@ -402,7 +406,7 @@ and past attribution remain. You cannot delete yourself or the last active admin
 | `GET`/`PUT` | `/api/categories/:id/columns` | Read / write the column layout |
 | `GET`/`POST`/`PATCH` | `/api/projects`, `/api/subprojects`, `/api/categories` | Hierarchy |
 | `GET`/`POST`/`PATCH` | `/api/suppliers`, `/api/groups`, `/api/fields`, `/api/users` | Configuration |
-| `PUT` | `/api/users/:id/access` | Replace or revoke Giga project access; update capabilities |
+| `PUT` | `/api/users/:id/access` | Rename an account (`name`); optionally update supervisor access and capabilities in the same save |
 | `DELETE` | `/api/users/:id` | Remove an account (not yourself, not the last admin) |
 | `GET` | `/api/duplicates`, `POST /api/duplicates/:id/resolve` | Review queue |
 | `GET` | `/api/export` | Excel snapshot (scope-aware) |
