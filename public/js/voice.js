@@ -34,20 +34,25 @@ export function speakerSettings(mode, percent) {
     volume: (Number.isFinite(n) ? Math.min(200, Math.max(0, n)) : 100) / 100 };
 }
 
-export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, language: initial = 'en',
+export function createLocalVoice({ onCommand, onState, onPartial = () => {}, onPlayback = () => {}, language: initial = 'en',
   offline = offlineSpeech, getSpeaker = speakerSettings }) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let language = initial === 'hi' ? 'hi' : 'en';
   const t = (en, hi) => language === 'hi' ? hi : en;
-  const setup = () => t('Run npm run voice:setup in the app folder for offline Indian English and Hindi.', 'ऑफ़लाइन हिन्दी और भारतीय अंग्रेज़ी के लिए ऐप फ़ोल्डर में npm run voice:setup चलाएँ।');
+  const setup = () => t('On Windows, reopen the updated app with start-windows.bat while online.', 'Windows पर इंटरनेट से जुड़कर अपडेट किया हुआ ऐप start-windows.bat से खोलें।');
   let epoch = 0, active = false, mic = null, speaking = null, installLang = null;
   let localInput = null, sessionPacks = null;
-  const status = (text, action = active ? 'stop' : 'start', help = false) => onState({ active, text, action, help });
+  const status = (text, action = active ? 'stop' : 'start', help = false) => { onPartial(''); onState({ active, text, action, help }); };
+  function micUnavailable() {
+    if (!offline.canListen()) return t('This browser cannot use the local microphone. Open Ask in a desktop Chrome or Edge tab.', 'इस ब्राउज़र में स्थानीय माइक उपलब्ध नहीं है। Ask को डेस्कटॉप Chrome या Edge के टैब में खोलें।');
+    if (!sessionPacks) return t('Could not check the app’s microphone files. Restart the app and reopen this tab.', 'ऐप के माइक की फ़ाइलों की जाँच नहीं हो सकी। ऐप फिर शुरू करके यह टैब दोबारा खोलें।');
+    return t('The offline English microphone pack is missing.', 'ऑफ़लाइन हिन्दी माइक पैक उपलब्ध नहीं है।') + ' ' + setup();
+  }
   function cancelSpeech() {
     const old = speaking; speaking = null; // ignore late catalogue, WAV and end/error events
     old?.cancel?.();
   }
-  function stop(text = t('Voice off. You can still type.', 'माइक बंद है। आप हिन्दी में लिख सकते हैं।'), help = false) {
+  function stop(text = t('Microphone stopped.', 'माइक बंद कर दिया गया है।'), help = false) {
     ++epoch; active = false; installLang = null; sessionPacks = null;
     localInput?.close(); localInput = null;
     const old = mic; mic = null;
@@ -67,7 +72,8 @@ export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, la
     function finish(ok, note = '') { if (speaking === token) { speaking = null; done(ok, note); } }
     const { mode, volume } = getSpeaker(); // snapshot for this test/reply, never changes the mic
     if (!volume) return finish(false, t('Speaker volume is 0%. Raise it in Speaker settings.', 'वॉल्यूम 0% है। स्पीकर सेटिंग में इसे बढ़ाएँ।'));
-    const studioSetup = t('For Studio, run npm.cmd run voice:studio in the app folder, then refresh Ask.', 'स्टूडियो के लिए ऐप फ़ोल्डर में npm.cmd run voice:studio चलाएँ, फिर ऐप रीफ़्रेश करें।');
+    const studioSetup = t('Studio is not ready. Choose Auto, or install it with install-studio-voices-windows.bat.', 'स्टूडियो तैयार नहीं है। स्वतः चुनें या install-studio-voices-windows.bat से इसे इंस्टॉल करें।');
+    const standardSetup = t('Standard voice is not ready. Choose Auto, or use setup-voice-windows.bat.', 'स्टैंडर्ड आवाज़ तैयार नहीं है। स्वतः चुनें या setup-voice-windows.bat का उपयोग करें।');
     function device(prefix) {
       const synth = window.speechSynthesis;
       const voices = synth?.getVoices().filter((v) => v.localService === true && family(v.lang) === language) || [];
@@ -76,7 +82,7 @@ export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, la
       if (!voice || !window.SpeechSynthesisUtterance) return finish(false, prefix + noSpeaker() + (mode === 'device'
         ? t(' Choose Auto to use an installed speaker pack.', ' इंस्टॉल किया गया स्पीकर पैक उपयोग करने के लिए स्वतः चुनें।') : ''));
       const note = prefix + t(`Device voice: ${voice.name || voice.lang} (${voice.lang}).`, `डिवाइस की आवाज़: ${voice.name || voice.lang} (${voice.lang})।`)
-        + (!indian && language === 'en' ? ' For an Indian accent, run npm.cmd run voice:studio.' : '');
+        + (!indian && language === 'en' ? ' For an Indian accent, use an installed Studio or Standard voice.' : '');
       const u = new window.SpeechSynthesisUtterance(text); u.voice = voice; u.lang = voice.lang; u.volume = Math.min(1, volume);
       token.cancel = () => synth.cancel();
       u.onend = () => finish(true, note); u.onerror = () => finish(false);
@@ -91,7 +97,7 @@ export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, la
         const engine = order.shift();
         if (engine === 'device') { try { device(prefix); } catch { finish(false); } return; }
         const studio = engine === 'studio';
-        if (!models[engine] || !offline.canPlay()) return finish(false, studio ? studioSetup : setup());
+        if (!models[engine] || !offline.canPlay()) return finish(false, studio ? studioSetup : standardSetup);
         const label = studio ? t('Studio · Indian English', 'स्टूडियो · हिन्दी') : t('Standard · Indian English (KSP)', 'स्टैंडर्ड · हिन्दी');
         const report = (message) => {
           if (speaking !== token) return;
@@ -120,10 +126,13 @@ export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, la
     const errors = {
       'not-allowed': t('Microphone access was denied. Allow the microphone for this site and in Windows Settings → Privacy & security → Microphone.', 'माइक की अनुमति नहीं मिली। साइट और Windows सेटिंग → गोपनीयता और सुरक्षा → माइक्रोफ़ोन में अनुमति दें।'),
       'audio-capture': t('No usable microphone. Check Windows Settings → System → Sound → Input and choose the correct device.', 'माइक उपलब्ध नहीं है। Windows सेटिंग → सिस्टम → साउंड → इनपुट में सही माइक चुनें।'),
+      'no-device': t('No microphone was found. Connect one or select an input in Windows Sound settings.', 'माइक नहीं मिला। माइक जोड़ें या Windows ध्वनि सेटिंग में इनपुट चुनें।'),
+      'device-busy': t('The browser could not open the microphone. Close other apps using it or select another input.', 'ब्राउज़र माइक चालू नहीं कर सका। माइक उपयोग कर रहे दूसरे ऐप बंद करें या दूसरा इनपुट चुनें।'),
+      'no-input': t('No microphone signal detected. Check mute and the selected input, then try again.', 'माइक से आवाज़ नहीं मिली। म्यूट और चुना हुआ इनपुट जाँचकर फिर कोशिश करें।'),
       'no-speech': t('No complete phrase heard. Start voice mode, speak a short question, then pause.', 'पूरा वाक्य नहीं सुनाई दिया। माइक चालू करें, छोटा सवाल पूछें और थोड़ा रुकें।'),
       'service-not-allowed': t('The browser speech service is blocked or unavailable.', 'ब्राउज़र की वाक् सेवा उपलब्ध नहीं है।') + ' ' + setup(),
       'language-not-supported': t(`The browser could not use its ${lang} speech pack.`, `${lang} स्पीच पैक का उपयोग नहीं हो सका।`) + ' ' + setup(),
-      'model-error': t('Could not load the offline recognizer. Allow site storage, then try again.', 'ऑफ़लाइन वाक् पहचान लोड नहीं हुई। साइट को स्टोरेज की अनुमति दें और फिर कोशिश करें।') + ' ' + setup(),
+      'model-error': t('Could not load the local microphone pack. Allow site storage and try again.', 'स्थानीय माइक पैक लोड नहीं हुआ। साइट को स्टोरेज की अनुमति देकर फिर कोशिश करें।'),
       'too-slow': t('The offline recognizer could not keep up. Close other busy tabs and try a shorter question.', 'ऑफ़लाइन वाक् पहचान धीमी है। दूसरे टैब बंद करें और छोटा सवाल पूछें।'),
     };
     stop(errors[code] || t('Could not start local recording. Check the input device and open Ask in its own desktop browser tab.', 'स्थानीय रिकॉर्डिंग चालू नहीं हुई। इनपुट डिवाइस जाँचें और ऐप को अलग डेस्कटॉप टैब में खोलें।'), code !== 'no-speech');
@@ -144,28 +153,31 @@ export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, la
   }
   async function listen(id, lang, note = '') {
     if (id !== epoch) return;
+    const source = localInput ? `${lang} · ${t('offline', 'ऑफ़लाइन')}` : lang;
+    const listening = () => status(t(`Listening (${source})… Speak, then pause.`, `सुन रहे हैं (${source})… बोलें और थोड़ा रुकें।`) + (note ? ' ' + note : ''));
     try {
+      status(t('Waiting for microphone access…', 'माइक की अनुमति का इंतज़ार है…'));
       if (localInput) {
-        status(t('Waiting for microphone access…', 'माइक की अनुमति का इंतज़ार है…'));
-        if (!await localInput.listen() || id !== epoch) return;
+        if (await localInput.listen() && id === epoch) listening();
       } else {
         const rec = new Recognition();
-        if (!('processLocally' in rec)) return stop(setup(), true);
+        if (!('processLocally' in rec)) return stop(micUnavailable(), true);
         rec.processLocally = true;
-        if (rec.processLocally !== true) return stop(setup(), true);
-        rec.lang = lang; rec.continuous = false; rec.interimResults = false;
+        if (rec.processLocally !== true) return stop(micUnavailable(), true);
+        rec.lang = lang; rec.continuous = false; rec.interimResults = true;
         mic = rec; let transcript = '';
+        rec.onstart = () => { if (mic === rec) listening(); }; // start() can return before permission
         rec.onresult = (e) => {
           if (mic !== rec || transcript) return;
-          transcript = Array.from(e.results).filter((r) => r.isFinal).map((r) => r[0].transcript).join(' ').trim();
+          const results = Array.from(e.results);
+          transcript = results.filter((r) => r.isFinal).map((r) => r[0].transcript).join(' ').trim();
           if (transcript) rec.stop();
+          else onPartial(results.map((r) => r[0].transcript).join(' ').trim());
         };
         rec.onerror = (e) => { if (mic === rec) micError(e.error, lang); };
         rec.onend = () => { if (mic === rec) { mic = null; command(id, lang, transcript); } };
         rec.start();
       }
-      const source = localInput ? `${lang} · ${t('offline', 'ऑफ़लाइन')}` : lang;
-      status(t(`Listening (${source})… Ask a question, then pause.`, `सुन रहे हैं (${source})… सवाल पूछें और थोड़ा रुकें।`) + (note ? ' ' + note : ''));
     } catch { if (id === epoch) micError('capture-failed', lang); }
   }
   async function toggle() {
@@ -177,21 +189,35 @@ export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, la
     try {
       const policyError = t('This page’s permissions policy blocks access. Open the app in its own tab or check with IT.', 'इस पेज की नीति अनुमति नहीं देती। ऐप को अलग टैब में खोलें या अपने आईटी व्यवस्थापक से पूछें।');
       if (blockedByPolicy('microphone')) return stop(policyError, true);
+      // This query doesn't prompt. Don't load a model or misdiagnose a missing pack
+      // when the browser already knows the mic is blocked. Older browsers may not
+      // support the descriptor. Keep the native Install click's user activation.
+      if (!requested && navigator.permissions?.query) {
+        status(t('Checking microphone access…', 'माइक की अनुमति जाँची जा रही है…'));
+        let permission;
+        try { permission = await navigator.permissions.query({ name: 'microphone' }); } catch { /* use the actual capture result */ }
+        if (id !== epoch) return;
+        if (permission?.state === 'denied') return micError('not-allowed');
+      }
       if (!requested && offline.canListen()) {
         status(t('Checking installed offline speech…', 'इंस्टॉल किए गए ऑफ़लाइन स्पीच पैक की जाँच हो रही है…'));
         const packs = await offline.packs(language);
         if (id !== epoch) return;
         sessionPacks = packs;
-        if (packs.input) {
+        if (packs?.input) {
           const lang = language === 'hi' ? 'hi-IN' : 'en-IN';
           status(t('Loading Indian English recognition. The microphone is still off…', 'हिन्दी वाक् पहचान लोड हो रही है। माइक अभी बंद है…'));
           localInput = offline.openInput(packs.input, { ready: () => listen(id, lang), transcript: (text) => command(id, lang, text),
+            partial: (text) => { if (id === epoch) onPartial(text); },
+            quiet: (silent) => { if (id === epoch) status(silent
+              ? t('Listening, but no sound yet. Check that your microphone is not muted.', 'माइक चालू है, पर आवाज़ नहीं मिली। जाँचें कि माइक म्यूट तो नहीं है।')
+              : t('Listening… Speak, then pause.', 'सुन रहे हैं… बोलें और थोड़ा रुकें।')); },
             error: (code) => { if (id === epoch) micError(code, lang); } });
           return;
         }
       }
-      if (blockedByPolicy('on-device-speech-recognition')) return stop(policyError + ' ' + setup(), true);
-      if (!Recognition || !('processLocally' in new Recognition())) return stop(t('This browser does not provide on-device recognition.', 'इस ब्राउज़र में स्थानीय वाक् पहचान उपलब्ध नहीं है।') + ' ' + setup(), true);
+      if (blockedByPolicy('on-device-speech-recognition')) return stop(policyError, true);
+      if (!Recognition || !('processLocally' in new Recognition())) return stop(micUnavailable(), true);
       status(requested ? t(`Installing the ${requested} speech pack…`, `${requested} स्पीच पैक इंस्टॉल हो रहा है…`) : t('Checking local English speech packs…', 'स्थानीय हिन्दी स्पीच पैक की जाँच हो रही है…'));
       // Only the explicit second click can request a browser installation.
       if (requested) {
@@ -211,7 +237,7 @@ export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, la
       const msg = found.state === 'downloadable' ? t('The browser cannot install this English pack.', 'ब्राउज़र यह हिन्दी पैक इंस्टॉल नहीं कर सकता।')
         : found.state === 'unavailable' ? t('No local English speech pack is available from the browser.', 'ब्राउज़र में स्थानीय हिन्दी स्पीच पैक उपलब्ध नहीं है।')
         : t('The browser has not confirmed an English speech pack is ready.', 'ब्राउज़र ने अभी हिन्दी स्पीच पैक तैयार होने की पुष्टि नहीं की है।');
-      status(msg + ' ' + setup(), 'start', true);
+      status(offline.canListen() ? micUnavailable() : msg + ' ' + setup(), 'start', true);
     } catch { if (id === epoch) stop(t('Could not start local speech. Open Ask in its own tab.', 'स्थानीय वाक् पहचान शुरू नहीं हुई। ऐप को अलग टैब में खोलें।') + ' ' + setup(), true); }
   }
   function togglePlayback(reply) {
@@ -228,5 +254,7 @@ export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, la
     speak(reply || sample, (ok, note) => onPlayback({ playing: false, help: !ok,
       text: ok ? [finished, note].filter(Boolean).join(' ') : note || t('Could not play sound. Check your output device and volume.', 'आवाज़ नहीं चलाई जा सकी। आउटपुट डिवाइस और वॉल्यूम जाँचें।') }));
   }
-  return { toggle, stop, togglePlayback, prepareSpeaker, setLanguage, isActive: () => active || !!speaking };
+  // Don't erase an idle permission/pack error when a user closes Ask to check it.
+  function dismiss(reason) { if (active || speaking || installLang) stop(reason); }
+  return { toggle, stop, dismiss, togglePlayback, prepareSpeaker, setLanguage, isActive: () => active || !!speaking };
 }

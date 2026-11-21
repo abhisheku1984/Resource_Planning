@@ -28,7 +28,7 @@ git switch main
 git pull --ff-only origin main
 git log -1 --oneline
 npm.cmd ci
-npm.cmd start
+.\start-windows.bat
 ```
 
 Open <http://localhost:4000> and press **Ctrl+Shift+R**. Start in the **same
@@ -50,7 +50,7 @@ and intended only for disposable installations.
 | Read-only reviewer | `kavita.rao@resourceplanning.io` | `Super@12345` |
 | HR uploader | `hr.upload@resourceplanning.io` | `Hr@1234567` |
 
-Windows: after pulling the code, `start-windows.bat` can install missing dependencies and start the app. Use an **Administrator** login for Administration.
+Windows: double-click **`start-windows.bat`**. Before opening the browser it prepares missing app dependencies and the offline **English + हिन्दी microphone** files. The first voice preparation needs internet (up to about 155 MB including fast speakers); subsequent ready launches make no voice downloads. It never opens a mic or reads workbook data. If the download fails, the app still starts. **`start-windows.bat --no-voice`** skips voice preparation (can be combined with `--lan`); plain `npm start` also just starts the server. Use an **Administrator** login for Administration.
 
 ### Employee Directory totals
 
@@ -125,8 +125,7 @@ unsaved CRM values but requires a fresh review before confirmation.
 Two buttons sit above the Ask message box, even when setup help is closed.
 The **microphone** is **Start voice mode** / **बोलना शुरू करें**. Use it on
 **localhost or HTTPS**.
-On Windows, use current desktop Chrome or Edge. If browser speech is unavailable,
-install the optional offline packs below. Allow the microphone when prompted.
+On Windows, start the app with `start-windows.bat` and open it in desktop Chrome or Edge. Press **Start voice mode**, allow the microphone when prompted, speak and pause. No separate microphone installer or speaker test is needed.
 It pauses during spoken replies and listens again for the next command. You can also just type the same commands and press
 Enter, with **no microphone, speech pack or read-aloud voice**.
 
@@ -155,44 +154,18 @@ For a more natural read-back, install **Studio**. It uses two different 24 kHz n
 
 1. In the **updated app folder**, double-click **`install-studio-voices-windows.bat`**. No Y/N prompt. Or run `npm.cmd run voice:studio` in PowerShell there. This one-time download is about **100 MB** for both languages; allow about 220 MB of installed space plus npm's cache. For just Hindi or English, use `npm.cmd run voice:studio -- hi` or `-- en`.
 2. Wait for **Ready**. After updating the app code, restart `start-windows.bat` and refresh the app tab (**Ctrl+F5**). Open **Ask → English / हिन्दी → Test speaker / स्पीकर जाँचें**. No microphone access is needed. The status identifies the voice actually used.
-3. Open **Speaker settings and voice setup**. **Auto** prefers Studio when installed; choose **Standard** for the faster original pack or **Local device voice** for a matching offline Windows/browser voice. Studio can take several seconds to prepare each phrase on a slow CPU. An explicitly selected missing pack gives setup guidance rather than silently substituting another language.
+3. Open **Speaker settings**. **Auto** prefers Studio when installed; choose **Standard** for the faster original pack or **Local device voice** for a matching offline Windows/browser voice. Studio can take several seconds to prepare each phrase on a slow CPU. An explicitly selected missing pack gives setup guidance rather than silently substituting another language.
 4. Start with **Volume 100%**, test, then adjust (e.g. **125%**). Studio and Standard level quiet speech and limit peaks, including with boost up to **200%**. Device voices use the OS synthesizer and can't be boosted past its maximum. Settings apply on the next test/reply and are remembered in this browser. If it's still quiet, check the tab isn't muted and **Windows Settings → System → Sound → Volume mixer** for Chrome/Edge and the selected output device.
 
-Studio is **speaker only**. If your microphone already works, leave it alone. If not, use the separate microphone/Standard installer below. `http://localhost:4000/speech/status` shows `studio` (neural speaker), `output` (Standard speaker) and `input` (mic) **independently** under `en` and `hi`. The app only serves installed files; it doesn't contact a speech provider. See [voice credits](voice/studio/NOTICE.md).
+Studio changes the **speaker**, not the mic. Normal Windows startup fills in missing microphone files even on Studio-only installs. It reuses installed Studio voices instead of downloading duplicate Standard models for those languages. `http://localhost:4000/speech/status` reports `studio` (neural speaker), `output` (Standard speaker) and `input` (mic) independently under `en` and `hi`. See [voice credits](voice/studio/NOTICE.md).
 
-### Indian English and Hindi microphone + Standard voices on Windows
+### Using the microphone
 
-**“No local English speech pack” refers to the browser recognizer, not your
-microphone hardware.** Hearing an English reply does not mean the browser can
-recognize English, recognize Hindi, or speak Hindi. Rechecking an unavailable
-pack cannot add any of those capabilities.
+1. In **Ask**, choose your workbook project and **English** or **हिन्दी**. Select **Start voice mode** / **बोलना शुरू करें**. Only this action requests the microphone. The first use may take a few seconds to load the local model. A blocked browser permission is reported without loading it.
+2. When you see **Listening** / **सुन रहे हैं**, try **“How many people?”** or **“कुल कितने कर्मचारी हैं?”**, then pause. In-progress words are only an on-screen preview. Only the final phrase goes to Ask. The mic is released while the app answers, then listens again. Use **Stop voice** to finish.
+3. If it doesn't start, read the line under the mic button: a missing pack, blocked permission, unavailable input and a silent input need different fixes. An idle error remains visible if you close and reopen Ask. The speaker settings don't open by themselves. No database reset or workbook import is involved.
 
-1. In the updated app folder, double-click **`setup-voice-windows.bat`** and
-   choose **Y**. Or, from a terminal in the same folder, run **`npm run voice:setup`**
-   (`npm.cmd run voice:setup` in PowerShell if script execution is restricted).
-   This optional one-time setup downloads about **155 MB** from npm and GitHub.
-   It installs two Vosk recognizers and two CMU Flite voices; model downloads are
-   checked against pinned SHA-256 hashes. It does **not** open the microphone,
-   touch the database, re-import anything, or require administrator access.
-   On a restricted network an administrator can run setup on a connected machine
-   with the same app version and copy its `voice/` folder to the installation.
-2. Start the updated app as usual (`start-windows.bat`). Open **http://localhost:4000**
-   in its own Chrome or Edge tab on the server PC, or use HTTPS. Open **Ask**,
-   choose a workbook project, then **English** or **हिन्दी**. There is no Windows
-   language-pack setting to change. If you installed the packs while the updated
-   app was running, just stop any current voice session and start a new one.
-3. Select **Test speaker** / **स्पीकर जाँचें**. With just the Standard packs,
-   English uses the **Indian English KSP** voice model; हिन्दी uses a
-   separate **Hindi** voice model, not an English voice tagged `hi-IN`. The
-   speaker never opens the mic. After a reply the same button reads it aloud;
-   pressing it again stops playback.
-4. Select **Start voice mode** / **बोलना शुरू करें**, and allow this site's
-   microphone. First use can take a few seconds to load the model into browser
-   storage. Wait for **Listening (en-IN · offline)** / **सुन रहे हैं (hi-IN · ऑफ़लाइन)**.
-   Try **“How many people?”** or **“कुल कितने कर्मचारी हैं?”**, then pause at
-   the end of the question. Ask shows what it heard, releases the microphone
-   while it answers aloud, then listens again. Use **Stop voice** / **माइक बंद करें**
-   to finish. Check dictated names, IDs and field values before confirming CRM changes.
+On Windows, the **normal launcher** installs only what's missing before starting the server. If it reports a failed first download, check the connection and space on the app drive; starting the launcher again reuses verified files. For a manual server install on another platform, `npm run voice:setup` prepares the baseline packs. For a restricted network, the operator can prepare the same version on a connected machine and copy the `voice/` folder. Neither the browser nor a server endpoint installs app files.
 
 **Without the optional download:** the existing browser path still works where
 a matching *on-device* recognizer is available. Ask checks variants of the
@@ -208,10 +181,7 @@ back to English. Neither path falls back to a cloud speech service.
   the browser's site controls and **Windows Settings → Privacy & security →
   Microphone**. Test the selected device under **Settings → System → Sound → Input**.
   For silent playback, check **Output**, the tab's mute setting and volume instead.
-- If local model loading fails, allow site storage, check free disk space and
-  rerun `npm run voice:setup`. If just one language is needed, use
-  `npm run voice:setup -- en` or `npm run voice:setup -- hi`. The app never
-  downloads missing models at runtime. See [voice files and licenses](voice/README.md).
+- If local model loading fails, allow site storage and check free disk space. For an explicit **manual** install of only one language use `npm run voice:setup -- en` or `-- hi`. The server and browser never download missing app models at runtime. See [voice files and licenses](voice/README.md).
 - You can always type into Ask and press **Enter**. On supported Windows 11 PCs,
   **Start → Voice access** is an alternative for English OS dictation. Windows,
   not Ask, controls that microphone; **Win+H** is a separate online feature.

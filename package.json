@@ -14,7 +14,8 @@
     "check:filters": "node --disable-warning=ExperimentalWarning scripts/check-filters.js",
     "voice:setup": "npm ci --prefix voice --omit=dev --ignore-scripts --no-audit --no-fund && node voice/setup.js",
     "voice:check": "node --disable-warning=ExperimentalWarning voice/check-browser.mjs",
-    "voice:studio": "npm ci --prefix voice/studio --omit=dev --ignore-scripts --no-audit --no-fund && node voice/setup.js --studio"
+    "voice:studio": "npm ci --prefix voice/studio --omit=dev --ignore-scripts --no-audit --no-fund && node voice/setup.js --studio",
+    "voice:prepare": "node voice/prepare.js"
   },
   "engines": {
     "node": ">=22.5"

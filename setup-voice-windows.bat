@@ -6,9 +6,7 @@ echo Install Indian English and Hindi for the Ask microphone and speaker.
 echo This downloads about 155 MB from npm and GitHub to the voice folder.
 echo No audio or workbook data is sent. No administrator access is needed.
 echo.
-choice /m "Install the offline voice packs"
-if errorlevel 2 exit /b 0
-call npm run voice:setup
+call npm.cmd run voice:setup
 if errorlevel 1 (
   echo Setup did not finish. Check the message above and run this file again.
   pause
