@@ -195,7 +195,7 @@ function importCard(imports) {
     h('div', { class: 'empty-icon' }, icon('upload', 22)),
     h('div', { class: 'empty-title' }, canImport ? 'Upload a daily dataset' : 'Import not permitted'),
     h('div', { class: 'empty-body' }, canImport
-      ? 'Drop an .xlsx file here or click to browse. Rows are matched on Employee ID; supervisor edits are protected.'
+      ? 'Drop an .xlsx file here or click to browse. Matches Employee IDs and keeps rows not in the file. Supervisor edits are protected.'
       : 'Ask an administrator to grant the import capability.'),
   );
 
@@ -250,16 +250,19 @@ function importCard(imports) {
     ),
   );
 
-  async function handleFile(file) {
+  function handleFile(file) {
+    fileInput.value = ''; // allow choosing the same file again, including after Cancel
     if (!/\.xlsx$/i.test(file.name)) {
       toast('Unsupported file', 'Upload an Excel .xlsx workbook.', 'error');
       return;
     }
-    const buffer = await file.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-    const modalRef = showImportPreview(file.name, base64,
-      place.categoryId ? place : {});
-    fileInput.value = '';
+    // The import endpoint accepts a data URL. Native encoding avoids passing
+    // one function argument per byte (a full HR workbook exceeds that limit).
+    const placement = place.categoryId ? { ...place } : {};
+    const reader = new FileReader();
+    reader.onload = () => showImportPreview(file.name, reader.result, placement);
+    reader.onerror = () => toast('Could not read workbook', 'Select the local .xlsx file and try again.', 'error');
+    reader.readAsDataURL(file);
   }
 }
 
@@ -317,7 +320,7 @@ function placementPicker(place) {
     h('summary', { style: { cursor: 'pointer', fontSize: '13px', fontWeight: '600' } },
       'Where should new rows go?'),
     h('div', { class: 'note', style: { margin: '8px 0' } }, icon('info', 15),
-      h('span', null, 'Your workbook has no Project column, so the portal needs to know where to file the people. Rows that do carry Project, Subproject and Category use those instead.')),
+      h('span', null, 'Only choose a destination if your workbook omits placement columns. Rows with Project, Subproject and Category use the placement in the file.')),
     h('div', { class: 'grid', style: { gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' } },
       h('div', { class: 'field' }, h('label', { class: 'field-label' }, 'Project'), projSel),
       h('div', { class: 'field' }, h('label', { class: 'field-label' }, 'Subproject'), subSel),
@@ -327,7 +330,7 @@ function placementPicker(place) {
   );
 }
 
-function showImportPreview(filename, base64, placement = {}) {
+function showImportPreview(filename, content, placement = {}) {
   const host = h('div', null, h('div', { class: 'row' }, spinner(), h('span', { class: 'muted' }, 'Validating workbook…')));
   const ref = modal({
     title: 'Import preview',
@@ -335,29 +338,30 @@ function showImportPreview(filename, base64, placement = {}) {
     size: 'modal-lg',
     body: host,
     footer: h('div', { class: 'row', style: { gap: '8px', justifyContent: 'flex-end', width: '100%' } },
-      h('button', { class: 'btn', onclick: () => document.querySelector('.overlay')?.remove() }, 'Cancel'),
+      h('button', { class: 'btn', onclick: () => ref.close() }, 'Cancel'),
       h('button', { id: 'apply-import', class: 'btn btn-primary', disabled: true }, icon('check', 15), 'Apply import'),
     ),
   });
 
   (async () => {
     try {
-      const res = await api('/import', { method: 'POST', body: { filename, content: base64, dryRun: true, ...placement } });
+      const res = await api('/import', { method: 'POST', body: { filename, content, dryRun: true, ...placement } });
+      if (!ref.box.isConnected) return; // a cancelled preview cannot enable Apply on a newer file
       const r = res.result;
       renderReport(host, r, { dryRun: true });
-      const applyBtn = document.getElementById('apply-import');
+      const applyBtn = ref.box.querySelector('#apply-import');
       applyBtn.disabled = false;
       applyBtn.replaceChildren(icon('check', 15), 'Apply import');
       applyBtn.onclick = async () => {
         applyBtn.disabled = true;
         applyBtn.replaceChildren(spinner(), 'Applying…');
         try {
-          const out = await api('/import', { method: 'POST', body: { filename, content: base64, ...placement } });
-          document.querySelector('.overlay')?.remove();
+          const out = await api('/import', { method: 'POST', body: { filename, content, ...placement } });
+          if (ref.box.isConnected) ref.close();
           toast('Import complete',
             `${out.result.created} created · ${out.result.updated} updated · ${out.result.protected} protected`,
             'success', 6500);
-          renderDataHub(document.getElementById('content'), {});
+          document.dispatchEvent(new CustomEvent('rp:data-changed')); // refresh the Directory badge as well as upload history
         } catch (err) {
           toast('Import failed', err.message, 'error');
           applyBtn.disabled = false;

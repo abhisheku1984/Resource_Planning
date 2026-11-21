@@ -15,7 +15,6 @@ set "DB_FILE=%DATA_DIR%\guided-preview.db"
 
 echo Resource Planning - Guided Ask preview
 echo Preview URL: http://localhost:4110
-echo Demo database: "%DB_FILE%"
 echo.
 where node >nul 2>nul || goto :node
 where npm.cmd >nul 2>nul || goto :node
@@ -30,6 +29,17 @@ call npm.cmd ci --omit=dev --ignore-scripts --no-fund --no-audit
 if errorlevel 1 goto :failed
 
 :run
+if /i "%~1"=="--workbook" (
+  node --disable-warning=ExperimentalWarning scripts\prepare-workbook-preview.js
+  if errorlevel 1 goto :failed
+)
+rem A completed workbook preview stays active on ordinary restarts. Its original
+rem sibling is the rollback copy. Never move/delete live SQLite or WAL files.
+if exist "%DATA_DIR%\workbook-preview\" (
+  if not exist "%DATA_DIR%\workbook-preview\guided-preview.db" goto :workbookIncomplete
+  set "DB_FILE=%DATA_DIR%\workbook-preview\guided-preview.db"
+)
+echo Active preview database: "%DB_FILE%"
 echo.
 echo When the server says it is running, open http://localhost:4110 in Chrome or Edge.
 echo Leave this window open while testing. Press Ctrl+C here to stop the preview.
@@ -41,6 +51,9 @@ exit /b 0
 :node
 echo A Node.js LTS installation with built-in SQLite and npm is needed.
 echo Install Node.js 24 LTS or use a supported Node.js 22 LTS, then reopen this launcher.
+goto :failed
+:workbookIncomplete
+echo Incomplete data\workbook-preview folder. Stop the preview and move that folder aside.
 goto :failed
 :incomplete
 echo This checkout is incomplete. Use the full guided Ask branch or extract the entire preview ZIP.

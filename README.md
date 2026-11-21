@@ -39,7 +39,9 @@ and intended only for disposable installations.
 
 ### Try guided Ask on Windows without using your workforce database
 
-Run **`START-PREVIEW.cmd`** and open **<http://localhost:4110>** when the server is running. The preview binds to loopback and uses `data/guided-preview.db`, not the normal `data/resource_planning.db`. The first start creates synthetic records; no import or reset is needed. Sign in as the demo NEXUS supervisor below and [try a guided update](#try-a-guided-update). Press **Ctrl+C** to stop the preview.
+Run **`START-PREVIEW.cmd`** and open **<http://localhost:4110>** when the server is running. By default the preview binds to loopback and uses `data/guided-preview.db`, not the normal `data/resource_planning.db`. If you have activated the workbook preview below, the launcher prints and uses that copy instead. The first start creates synthetic records; no import or reset is needed. Sign in as the demo NEXUS supervisor below and [try a guided update](#try-a-guided-update). Press **Ctrl+C** to stop the preview.
+
+For a ready-made 1,000-person roster, use the [sample workbook and reversible upload walkthrough](samples/README.md).
 
 ### Demo logins
 
@@ -311,7 +313,7 @@ in. So the portal asks once, and files the rows there:
 4. Drop the file on **Upload a daily dataset**. A **preview** runs in a
    transaction and is rolled back, so nothing is written: check *New employees*,
    *Updated placements*, *Protected values* and any *Rows needing attention*.
-5. Press **Apply import**. The workbook is upserted by **Employee ID**.
+5. Press **Apply import**. The workbook is upserted by **Employee ID**. Rows absent from the file are **not deleted**. To replace the local guided-preview roster rather than merge it, follow the [1,000-record upload and rollback steps](samples/README.md).
 
 Header matching is forgiving: case and punctuation are ignored, and the portal
 understands the spellings your file actually uses — `unite manual`,
