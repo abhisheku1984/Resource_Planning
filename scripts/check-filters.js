@@ -57,26 +57,17 @@ async function api(path, token, body) {
     token = (await api('/auth/login', null, { email: EMAIL, password: PASSWORD })).token;
   } catch (err) {
     console.error(`\nCould not sign in as ${EMAIL}: ${err.message}`);
-    console.error('Is the server running (npm start), and did you run "npm run demo" once?');
+    console.error('Check that the server is running and the account details are correct.');
     process.exit(1);
   }
   console.log(`Signed   ${EMAIL}\n`);
 
   const started = Date.now();
-  const page = await api('/employees?includeSummary=1&pageSize=25', token);
+  const page = await api('/employees?pageSize=25', token);
   const ms = Date.now() - started;
 
   console.log(`Directory: ${page.total.toLocaleString()} rows, ${page.facets.length} filter sets, ${ms} ms\n`);
 
-  function checkCards(page) {
-    const s = page.summary;
-    if (!s || s.placements !== page.total || !(s.people >= 0 && s.people <= s.placements)) {
-      fail(`Directory summary ${JSON.stringify(s)} does not match ${page.total} records.`);
-    } else {
-      console.log(`   Cards: ${s.people.toLocaleString()} people · ${s.placements.toLocaleString()} placements · ${s.gigaProjects} Giga project(s)`);
-    }
-  }
-  checkCards(page);
   for (const key of FIVE) {
     const facet = page.facets.find((f) => f.key === key);
     if (!facet) {
@@ -98,10 +89,9 @@ async function api(path, token, body) {
       continue;
     }
     const filtered = await api(
-      `/employees?includeSummary=1&pageSize=5&f_${key}[]=${encodeURIComponent(pick.value)}`,
+      `/employees?pageSize=5&f_${key}[]=${encodeURIComponent(pick.value)}`,
       token
     );
-    checkCards(filtered);
     if (filtered.total === pick.count) {
       console.log(`   OK    picking "${pick.value}" gives ${filtered.total.toLocaleString()} rows, as advertised`);
     } else {

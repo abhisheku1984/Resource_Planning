@@ -1,4 +1,4 @@
-/* Keystrokes, guided updates and final dictation edit the same in-memory CRM
+/* Text commands and manual edits share one in-memory CRM
    draft. Only a separate confirmation can call the authenticated submit API. */
 import { h, mount, api } from '../core.js';
 import { fieldsHi, optionsHi, crmCommandHi, hindiDate, digits } from './crm-hindi.js';
@@ -84,7 +84,7 @@ export function createAssistantCrm(host, onCommand, getLanguage = () => 'en', on
       try {
         const res = await api(`/agent/crm/${form.assignmentId}/review`, { method: 'POST', body: reviewBody() });
         if (id !== version) return t('The draft changed. Review it again.', 'ड्राफ़्ट बदला है। फिर समीक्षा करें।');
-        // Read back the server's canonical values and current employee identity,
+        // Show the server's canonical values and current employee identity,
         // not a guessed field label or a number/date the server would reformat.
         const plan = res.interpretation;
         form.name = plan.name; form.empCode = plan.empCode; form.placementLabel = plan.placementLabel;
@@ -105,8 +105,8 @@ export function createAssistantCrm(host, onCommand, getLanguage = () => 'en', on
     const ref = identity() + (guide ? ` · ${place()}` : '');
     if (guide) render();
     return t('Review for ', 'बदलाव की समीक्षा: ') + ref + ': ' + values + (guide
-      ? t('. Save these changes? Say yes, correct a value, or cancel.', '। ये बदलाव सहेजें? हाँ कहें, मान सुधारें या रद्द करें।')
-      : t('. Say “confirm save” to write these changes, or “discard changes”.', '। बदलाव लिखने के लिए “सहेजने की पुष्टि करें” या “बदलाव रद्द करें” कहें।'));
+      ? t('. Save these changes? Reply yes, correct a value, or cancel.', '। ये बदलाव सहेजें? हाँ लिखें, मान सुधारें या रद्द करें।')
+      : t('. Type “confirm save” to write these changes, or “discard changes”.', '। बदलाव लिखने के लिए “सहेजने की पुष्टि करें” या “बदलाव रद्द करें” लिखें।'));
   }
   function normalize(f, raw) {
     let value = raw.trim();
@@ -137,7 +137,7 @@ export function createAssistantCrm(host, onCommand, getLanguage = () => 'en', on
   function suspend() { invalidate(); guide?.reset(); renderPreview(); }
   function changeLanguage() { suspend(); render(); }
   async function save() {
-    if (!draft.size || !reviewed || saving || (guide && !ticket)) return t('First say “review changes” and check the employee and values.', 'पहले “बदलाव की समीक्षा करें” कहें और कर्मचारी व दर्ज किए गए मान जाँचें।');
+    if (!draft.size || !reviewed || saving || (guide && !ticket)) return t('First select “Review changes” and check the employee and values.', 'पहले “बदलाव की समीक्षा करें” लिखें और कर्मचारी व दर्ज किए गए मान जाँचें।');
     const proof = ticket; invalidate(); saving = true;
     const target = form;
     for (const input of controls.values()) input.disabled = true;
@@ -172,7 +172,7 @@ export function createAssistantCrm(host, onCommand, getLanguage = () => 'en', on
       return t('Draft discarded. Nothing was saved.', 'बदलाव रद्द कर दिए गए। कुछ भी नहीं सहेजा गया।');
     }
     if (lower === 'close crm') {
-      if (draft.size) return t('There are unsaved CRM changes. Say “review changes” to save or “discard changes” before closing.', 'अभी बदलाव नहीं सहेजे गए हैं। “बदलाव की समीक्षा करें” या बंद करने से पहले “बदलाव रद्द करें” कहें।');
+      if (draft.size) return t('There are unsaved CRM changes. Review or discard your draft before closing.', 'अभी बदलाव नहीं सहेजे गए हैं। “बदलाव की समीक्षा करें” या बंद करने से पहले “बदलाव रद्द करें” लिखें।');
       clear(); return t('CRM closed. You can ask another project question.', 'CRM बंद है। अब प्रोजेक्ट के बारे में दूसरा सवाल पूछ सकते हैं।');
     }
     if (/^(?:list|read|show) (?:the )?fields$/.test(lower)) return t('CRM fields: ', 'CRM फ़ील्ड: ') + form.fields.map(label).join('; ') + '.';
@@ -193,17 +193,17 @@ export function createAssistantCrm(host, onCommand, getLanguage = () => 'en', on
       const reply = guide.turn(message); render(); return reply;
     }
     const set = text.trim().match(/^(?:set|change|fill)\s+(.+?)\s+to\s+(.+)$/is);
-    if (!set && !op) return t('In CRM, say “list fields”, “read Detail Comments”, “set Detail Comments to” and your note, “review changes”, or “close CRM”.', 'CRM में “फ़ील्ड बताएं”, “टिप्पणी पढ़ें”, “टिप्पणी में अपना नोट लिखें”, “बदलाव की समीक्षा करें” या “सीआरएम बंद करें” कहें।');
+    if (!set && !op) return t('In CRM, type “list fields”, “read Detail Comments”, “set Detail Comments to” and your note, “review changes”, or “close CRM”.', 'CRM में “फ़ील्ड बताएं”, “टिप्पणी पढ़ें”, “टिप्पणी में अपना नोट लिखें”, “बदलाव की समीक्षा करें” या “सीआरएम बंद करें” लिखें।');
     const key = words(set ? set[1] : op[2]);
     const matches = form.fields.filter((f) => [f.label, f.key, label(f)].some((k) => words(k) === key));
-    if (matches.length !== 1) return t('That field is not on this CRM form or is ambiguous. Say “list fields” for its exact labels.', 'फ़ील्ड की पहचान नहीं हो सकी। सही नाम सुनने के लिए “फ़ील्ड बताएं” कहें।');
+    if (matches.length !== 1) return t('That field is not on this CRM form or is ambiguous. Type “list fields” for the exact labels.', 'फ़ील्ड की पहचान नहीं हो सकी। सही नाम देखने के लिए “फ़ील्ड बताएं” लिखें।');
     const f = matches[0];
     if (op?.[1].toLowerCase() === 'read') return `${label(f)}: ${display(f, draft.get(f.key) ?? f.value) || t('not set', 'खाली')}.`;
     if (!f.editable) return t(`${f.label} is read-only. Nothing was changed.`, `${label(f)} केवल पढ़ने के लिए है। कोई बदलाव नहीं हुआ।`);
     const { value, error } = normalize(f, set ? set[2] : ''); if (error) return error;
     update(f, value);
     if (guide) { guide.reset(); const reply = review(); render(); return reply; }
-    return t(`Draft ${f.label}: ${value || '(clear)'}. Not saved. Dictate another field or say “review changes”.`, `ड्राफ़्ट में ${label(f)}: ${display(f, value) || '(खाली)'}। अभी सहेजा नहीं गया है। अगला फ़ील्ड भरें या “बदलाव की समीक्षा करें” कहें।`);
+    return t(`Draft ${f.label}: ${value || '(clear)'}. Not saved. Edit another field or select “Review changes”.`, `ड्राफ़्ट में ${label(f)}: ${display(f, value) || '(खाली)'}। अभी सहेजा नहीं गया है। अगला फ़ील्ड भरें या “बदलाव की समीक्षा करें” लिखें।`);
   }
   function suggestions() {
     if (reviewed) return [confirmLabel(), discardLabel()];

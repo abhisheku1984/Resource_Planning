@@ -71,20 +71,17 @@ function client(token) {
 }
 
 /* ================================================================== tests */
-test('offline speech serves only fixed local assets, never an install/upload endpoint or a document-wide eval exception', async () => {
-  const status = await fetch(`${base}/speech/status`);
-  assert.equal(status.status, 200); assert.equal(status.headers.get('cache-control'), 'no-store');
-  const packs = await status.json(); assert.deepEqual(Object.keys(packs).sort(), ['en', 'hi']);
-  for (const p of Object.values(packs)) for (const url of Object.values(p)) assert.match(url, /^\/speech\/models\/[\w.-]+$/);
-  for (const url of ['/speech/install', '/speech/models/not-installed.tar.gz', '/speech/node_modules/anything', '/speech/setup.js', '/speech/studio/install', '/speech/tokens/index.js', '/speech/ort/ort.webgpu.min.mjs', '/speech/models/voice.onnx.part']) assert.equal((await fetch(base + url)).status, 404);
-  assert.equal((await fetch(base + '/speech/status', { method: 'POST' })).status, 404);
-  for (const [url, directive] of [['/', "script-src 'self'"], ['/js/voice.js', "script-src 'self'"],
-    ['/js/speech/studio.js', "script-src 'self'"], ['/speech/ort/ort.wasm.min.mjs', "script-src 'self'"],
-    ['/speech/vosk.worker.js', "script-src 'unsafe-eval'"], ['/js/speech/speaker-worker.js', "script-src 'self' 'wasm-unsafe-eval'"]]) {
-    const headers = (await fetch(base + url, { method: 'HEAD' })).headers;
-    const csp = headers.get('content-security-policy').split('; ');
-    assert.ok(csp.includes(directive) && csp.includes("connect-src 'self'"));
-    if (url.includes('worker.js')) assert.ok(csp.includes("worker-src 'none'"));
+test('text-only Ask: no speech endpoints, audio workers or microphone permission', async () => {
+  const page = await fetch(base);
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get('permissions-policy'), 'microphone=()');
+  const csp = page.headers.get('content-security-policy');
+  assert.ok(csp.split('; ').includes("script-src 'self'"));
+  assert.doesNotMatch(csp, /unsafe-eval/);
+  for (const path of ['/speech/status', '/speech/vosk.worker.js', '/js/voice.js', '/js/speech/speaker-worker.js']) {
+    const retired = await fetch(base + path);
+    assert.equal(retired.status, 404, path);
+    assert.doesNotMatch(retired.headers.get('content-security-policy'), /unsafe-eval/, path);
   }
 });
 
@@ -1317,7 +1314,7 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     assert.equal((await ask(`${A} में सी आर एम खोलें।`)).kind, 'crm_lookup');
     const found = await ask(`${A} में GIG डैश आठ आठ शून्य शून्य एक का सीआरएम खोलें`);
     assert.equal(found.kind, 'crm'); assert.equal(found.crm.assignmentId, one.assignmentId); assert.equal(found.crm.projectName, A);
-    assert.equal(found.crm.name, q.get('SELECT name FROM employees WHERE id=?', one.employeeId).name, 'review speaks the real employee name, not a missing workbook column');
+    assert.equal(found.crm.name, q.get('SELECT name FROM employees WHERE id=?', one.employeeId).name, 'review shows the real employee name, not a missing workbook column');
     assert.match(found.reply, /बदलाव की समीक्षा/); assert.ok(found.crm.fields.some((f) => f.key === 'detail_comments' && f.editable));
     assert.equal((await ask(`प्लेसमेंट ${sharedOther.assignmentId} का CRM खोलें`)).kind, 'crm_lookup');
     assert.equal((await ask(`प्लेसमेंट ${one.assignmentId} का CRM खोलें`)).crm.assignmentId, one.assignmentId);
@@ -1327,7 +1324,7 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     assert.notEqual((await xyz('GET', `/employees/${one.assignmentId}`)).data.record.values.block_status, 'Hard Block');
   });
 
-  await t.test('voice CRM resolves an exact placement and confirmed submit rechecks scope, fields, revision and permissions', async () => {
+  await t.test('Ask CRM resolves an exact placement and confirmed submit rechecks scope, fields, revision and permissions', async () => {
     const opened = await xyz('POST', '/agent/ask', { message: `Open C R M for G I G dash 88001 in ${A}` });
     assert.equal(opened.status, 200); assert.equal(opened.data.kind, 'crm');
     const form = opened.data.crm;
@@ -1335,7 +1332,7 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     assert.equal(form.projectName, A); assert.ok(form.fields.some((f) => f.key === 'detail_comments' && f.editable));
     assert.ok(!form.fields.some((f) => ['giga_project_name','emp_code'].includes(f.key)));
     const url = `/employees/${form.assignmentId}/submit`;
-    const body = { crmProjectName: A, changes: { detail_comments: 'Dictated confirmed note' }, rev: form.rev };
+    const body = { crmProjectName: A, changes: { detail_comments: 'Typed confirmed note' }, rev: form.rev };
     assert.equal((await xyz('POST', url, { ...body, rev: null })).status, 422);
     assert.equal((await xyz('POST', url, { ...body, changes: { giga_project_name: B } })).status, 403);
     assert.equal((await xyz('POST', url, { ...body, crmProjectName: B })).status, 403);

@@ -22,20 +22,20 @@ function scopeFor(user, name, flag) {
 }
 const norm = (s) => s.toLowerCase().replace(/’/g, "'").replace(/\s+/g, ' ').trim();
 const numbers = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
-const spoken = (s) => norm(s).replace(/\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (w) => String(numbers.indexOf(w)));
+const numberAlias = (s) => norm(s).replace(/\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (w) => String(numbers.indexOf(w)));
 function resolve(user, message, selected, lang, requested = null, projectPicked = false) {
   const names = visibleProjectNames(user), hi = lang === copy.hi;
   const choose = (choices) => ({ understood: false, kind: 'choose_project', reply: lang.choose(choices.slice(0, 8)), suggestions: choices.slice(0, 8) });
   const unavailable = () => ({ understood: false, kind: 'denied', reply: lang.unavailable });
   if (!names.length) return { error: { kind: 'denied', reply: lang.noProjects } };
-  const sound = (s) => spoken(hi ? hindi.spokenProject(norm(s)) : s);
+  const projectAlias = (s) => numberAlias(hi ? hindi.projectAlias(norm(s)) : s);
   const matches = (raw) => {
     const name = raw.trim();
     if (names.includes(name)) return [name];
     const same = names.filter((s) => norm(s) === norm(name));
     if (same.length) return same;
-    const alias = sound(name);
-    return names.filter((s) => sound(s) === alias);
+    const alias = projectAlias(name);
+    return names.filter((s) => projectAlias(s) === alias);
   };
   // Compare whole names first, even if a workbook name contains a preposition.
   const text = message.trim().replace(/[.?!।]+$/u, '').trim();
@@ -123,7 +123,7 @@ function findPlacement(user, name, raw, crm, lang, choiceId = null) {
   const who = raw.trim().replace(lang === copy.hi ? /^(?:employee(?: id)?|कर्मचारी(?: (?:आई\s*डी|id))?)\s+/iu : /^employee(?: id)?\s+/i, '');
   const id = lang === copy.hi ? hindi.employeeTerm(who) : who;
   const placement = id.match(/^placement\s+(\d+)$/i);
-  // Keep the literal ID/name and also try its spoken code, preserving leading zeros.
+  // Keep the literal ID/name and also try its spelled-out code, preserving leading zeros.
   const code = id.replace(/\b(?:dash|hyphen)\b/i, '-').match(/^([a-z](?:\s*[a-z])*)[\s-]+([\d ]+)$/i);
   const rows = q.all(`SELECT a.id, e.name, e.emp_code, p.name AS project, s.name AS subproject, c.name AS category ${FROM}
     JOIN projects p ON p.id = a.project_id JOIN subprojects s ON s.id = a.subproject_id JOIN categories c ON c.id = a.category_id
@@ -167,7 +167,7 @@ function guided(user, name, request, choice, lang) {
     return { kind: 'denied', reply: lang.noPermission(name, !can(user, 'crm.use')) };
   }
   let who = request.person || choice?.person;
-  // A user can correct a misheard name ONLY if the original exact target has
+  // A user can correct a mistyped name ONLY if the original exact target has
   // no match in this scope. A choice must never replace a valid named person.
   if (request.person && choice?.person && choice.person !== request.person) {
     const first = findPlacement(user, name, request.person, true, lang);

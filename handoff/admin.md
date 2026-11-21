@@ -1,5 +1,7 @@
 # Build prompt — paste this into the other AI
 
+> **Historical handoff for `c8a76f3`.** The current app has text-only Ask and no summary cards in Employee Directory. For the current build and Windows startup instructions, use the [project README](../README.md).
+
 Build a working, independent copy of **Resource Planning**, the Windows-friendly workforce application described in the accompanying `README.md`. I want runnable source and evidence that the workflows work, not a plan, a landing page, or a mock dashboard. Read the whole README, including the workbook/CRM field maps and the synthetic acceptance case. If your interface cannot take attachments, I will paste the README immediately after this prompt. If it is missing, ask me for that document, not for employee records.
 
 **Work in a new project folder with its own SQLite database.** Do not edit, connect to, seed or overwrite my existing app, database or branches. Do not publish or deploy anything. You do not need access to my private repositories. Use synthetic employees and locally generated demo credentials only. Implement the **current baseline**. The NGO is an interaction reference, not the product; the paragraph marked “Future only” is not a feature request for this build.

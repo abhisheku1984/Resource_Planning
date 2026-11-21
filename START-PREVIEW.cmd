@@ -22,21 +22,12 @@ where npm.cmd >nul 2>nul || goto :node
 node --disable-warning=ExperimentalWarning -e "require('node:sqlite')" >nul 2>nul || goto :node
 if not exist "node_modules\express\package.json" goto :install
 if not exist "node_modules\exceljs\package.json" goto :install
-goto :ready
+goto :run
 
 :install
 echo Installing app dependencies for this preview. Internet is needed once.
 call npm.cmd ci --omit=dev --ignore-scripts --no-fund --no-audit
 if errorlevel 1 goto :failed
-
-:ready
-if /i "%~1"=="--voice" goto :voice
-goto :run
-
-:voice
-echo Checking local English and Hindi speech packs for this preview...
-call npm.cmd run --silent voice:prepare
-if errorlevel 1 echo Voice setup did not finish. You can still try every update by typing.
 
 :run
 echo.

@@ -4,9 +4,5 @@ data/
 .DS_Store
 tests/screenshots/
 
-# Optional downloaded models and locally generated speaker auditions (not user data)
-/voice/.cache/
-/voice/*.wav
-
-# Portable offline voice distributions (generated; do not commit)
-/voice/*.zip
+# Local artifacts left by older installations (not used by the app).
+/voice/

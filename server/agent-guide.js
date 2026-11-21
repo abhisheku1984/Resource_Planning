@@ -55,7 +55,7 @@ function hindi(text) {
   const action = text.replace(/^कृपया\s+/u, '').match(/^(.+?)\s+(?:अपडेट (?:करें|करो)|बदलें|सुधारें|लिखें|भरें|दर्ज करें)[.!?।]*$/su);
   if (!action) return null;
   let [, body] = action, project = null, person = '';
-  // “में” and “के लिए” also occur in field labels and dictated notes. Split
+  // “में” and “के लिए” also occur in field labels and note text. Split
   // the subject first; once the field begins, leave its entire value intact.
   const fieldStart = /^(?:टिप्पणी|नोट|इंटरव्यू नोट|साक्षात्कार नोट|बिलिंग|खात[ेा]|अकाउंट|पिछले सप्ताह|इस सप्ताह|अवसर|मांग|महीने की भूमिका|भूमिका पर|साक्षात्कारकर्ता|आवंटन पूरा|प्रतीक्षित|पीआईडी ब्लॉक|ब्लॉक स्थिति)(?:\s|$)/u;
   const prefix = !fieldStart.test(body) && body.match(/^(.+?)\s+में\s+(.+)$/su);

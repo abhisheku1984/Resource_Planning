@@ -1,12 +1,11 @@
-// Optional real-browser acceptance check for the guided CRM. Uses the existing
-// optional Playwright dependency, no microphone, external services or user DB.
+// Real-browser acceptance check for typed Ask using an isolated synthetic database.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 const require = createRequire(import.meta.url);
-const { chromium } = createRequire(new URL('../voice/package.json', import.meta.url))('playwright-core');
+const { chromium } = require('playwright-core');
 if (!process.env.CHROME_PATH) throw Error('Set CHROME_PATH to your Chrome or Edge executable.');
 const dir = await mkdtemp(path.join(os.tmpdir(), 'rp-guided-'));
 process.env.DB_FILE = ':memory:'; process.env.DATA_DIR = dir;
@@ -25,9 +24,27 @@ try {
   for (const language of ['en', 'hi']) {
     const page = await browser.newPage(), errors = [], posts = [];
     page.on('pageerror', err => errors.push(err.message));
-    page.on('request', req => { if (req.method() === 'POST') posts.push(new URL(req.url()).pathname); if (!req.url().startsWith(base + '/')) errors.push(req.url()); });
+    page.on('request', req => {
+      const url = new URL(req.url());
+      if (req.method() === 'POST') posts.push(url.pathname);
+      if (url.origin !== base || /^\/(?:speech\/|js\/(?:voice\.js|speech\/))/.test(url.pathname) || url.searchParams.has('includeSummary')) errors.push(req.url());
+    });
+    await page.addInitScript(() => {
+      window.audioCalls = [];
+      const unexpected = (key) => { window.audioCalls.push(key); throw Error(`Unexpected audio API: ${key}`); };
+      for (const key of ['speechSynthesis', 'SpeechRecognition', 'webkitSpeechRecognition', 'AudioContext']) {
+        Object.defineProperty(window, key, { configurable: true, get: () => unexpected(key) });
+      }
+      if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = () => unexpected('getUserMedia');
+    });
     await page.goto(base); await page.fill('#login-email', 'priya.nair@resourceplanning.io'); await page.fill('#login-pw', 'Super@12345');
-    await page.getByRole('button', { name: 'Sign in', exact: true }).click(); await page.locator('.assistant-launch').first().click();
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /Employee Directory/i }).click();
+    const directory = page.locator('#content');
+    await directory.locator('#row-count').filter({ hasText: /\d/ }).waitFor();
+    assert.equal(await directory.locator('.grid-kpi, .kpi').count(), 0);
+    assert.ok(await directory.locator('table tbody tr').count() > 0);
+    await page.locator('.assistant-launch').first().click();
     const panel = page.locator('.assistant'), msg = panel.locator('.assistant-input'), log = panel.locator('.assistant-log');
     const l = (en, hi) => language === 'hi' ? hi : en;
     const turn = async (text, reply) => {
@@ -36,7 +53,9 @@ try {
       await log.locator('.msg.user').nth(count).waitFor();
       await log.locator('.msg.agent:not(.suggestions) .msg-body:not(.wide)').last().filter({ hasText: reply }).waitFor({ timeout: 5000 });
     };
-    await panel.getByRole('button', { name: l('English','हिन्दी'), exact:true }).click();
+    const chosen = panel.getByRole('group', { name: 'Chat language / भाषा' }).getByRole('button', { name: l('English','हिन्दी'), exact: true });
+    await chosen.click(); assert.equal(await chosen.getAttribute('aria-pressed'), 'true');
+    assert.doesNotMatch(await panel.innerText(), /microphone|speaker|voice mode|read last reply|माइक|स्पीकर/iu);
     const note = l('Ready for a client interview','साक्षात्कार के लिए तैयार'), final = l('Interview scheduled for Monday','सोमवार को साक्षात्कार');
     const original = stored('detail_comments');
     await turn(l('Update the interview note','इंटरव्यू नोट अपडेट करें'), l(/Which Giga/, /कौन सा गीगा/));
@@ -64,7 +83,8 @@ try {
     const listed = await log.locator('.msg-table').last().locator('tbody tr').evaluateAll(rows => rows.map(r => [...r.cells].map(c => c.textContent)));
     assert.deepEqual(listed, roster.map(r => [r.emp_code, r.name, project]));
     assert.equal(posts.filter(x => x.endsWith('/confirm')).length, 1); assert.deepEqual(errors, []);
-    console.log(`${language}: project → employee → visible note → correction → one confirmed DB write; two-field draft cancelled without a write`);
+    assert.deepEqual(await page.evaluate(() => window.audioCalls), []);
+    console.log(`${language}: Directory table without KPI cards; text only, no audio calls; project → employee → visible note → correction → one confirmed DB write; two-field draft cancelled without a write`);
     await page.close();
   }
 } finally { await browser?.close(); await new Promise(r => server.close(r)); db.close(); await rm(dir, {recursive:true, force:true}); }

@@ -26,17 +26,13 @@ app.use((req, res, next) => {
   // --- security headers ---
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'microphone=()');
   res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
   // Everything this app loads is same-origin; no third-party scripts, no fonts
   // or analytics from anywhere else.
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
-    // Policies on external workers are separate from the page. The pinned Vosk
-    // worker generates Embind JS adapters as well as compiling WASM. It is a
-    // self-contained module: permit that compilation but NO script imports or
-    // child workers. Both speaker engines need WASM only. The page gets neither exception.
-    req.path === '/speech/vosk.worker.js' ? "script-src 'unsafe-eval'; worker-src 'none'"
-      : req.path === '/js/speech/speaker-worker.js' ? "script-src 'self' 'wasm-unsafe-eval'; worker-src 'none'" : "script-src 'self'",
+    "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self'",
@@ -72,8 +68,6 @@ app.use('/api', router);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
-app.use('/speech', require('./speech-assets').speechAssets());
-
 // Static SPA. The app is plain ES modules with no build step, so a browser that
 // caches a module will keep running old code after an update - which looks like
 // "the new feature is missing". Force a revalidation on every asset.
@@ -92,7 +86,8 @@ app.use(express.static(PUBLIC_DIR, {
   },
 }));
 app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api/')) return next();
+  // Never return the SPA document as a missing asset or legacy model response.
+  if (req.path.startsWith('/api/') || /^\/speech(?:\/|$)/.test(req.path) || path.extname(req.path)) return next();
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 

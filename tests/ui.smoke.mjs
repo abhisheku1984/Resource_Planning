@@ -893,10 +893,8 @@ test('Data model renders a populated category, opens the field form and saves th
   assert.equal(JSON.parse(write.arguments[1].body).fields[0].sort_order, 9);
 });
 
-test('Directory cards and row count switch together on filter, clear, failure and retry', async (t) => {
+test('Directory has no KPI strip and keeps the row count correct on filter, clear, failure and retry', async (t) => {
   const { renderDirectory } = await import('../public/js/views/directory.js');
-  const all = { people: 12000, placements: 12000, gigaProjects: 3, hierarchyProjects: 6, pendingReviews: 8 };
-  const giga = { people: 966, placements: 967, gigaProjects: 1, hierarchyProjects: 2, pendingReviews: 1 };
   core.state.user = { id: 1, isAdmin: true };
   core.state.tree = [];
   core.state.totals = { employees: 88888, assignments: 90000 }; // must not be shown or overwritten
@@ -905,73 +903,53 @@ test('Directory cards and row count switch together on filter, clear, failure an
   t.mock.method(globalThis, 'fetch', async (url, opts) => {
     if (!url.startsWith('/api/employees?')) return fallback(url, opts);
     const params = new URL(url, 'http://localhost').searchParams;
-    const summary = params.has('f_giga_project_name[]') ? giga : all;
+    assert.equal(params.has('includeSummary'), false, 'no unused summary request');
+    const total = params.has('f_giga_project_name[]') ? 967 : 12000;
     if (holdNext) { holdNext = false; await new Promise((resolve) => { release = resolve; }); } // ignores abort on purpose
     if (failNext) { failNext = false; return jsonResponse({ error: 'Unavailable' }, 503); }
-    return jsonResponse({ total: summary.placements, summary: params.get('includeSummary') === '1' ? summary : null,
-      page: 1, pageSize: 25, totalPages: Math.ceil(summary.placements / 25), rows: workers.slice(0, 25), columns: [],
+    return jsonResponse({ total,
+      page: 1, pageSize: 25, totalPages: Math.ceil(total / 25), rows: workers.slice(0, 25), columns: [],
       facets: [{ key: 'giga_project_name', label: 'Giga Project Name', allCount: 12000, values: [{ value: 'Giga One', count: 967 }] }],
     });
   });
   const content = new El('div');
   documentShim.body.replaceChildren(content);
-  const counts = () => [...content.querySelectorAll('.kpi-value'), content.querySelector('#row-count')].map((el) => flatten(el).join(''));
+  const rowCount = () => {
+    assert.equal(content.querySelector('.grid-kpi'), null);
+    return flatten(content.querySelector('#row-count')).join('');
+  };
   const selectGiga = () => {
     content.querySelector('.facet-btn').click();
     content.querySelectorAll('.facet-option').find((b) => flatten(b).includes('Giga One')).click();
   };
-  const pending = ['—', '—', '—', '—', '—'];
-  const overall = ['12,000', '12,000', '3', '8', '12,000'];
-  const selected = ['966', '967', '1', '1', '967'];
   renderDirectory(content, { setCrumbs() {} });
-  assert.deepEqual(counts(), pending);
+  assert.equal(rowCount(), '—');
   await settleClicks();
-  assert.deepEqual(counts(), overall);
+  assert.equal(rowCount(), '12,000');
   assert.ok(flatten(content.querySelector('.facet-btn-count')).includes('12,000'), 'All includes blank Giga names too');
   holdNext = true;
   selectGiga();
-  assert.deepEqual(counts(), pending, 'do not show global totals while filtering');
+  assert.equal(rowCount(), '—', 'do not show global totals while filtering');
   button(content, 'Clear 1').click();
   await settleClicks();
   release(); await settleClicks();
-  assert.deepEqual(counts(), overall, 'a late superseded response must not replace rows or cards');
+  assert.equal(rowCount(), '12,000', 'a late superseded response must not replace the current row count');
   selectGiga(); await settleClicks();
-  assert.deepEqual(counts(), selected);
-  assert.ok(flatten(content).includes('2 hierarchy projects in view'));
+  assert.equal(rowCount(), '967');
   failNext = true;
   content.querySelectorAll('button').find((b) => b.attrs['aria-label'] === 'Next page').click();
   await settleClicks();
-  assert.deepEqual(counts(), pending, 'a failed load cannot advertise stale totals');
+  assert.equal(rowCount(), '—', 'a failed load cannot advertise stale totals');
   button(content, 'Try again').click(); await settleClicks();
-  assert.deepEqual(counts(), selected);
+  assert.equal(rowCount(), '967');
   assert.deepEqual(core.state.totals, { employees: 88888, assignments: 90000 });
 });
 
-function replaceForTest(t, object, key, value) {
-  const previous = Object.getOwnPropertyDescriptor(object, key);
-  Object.defineProperty(object, key, { configurable: true, value });
-  t.after(() => previous ? Object.defineProperty(object, key, previous) : delete object[key]);
-}
-
-for (const language of ['en', 'hi']) test(`hands-free Ask (${language}): speech → scoped question → open CRM → dictate → review → confirm, without an automatic write`, async (t) => {
+for (const language of ['en', 'hi']) test(`typed Ask (${language}): clarify project, open CRM, review and explicitly confirm`, async (t) => {
   const { createAssistant } = await import('../public/js/views/assistant.js');
-  let mic, listening = false, packInstalled = false;
   const l = (en, hi) => language === 'hi' ? hi : en;
-  const locale = l('en-IN', 'hi-IN'), heard = [], asks = [], saves = [];
+  const asks = [], saves = [];
   t.after(() => localStorage.removeItem('rp.askLanguage'));
-  const define = (key, value) => replaceForTest(t, window, key, value);
-  class Recognition {
-    processLocally = false;
-    static available = async (o) => { assert.ok(o.processLocally && o.langs.length === 1); assert.equal(o.langs[0].split('-')[0], language); return o.langs[0] !== locale ? 'unavailable' : packInstalled ? 'available' : 'downloadable'; };
-    static install = async (o) => { assert.deepEqual(o, { langs: [locale], processLocally: true }); return (packInstalled = true); };
-    start() { assert.equal(this.lang, locale); assert.equal(this.processLocally, true); assert.equal(listening, false); mic = this; listening = true; }
-    stop() { listening = false; this.onend(); }
-    abort() { listening = false; this.onend?.(); }
-  }
-  define('SpeechRecognition', Recognition); define('isSecureContext', true);
-  define('SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
-  define('speechSynthesis', { getVoices: () => [{ lang: locale, localService: false }, { lang: l('hi-IN', 'en-IN'), localService: true }, { lang: locale, localService: true }],
-    speak(u) { assert.ok(!listening && u.voice.localService); assert.equal(u.lang, locale); heard.push(u.text); u.onend(); }, cancel() {} });
   core.state.user = { id: 7, isAdmin: false };
   const name = 'Summer Project', form = { projectName: name, assignmentId: 73, name: 'Alex Rao', empCode: 'QA-123', rev: 4,
     fields: [{ key: 'detail_comments', label: 'Detail Comments', editable: true, type: 'textarea', value: 'Original' },
@@ -996,218 +974,33 @@ for (const language of ['en', 'hi']) test(`hands-free Ask (${language}): speech 
   });
   const assistant = createAssistant(); documentShim.body.replaceChildren(assistant.el); assistant.open(); await settleClicks();
   button(assistant.el, l('English', 'हिन्दी')).click();
-  button(assistant.el, l('Start voice mode', 'बोलना शुरू करें')).click(); await settleClicks();
-  assert.ok(!packInstalled && !listening, 'install requires a separate explicit gesture');
-  const controls = assistant.el.querySelector('.voice-actions');
-  button(controls, l('Test speaker', 'स्पीकर जाँचें')).click();
-  assert.match(heard.at(-1), l(/project update is ready/, /प्रोजेक्ट की रिपोर्ट/));
-  assert.ok(!packInstalled && !listening && !asks.length, 'testing the speaker does not consume the install action or send a command');
-  button(controls, l('Install English speech pack', 'हिन्दी स्पीच पैक इंस्टॉल करें')).click(); await settleClicks();
-  assert.ok(button(controls, l('Auto read-aloud', 'स्वतः वाचन')).disabled, 'manual playback cannot overlap listening');
-  const say = async (text) => {
-    assert.ok(listening, 'next turn must not require clicking the mic');
-    const result = [{ transcript: text }]; result.isFinal = true;
-    mic.onresult({ results: [result] }); await settleClicks();
+  await settleClicks();
+  const input = assistant.el.querySelector('.assistant-input');
+  const answer = () => flatten(assistant.el.querySelector('.assistant-log').querySelectorAll('.msg-body').at(-1)).join(' ');
+  const type = async (text) => {
+    input.value = text; input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
   };
-  await say(question); await say(name);
-  assert.match(heard.at(-1), l(/3 people on bench/, /बेंच पर 3 कर्मचारी/));
-  assert.deepEqual(asks.at(-1), { message: question, projectName: name, language });
-  await say(openCrm); await say(l('QA 123', 'QA १२३')); assert.match(heard.at(-1), l(/CRM open for Alex/, /Alex Rao का CRM खुला/));
-  await say(l('Set Demand Number to forbidden', 'मांग संख्या में ३ लिखें')); assert.match(heard.at(-1), l(/read-only/, /केवल पढ़ने/));
-  await say(l(`Set Detail Comments to ${note}`, `टिप्पणी में ${note} लिखें।`));
-  assert.equal(assistant.el.querySelector('.assistant-crm').querySelector('textarea').value, note);
-  await say(confirm); assert.equal(saves.length, 0);
-  await say(review); assert.match(heard.at(-1), l(/Alex Rao.*QA-123.*Summer Project.*Detail Comments: Ready for interview/, /Alex Rao.*QA-123.*Summer Project.*टिप्पणी: साक्षात्कार के लिए तैयार/));
-  await say(l('Set Billing Start Date to May 12 2027', 'बिलिंग शुरू होने की तारीख में १२ मई २०२७ लिखें')); await say(confirm); assert.equal(saves.length, 0, 'changing a value invalidates the review');
-  await say(review); await say(confirm);
-  assert.deepEqual(saves, [{ crmProjectName: name, changes: { detail_comments: note, billing_start_date: '2027-05-12' }, rev: 4, reason: 'Confirmed CRM form in assistant' }]);
-  await say(l('Set Detail Comments to Do not keep', 'टिप्पणी में यह नोट हटा दें लिखें')); await say(l('Discard changes', 'बदलाव रद्द करें')); await say(l('Close CRM', 'सीआरएम बंद करें'));
-  assert.ok(!assistant.el.querySelector('.assistant-crm').children.length); assert.equal(saves.length, 1);
-  const late = mic;
-  if (language === 'hi') await say('सुनना बंद करें।'); else assistant.toggle(false); assert.ok(!listening);
-  const result = [{ transcript: confirm }]; result.isFinal = true;
-  late.onresult({ results: [result] }); await settleClicks(); assert.equal(saves.length, 1);
-});
-
-test('voice does not fall back to a cloud-only recognizer or require a mic for text', async () => {
-  const { createLocalVoice } = await import('../public/js/voice.js');
-  let started = false, state;
-  window.isSecureContext = true;
-  window.SpeechRecognition = class { start() { started = true; } };
-  try {
-    const voice = createLocalVoice({ onCommand: () => assert.fail('must not capture audio'), onState: (s) => { state = s; } });
-    await voice.toggle(); assert.equal(started, false); assert.equal(state.active, false); assert.match(state.text, /cannot use the local microphone/);
-  } finally { delete window.SpeechRecognition; delete window.isSecureContext; }
-});
-
-function setupPacks(t, available, install) {
-  const starts = [], states = [];
-  class LocalMic {
-    processLocally = false;
-    start() { assert.equal(this.processLocally, true); starts.push(this.lang); }
-    abort() {}
+  assert.doesNotMatch(flatten(assistant.el).join(' '), /microphone|speaker|voice mode|माइक|स्पीकर/i);
+  input.value = question;
+  for (const flags of [{ isComposing: true }, { keyCode: 229 }, { shiftKey: true }]) {
+    input.dispatchEvent({ type: 'keydown', key: 'Enter', ...flags, preventDefault() { assert.fail('IME or Shift+Enter sent the message'); } });
   }
-  LocalMic.available = ({ langs, processLocally }) => {
-    assert.ok(processLocally && langs.length === 1, 'never query remote speech or require every locale together');
-    return available(langs[0]);
-  };
-  if (install) LocalMic.install = install;
-  replaceForTest(t, window, 'SpeechRecognition', LocalMic);
-  replaceForTest(t, window, 'isSecureContext', true);
-  return { starts, states, options: { onState: (s) => states.push(s), onCommand: () => assert.fail('unexpected speech result') } };
-}
-
-test('voice setup prefers a ready English variant, or rechecks an in-progress download without reinstalling', async (t) => {
-  const { createLocalVoice } = await import('../public/js/voice.js');
-  let ready = false;
-  const { starts, states, options } = setupPacks(t, (lang) => lang === 'en-IN' ? ready ? 'available' : 'downloading' : 'downloadable',
-    () => assert.fail('a pack already downloading or ready must not be installed again'));
-  const voice = createLocalVoice(options);
-  await voice.toggle(); assert.equal(states.at(-1).action, 'retry'); assert.match(states.at(-1).text, /en-IN.*downloading/);
-  assert.deepEqual(starts, []); assert.equal(voice.isActive(), false);
-  ready = true; await voice.toggle(); assert.deepEqual(starts, ['en-IN']); voice.stop();
-});
-
-test('voice setup explains missing installer/policy and ignores an install that finishes after Stop', async (t) => {
-  const { createLocalVoice } = await import('../public/js/voice.js');
-  const { starts, states, options } = setupPacks(t, () => 'downloadable');
-  const voice = createLocalVoice(options);
-  await voice.toggle(); assert.match(states.at(-1).text, /cannot install/); assert.equal(states.at(-1).help, true);
-  let finish;
-  window.SpeechRecognition.install = () => new Promise((r) => { finish = r; });
-  await voice.toggle(); assert.equal(states.at(-1).action, 'install');
-  const pending = voice.toggle(); voice.stop(); finish(true); await pending;
-  assert.equal(states.at(-1).action, 'start'); assert.equal(voice.isActive(), false);
-  replaceForTest(t, document, 'featurePolicy', { features: () => ['on-device-speech-recognition'], allowsFeature: () => false });
-  await voice.toggle(); assert.match(states.at(-1).text, /permissions policy/); assert.deepEqual(starts, []);
-});
-
-test('standalone speaker before a reply: visible with setup closed, stoppable, no mic, pack probes or commands', async (t) => {
-  const { createAssistant } = await import('../public/js/views/assistant.js');
-  let micChecks = 0, cancelled = 0; const spoken = [], requests = [];
-  replaceForTest(t, window, 'SpeechRecognition', class { constructor() { micChecks++; } });
-  replaceForTest(t, window, 'SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
-  replaceForTest(t, window, 'speechSynthesis', { getVoices: () => [{ lang: 'en-US', localService: true }, { lang: 'en-IN', localService: false }, { lang: 'hi-IN', localService: true }, { lang: 'en-IN', localService: true }],
-    speak(u) { spoken.push(u); }, cancel() { cancelled++; } });
-  t.mock.method(globalThis, 'fetch', async (url) => { requests.push(url); return jsonResponse({ projectNames: ['Summer Project'] }); });
-  core.state.user = { isAdmin: false };
-  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
-  const controls = a.el.querySelector('.voice-actions'), mic = button(controls, 'Start voice mode'), speaker = button(controls, 'Test speaker');
-  assert.ok(!a.el.querySelector('.voice-help').open && !speaker.disabled && !mic.disabled);
-  assert.equal(spoken.length, 0, 'no autoplay on open');
-  speaker.click(); assert.equal(spoken.length, 1); assert.match(spoken[0].text, /project update is ready/);
-  assert.equal(spoken[0].lang, 'en-IN'); assert.ok(spoken[0].voice.localService);
-  assert.ok(mic.disabled); assert.equal(button(controls, 'Stop playback'), speaker); assert.equal(speaker.getAttribute('aria-pressed'), 'true');
-  speaker.click(); assert.equal(cancelled, 1); spoken[0].onend();
-  assert.match(a.el.querySelector('#ask-speaker-status').textContent, /Playback stopped/);
-  assert.equal(button(controls, 'Test speaker'), speaker); assert.ok(!mic.disabled && !speaker.disabled);
-  speaker.click(); spoken[1].onerror(); assert.match(a.el.querySelector('#ask-speaker-status').textContent, /Could not play sound/);
-  assert.ok(!mic.disabled && !speaker.disabled); assert.equal(micChecks, 0); assert.deepEqual(requests, ['/api/agent/projects']);
-  a.toggle(false);
-});
-
-test('both browser audio APIs absent: mic and speaker explain the limitation; typed Ask still returns a written reply', async (t) => {
-  const { createAssistant } = await import('../public/js/views/assistant.js');
-  for (const key of ['SpeechRecognition', 'webkitSpeechRecognition', 'speechSynthesis', 'SpeechSynthesisUtterance']) replaceForTest(t, window, key, undefined);
-  replaceForTest(t, window, 'isSecureContext', true); core.state.user = { isAdmin: false };
-  const messages = [];
-  t.mock.method(globalThis, 'fetch', async (url, opts) => {
-    if (url === '/api/agent/projects') return jsonResponse({ projectNames: ['Summer Project'] });
-    assert.equal(url, '/api/agent/ask'); messages.push(JSON.parse(opts.body));
-    return jsonResponse({ projectName: 'Summer Project', reply: '3 people in Summer Project.' });
-  });
-  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
-  button(a.el, 'Start voice mode').click(); await settleClicks(); button(a.el, 'Test speaker').click();
-  assert.match(a.el.querySelector('#ask-mic-status').textContent, /desktop Chrome or Edge/);
-  assert.match(a.el.querySelector('#ask-speaker-status').textContent, /No local English read-aloud voice/); assert.deepEqual(messages, []);
-  const input = a.el.querySelector('.assistant-input'); input.value = 'How many people?'; input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
-  assert.deepEqual(messages, [{ message: 'How many people?', projectName: 'Summer Project', language: 'en' }]);
-  assert.match(flatten(a.el.querySelector('.assistant-log')).join(' '), /3 people in Summer Project/); a.toggle(false);
-});
-
-test('unavailable English pack: keep the reason across reopen without a setup wall, accept typed text and use a local voice', async (t) => {
-  const { createAssistant } = await import('../public/js/views/assistant.js');
-  const { starts } = setupPacks(t, () => 'unavailable', () => assert.fail('no installable pack'));
-  const spoken = [], messages = []; let local = false, cancelled = false;
-  replaceForTest(t, window, 'SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
-  replaceForTest(t, window, 'speechSynthesis', { getVoices: () => [{ lang: 'en-US', localService: false }, ...(local ? [{ lang: 'en-IN', localService: true }] : [])],
-    speak(u) { assert.ok(u.voice.localService); spoken.push(u.text); }, cancel() { cancelled = true; } });
-  core.state.user = { isAdmin: false };
-  t.mock.method(globalThis, 'fetch', async (url, opts) => {
-    if (url === '/api/agent/projects') return jsonResponse({ projectNames: ['Summer Project'] });
-    assert.equal(url, '/api/agent/ask'); messages.push(JSON.parse(opts.body));
-    return jsonResponse({ kind: 'count', projectName: 'Summer Project', reply: '3 people in Summer Project.' });
-  });
-  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
-  button(a.el, 'Start voice mode').click(); await settleClicks();
-  const help = a.el.querySelector('.voice-help');
-  assert.ok(!help.open); assert.doesNotMatch(flatten(help).join(' '), /npm|\.bat|dictation/i);
-  const issue = a.el.querySelector('#ask-mic-status').textContent; assert.match(issue, /No local English speech pack is available/);
-  help.open = true; a.toggle(false); a.open(); await settleClicks();
-  assert.ok(!help.open); assert.equal(a.el.querySelector('#ask-mic-status').textContent, issue);
-  const input = a.el.querySelector('.assistant-input');
-  input.value = 'How many people?'; input.dispatchEvent({ type: 'input' }); assert.equal(messages.length, 0);
-  input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
-  assert.deepEqual(messages, [{ message: 'How many people?', projectName: 'Summer Project', language: 'en' }]);
-  const read = button(a.el.querySelector('.voice-actions'), 'Read last reply'); assert.equal(read.disabled, false);
-  read.click(); assert.deepEqual(spoken, []); assert.match(flatten(a.el).join(' '), /No local English read-aloud/);
-  local = true; read.click(); assert.deepEqual(spoken, ['3 people in Summer Project.']);
-  a.toggle(false); assert.ok(cancelled); assert.deepEqual(starts, []);
-});
-
-test('Hindi without a local pack: typed Ask still works, read-aloud rejects English and remote Hindi voices', async (t) => {
-  const { createAssistant } = await import('../public/js/views/assistant.js');
-  const probes = [], messages = [], spoken = [], voices = [{ lang: 'en-IN', localService: true }, { lang: 'hi-IN', localService: false }];
-  const { starts } = setupPacks(t, (lang) => { probes.push(lang); return lang.startsWith('en') ? 'available' : 'unavailable'; });
-  let cancelled = 0;
-  replaceForTest(t, window, 'SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
-  replaceForTest(t, window, 'speechSynthesis', { getVoices: () => voices, speak: (u) => spoken.push(u), cancel: () => cancelled++ });
-  core.state.user = { isAdmin: false };
-  t.after(() => localStorage.removeItem('rp.askLanguage'));
-  const project = 'Giga One', reply = 'Giga One में बेंच पर 3 कर्मचारी हैं।';
-  t.mock.method(globalThis, 'fetch', async (url, opts) => {
-    if (url === '/api/agent/projects') return jsonResponse({ projectNames: [project] });
-    assert.equal(url, '/api/agent/ask'); messages.push(JSON.parse(opts.body));
-    return jsonResponse({ kind: 'count', projectName: project, reply });
-  });
-  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
-  const question = 'बेंच पर कितने लोग हैं?';
-  a.el.querySelector('.assistant-input').value = question;
-  button(a.el, 'हिन्दी').click(); await settleClicks();
-  assert.equal(button(a.el, 'हिन्दी').getAttribute('aria-pressed'), 'true');
-  assert.equal(localStorage.getItem('rp.askLanguage'), 'hi');
-  assert.deepEqual(probes, [], 'choosing Hindi alone must not start or install speech');
-  button(a.el, 'बोलना शुरू करें').click(); await settleClicks();
-  assert.deepEqual(probes, ['hi-IN', 'hi']); assert.match(flatten(a.el).join(' '), /हिन्दी स्पीच पैक उपलब्ध नहीं/);
-  assert.ok(!a.el.querySelector('.voice-help').open);
-  const input = a.el.querySelector('.assistant-input'); assert.equal(input.value, question, 'do not drop unsent text on switch');
-  input.dispatchEvent({ type: 'keydown', key: 'Enter', isComposing: true }); assert.equal(messages.length, 0);
-  input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
-  assert.deepEqual(messages, [{ message: question, projectName: project, language: 'hi' }]);
-  const read = button(a.el, 'पिछला जवाब सुनें'); read.click(); assert.deepEqual(spoken, []);
-  assert.match(flatten(a.el).join(' '), /हिन्दी की स्थानीय आवाज़ उपलब्ध नहीं/);
-  voices.push({ lang: 'hi-IN', localService: true }); read.click();
-  assert.equal(spoken.length, 1); assert.equal(spoken[0].text, reply); assert.equal(spoken[0].voice, voices.at(-1));
-  button(a.el, 'English').click(); spoken[0].onend();
-  assert.equal(cancelled, 1); assert.deepEqual(starts, []); assert.equal(button(a.el, 'Test speaker').disabled, false, 'only a sample, not the previous-language reply, can now be played');
-  a.toggle(false);
-});
-
-test('switching voice language supersedes a pending pack check/install and never reuses the old install gesture', async (t) => {
-  const { createLocalVoice } = await import('../public/js/voice.js');
-  let release, finishInstall, ready = false;
-  const installed = [];
-  const { starts, states, options } = setupPacks(t, (tag) => tag === 'en-IN' ? new Promise((r) => { release = r; })
-    : tag === 'hi' && ready ? 'available' : 'downloadable', (request) => { installed.push(request); return new Promise((r) => { finishInstall = r; }); });
-  const voice = createLocalVoice(options);
-  const oldCheck = voice.toggle(); voice.setLanguage('hi'); release('available'); await oldCheck;
-  assert.deepEqual(starts, []); assert.match(states.at(-1).text, /हिन्दी/);
-  await voice.toggle(); assert.equal(states.at(-1).action, 'install');
-  voice.setLanguage('en'); voice.setLanguage('hi'); await voice.toggle(); assert.equal(installed.length, 0);
-  const oldInstall = voice.toggle(); voice.setLanguage('en'); finishInstall(true); await oldInstall;
-  assert.deepEqual(installed, [{ langs: ['hi-IN'], processLocally: true }]); assert.deepEqual(starts, []);
-  assert.match(states.at(-1).text, /English selected/);
-  ready = true; voice.setLanguage('hi'); await voice.toggle(); assert.deepEqual(starts, ['hi']); voice.setLanguage('en'); assert.equal(voice.isActive(), false);
+  await settleClicks(); assert.equal(asks.length, 0);
+  await type(question); await type(name);
+  assert.match(answer(), l(/3 people on bench/, /बेंच पर 3 कर्मचारी/));
+  assert.deepEqual(asks.at(-1), { message: question, projectName: name, language });
+  await type(openCrm); await type(l('QA 123', 'QA १२३')); assert.match(answer(), l(/CRM open for Alex/, /Alex Rao का CRM खुला/));
+  await type(l('Set Demand Number to forbidden', 'मांग संख्या में ३ लिखें')); assert.match(answer(), l(/read-only/, /केवल पढ़ने/));
+  await type(l(`Set Detail Comments to ${note}`, `टिप्पणी में ${note} लिखें।`));
+  assert.equal(assistant.el.querySelector('.assistant-crm').querySelector('textarea').value, note);
+  await type(confirm); assert.equal(saves.length, 0);
+  await type(review); assert.match(answer(), l(/Alex Rao.*QA-123.*Summer Project.*Detail Comments: Ready for interview/, /Alex Rao.*QA-123.*Summer Project.*टिप्पणी: साक्षात्कार के लिए तैयार/));
+  await type(l('Set Billing Start Date to May 12 2027', 'बिलिंग शुरू होने की तारीख में १२ मई २०२७ लिखें')); await type(confirm); assert.equal(saves.length, 0, 'changing a value invalidates the review');
+  await type(review); await type(confirm);
+  assert.deepEqual(saves, [{ crmProjectName: name, changes: { detail_comments: note, billing_start_date: '2027-05-12' }, rev: 4, reason: 'Confirmed CRM form in assistant' }]);
+  await type(l('Set Detail Comments to Do not keep', 'टिप्पणी में यह नोट हटा दें लिखें')); await type(l('Discard changes', 'बदलाव रद्द करें')); await type(l('Close CRM', 'सीआरएम बंद करें'));
+  assert.ok(!assistant.el.querySelector('.assistant-crm').children.length); assert.equal(saves.length, 1);
+  assistant.toggle(false);
 });
 
 test('switching Ask language keeps the scoped CRM draft, but neither an old review nor a late reply can authorize a write', async (t) => {
@@ -1236,27 +1029,6 @@ test('switching Ask language keeps the scoped CRM draft, but neither an old revi
   assert.equal(a.el.querySelector('.assistant-crm').querySelector('textarea').value, 'सहेजने की पुष्टि करें');
   await type('Confirm save'); assert.equal(saves.length, 0); await type('Review changes'); await type('Confirm save');
   assert.deepEqual(saves, [{ crmProjectName: project, changes: { detail_comments: 'सहेजने की पुष्टि करें' }, rev: 8, reason: 'Confirmed CRM form in assistant' }]); a.toggle(false);
-});
-
-test('Ask remembers speaker settings for the next playback, including after switching language, without opening a mic', async (t) => {
-  const { createAssistant } = await import('../public/js/views/assistant.js');
-  for (const key of ['rp.speakerMode', 'rp.speakerVolume', 'rp.askLanguage']) {
-    localStorage.removeItem(key); t.after(() => localStorage.removeItem(key));
-  }
-  const spoken = [], voices = ['en-IN', 'hi-IN'].map((lang) => ({ lang, localService: true }));
-  replaceForTest(t, window, 'SpeechSynthesisUtterance', class {});
-  replaceForTest(t, window, 'speechSynthesis', { getVoices: () => voices, speak(u) { spoken.push(u); u.onend(); } });
-  t.mock.method(globalThis, 'fetch', async (url) => { assert.equal(url, '/api/agent/projects'); return jsonResponse({ projectNames: [] }); });
-  core.state.user = { isAdmin: false };
-  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
-  const select = a.el.querySelector('#ask-speaker-mode'), slider = a.el.querySelector('#ask-speaker-volume');
-  assert.equal(select.value, 'auto'); assert.equal(slider.value, '100');
-  select.value = 'device'; select.dispatchEvent({ type: 'change' }); slider.value = '65'; slider.dispatchEvent({ type: 'input' });
-  assert.equal(slider.getAttribute('aria-valuetext'), '65%'); assert.equal(spoken.length, 0);
-  button(a.el, 'Test speaker').click(); assert.equal(spoken[0].volume, 0.65); assert.equal(spoken[0].lang, 'en-IN');
-  button(a.el, 'हिन्दी').click(); await settleClicks(); assert.equal(a.el.querySelector('#ask-speaker-mode').value, 'device');
-  assert.equal(a.el.querySelector('#ask-speaker-volume').value, '65'); button(a.el, 'स्पीकर जाँचें').click();
-  assert.equal(spoken[1].volume, 0.65); assert.equal(spoken[1].lang, 'hi-IN'); a.toggle(false);
 });
 
 test('guided dialogue keeps the requested employee across clarification; only a fresh reviewed yes can save', async (t) => {
@@ -1297,6 +1069,10 @@ test('guided dialogue keeps the requested employee across clarification; only a 
   delay = true; await type('Review changes'); assert.equal(typeof release, 'function');
   a.toggle(false); a.open(); release(); await settleClicks(); await type('yes'); assert.equal(confirms.length,0,'late reviews cannot authorize a reopened form');
   delay=false; await type('Review changes'); button(a.el,'हिन्दी').click(); await type('हाँ'); assert.equal(confirms.length,0,'switching language requires a fresh review');
+  await type('बदलाव की समीक्षा करें');
+  documentShim.hidden = true; documentShim.dispatchEvent({type:'visibilitychange'});
+  documentShim.hidden = false; documentShim.dispatchEvent({type:'visibilitychange'});
+  await type('हाँ'); assert.equal(confirms.length,0,'hiding the tab invalidates the review without losing the draft');
   await type('बदलाव की समीक्षा करें'); await type('हाँ'); assert.equal(confirms.length,1);
   assert.deepEqual(confirms[0],{crmProjectName:project,rev:4,before:{detail_comments:'old'},changes:{detail_comments:'manual correction'},ticket:'receipt-'+reviews.length});
   assert.equal(a.el.querySelector('.assistant-crm').children.length,0); a.toggle(false);

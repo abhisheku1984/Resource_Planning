@@ -1,5 +1,7 @@
 # Resource Planning — parallel build README
 
+> **Historical handoff for `c8a76f3`.** The current app has text-only Ask and no summary cards in Employee Directory. For the current build and Windows startup instructions, use the [project README](../README.md).
+
 **What to build:** a local workforce planning app for the team that receives the daily HR master workbook and the supervisors who update it. HR imports the file once. A supervisor signs in, sees the people they are responsible for, and updates a placement. An administrator downloads a fresh Excel report showing the value, who changed it, and when. Nobody has to pass an edited workbook to the next person.
 
 **Scope:** this describes the working Resource Planning baseline at `c8a76f3`. It is not a specification for an NGO, clinic, generic chatbot, or a public SaaS. The section marked **Future only** is not part of baseline acceptance. All examples here are synthetic. These two Markdown files are enough to start a separate build: give this README to the builder with the prompt in `admin.md`. No access to the original repository, staff records, passwords, or workbooks is required.

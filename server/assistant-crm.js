@@ -1,5 +1,5 @@
 'use strict';
-// The assistant opens a real CRM form. Dictation only drafts values. Its explicit
+// The assistant opens a real CRM form. Typing only drafts values. Its explicit
 // Save uses the normal supervisor submit transaction, revision and audit trail.
 const { q } = require('./db');
 const { assertAssignment, denied, invalid } = require('./access');
