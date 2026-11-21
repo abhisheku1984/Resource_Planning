@@ -1,11 +1,13 @@
 import {
   h, mount, icon, api, state, fmtNum, fmtRelative, spinner, emptyState,
-  statusBadge, fmtDate, toast,
+  statusBadge,
 } from '../core.js';
 
 const PIE_COLORS = ['#1f5fbf', '#0f9d8b', '#a86300', '#7c4dbe', '#b42318', '#4f92ec', '#8494a9'];
 
-export async function renderDashboard(content, ctx) {
+export async function renderDashboard(content) {
+  const host = h('div', { id: 'dash-body' },
+    h('div', { class: 'row muted', role: 'status' }, spinner(), 'Loading dashboard…'));
   mount(content, h('div', { class: 'page' },
     h('div', { class: 'page-head' },
       h('div', null,
@@ -18,40 +20,26 @@ export async function renderDashboard(content, ctx) {
         h('button', { class: 'btn btn-primary', onclick: () => window.__rp.go('workspace') }, icon('layers', 15), 'Open project workspace'),
       ),
     ),
-    h('div', { class: 'grid grid-kpi', style: { marginBottom: '14px' } },
-      skeletonKpi(), skeletonKpi(), skeletonKpi(), skeletonKpi(),
-    ),
-    h('div', { id: 'dash-body' }, h('div', { class: 'card' }, h('div', { class: 'card-body row' }, spinner(), h('span', { class: 'muted' }, 'Loading dashboard…')))),
+    host,
   ));
 
-  let data;
   try {
-    data = await api('/dashboard');
+    const data = await api('/dashboard');
+    if (!host.isConnected) return; // the user navigated away or refreshed
+    state.dashboard = data;
+    paint(host, data);
   } catch (err) {
-    mount(document.getElementById('dash-body'), h('div', { class: 'card' }, emptyState({
+    if (!host.isConnected) return;
+    mount(host, h('div', { class: 'card' }, emptyState({
       title: 'Dashboard unavailable', message: err.message, iconName: 'alert',
     })));
-    return;
   }
-  state.dashboard = data;
-  if (!document.getElementById('dash-body')) return;
-  paint(data);
 }
 
-function paint(data) {
-  const host = document.getElementById('dash-body');
-  if (!host) return;
-
-  const kpis = h('div', { class: 'grid grid-kpi', style: { marginBottom: '14px' } },
-    kpi('employees', 'People in scope', fmtNum(data.totals.employees), `${fmtNum(data.totals.assignments)} placements`, 'users', () => window.__rp.go('directory')),
-    kpi('layers', state.user.gigaAccess ? 'Hierarchy projects in scope' : 'Projects', fmtNum(data.totals.projects), `${state.tree.reduce((a, p) => a + p.subprojects.length, 0)} subprojects`, 'layers', () => window.__rp.go('workspace')),
-    kpi('truck', 'Suppliers', fmtNum(data.totals.suppliers), 'Active partner network', 'truck', () => window.__rp.go('admin')),
-    kpi('alert',
-      'Needs attention',
-      fmtNum((data.attention || []).length + (state.totals?.pendingReviews || 0)),
-      state.totals?.pendingReviews ? `${state.totals.pendingReviews} duplicate review${state.totals.pendingReviews > 1 ? 's' : ''}` : 'Status exceptions & unassigned',
-      'alert',
-      () => window.__rp.go(state.totals?.pendingReviews ? 'datahub' : 'directory')),
+function paint(host, data) {
+  const kpis = h('section', { class: 'grid grid-2', 'aria-label': 'Workforce summary', style: { marginBottom: '14px' } },
+    kpi('People in scope', fmtNum(data.totals.employees), `${fmtNum(data.totals.assignments)} placements`, 'users', () => window.__rp.go('directory')),
+    kpi(state.user.gigaAccess ? 'Hierarchy projects in scope' : 'Projects', fmtNum(data.totals.projects), `${state.tree.reduce((a, p) => a + p.subprojects.length, 0)} subprojects`, 'layers', () => window.__rp.go('workspace')),
   );
 
   const byStatus = data.byStatus || [];
@@ -204,7 +192,7 @@ function cardHead(title, sub, extra) {
   );
 }
 
-function kpi(iconName, label, value, foot, iconKey, onclick) {
+function kpi(label, value, foot, iconKey, onclick) {
   return h('button', {
     class: 'kpi',
     style: { textAlign: 'left', cursor: onclick ? 'pointer' : 'default', font: 'inherit' },
@@ -216,14 +204,6 @@ function kpi(iconName, label, value, foot, iconKey, onclick) {
     ),
     h('div', { class: 'kpi-value' }, value),
     h('div', { class: 'kpi-foot' }, foot),
-  );
-}
-
-function skeletonKpi() {
-  return h('div', { class: 'kpi' },
-    h('div', { class: 'skeleton', style: { width: '40%', height: '12px' } }),
-    h('div', { class: 'skeleton', style: { width: '55%', height: '26px' } }),
-    h('div', { class: 'skeleton', style: { width: '65%', height: '11px' } }),
   );
 }
 

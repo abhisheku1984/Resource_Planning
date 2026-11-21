@@ -44,9 +44,9 @@ data model.
 ┌ page head ─────────────────────────────────────────────────────────────┐
 │ Good afternoon, Priya            [Employee directory] [Open workspace] │
 │ Consolidated view of your authorised workforce                         │
-├ KPI ────────────┬ KPI ────────────┬ KPI ────────────┬ KPI ────────────┤
-│ People in scope │ Projects        │ Suppliers       │ Needs attention │
-│ 66              │ 1               │ 12              │ 8               │
+├───────────────────────────────────┬───────────────────────────────────┤
+│ People in scope                   │ Projects                          │
+│ 66                                │ 1                                 │
 ├ Employees by project (bars) ─────────────┬ Workforce status (donut) ──┤
 │ Nexus ████████████████████████ 81         │ ◕ 81 placements            │
 ├ Needs attention (list) ──────────────────┬ Recent activity (timeline) ┤
@@ -130,8 +130,8 @@ from its own title bar.
 
 ## 3. Dashboard design
 
-* **Four KPI tiles** — one glance summary; each tile is clickable and routes to
-  the relevant surface.
+* **Two summary tiles** — People in scope opens the Employee Directory; Projects
+  opens the Project Workspace. The tiles span the row on desktop and stack on mobile.
 * **Employees by project** — horizontal bars, click-through to that project's
   workspace.
 * **Workforce status** — donut with legend, six largest statuses.

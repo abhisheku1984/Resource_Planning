@@ -385,20 +385,38 @@ function flatten(node, out = []) {
   return out;
 }
 
-test('dashboard renders KPIs, charts and activity', async () => {
+test('dashboard replaces a loading message with just the People and Projects summary cards', async () => {
   const { renderDashboard } = await import('../public/js/views/dashboard.js');
   core.state.user = { name: 'Priya Nair', isAdmin: false };
   core.state.tree = [{ id: 1, name: 'Nexus', subprojects: [{ id: 2 }, { id: 3 }] }];
-  core.state.totals = { employees: 60, assignments: 60, projects: 1, suppliers: 1, pendingReviews: 2 };
   const content = new El('div');
-  content.id = 'content';
   documentShim.body.replaceChildren(content);
-  await renderDashboard(content, { setCrumbs() {} });
-  await new Promise((r) => setTimeout(r, 30));
-  const text = flatten(content).join(' | ');
-  assert.ok(text.includes('People in scope'));
-  assert.ok(text.includes('Needs attention'));
-  assert.ok(content.querySelectorAll('.kpi').length >= 4);
+  const loading = renderDashboard(content);
+  assert.ok(flatten(content).includes('Loading dashboard…'));
+  assert.equal(content.querySelectorAll('.kpi').length, 0, 'no empty tiles during loading');
+  await loading;
+  assert.equal(content.querySelector('.spinner'), null);
+  assert.equal(content.querySelector('.skeleton'), null);
+  assert.deepEqual(content.querySelectorAll('.kpi').map((tile) => flatten(tile)), [
+    ['People in scope', '60', '60 placements'], ['Projects', '1', '2 subprojects'],
+  ]);
+  const panels = content.querySelectorAll('.card-title').flatMap((title) => flatten(title));
+  for (const title of ['Employees by project', 'Workforce status', 'Needs attention', 'Supplier mix', 'Recent activity']) {
+    assert.ok(panels.includes(title), `keep the detail panel: ${title}`);
+  }
+});
+
+test('dashboard load errors replace the loading message without leaving blank tiles', async (t) => {
+  const { renderDashboard } = await import('../public/js/views/dashboard.js');
+  core.state.user = { name: 'Test Admin', isAdmin: true };
+  t.mock.method(globalThis, 'fetch', async () => jsonResponse({ error: 'Cannot load totals' }, 503));
+  const content = new El('div');
+  documentShim.body.replaceChildren(content);
+  await renderDashboard(content);
+  assert.ok(flatten(content).includes('Dashboard unavailable'));
+  assert.ok(flatten(content).includes('Cannot load totals'));
+  assert.equal(content.querySelector('.spinner'), null);
+  assert.equal(content.querySelectorAll('.kpi').length, 0);
 });
 
 test('workspace drills project -> subproject -> category and renders the table', async () => {

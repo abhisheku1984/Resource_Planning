@@ -58,7 +58,7 @@ Windows: double-click **`start-windows.bat`**. It installs missing app dependenc
 
 ### Employee Directory
 
-The Directory opens directly to **Employee records** and the filters. The table's row count is the number of matching placements across all pages. Clearing filters stays within your authorized projects. Dashboard metrics and Data Hub's duplicate review queue are unchanged.
+The Directory opens directly to **Employee records** and the filters. The table's row count is the number of matching placements across all pages. Clearing filters stays within your authorized projects. The Dashboard shows people and project totals. Duplicate reviews are available in Data Hub.
 
 ### Checking the five filter dropdowns
 
