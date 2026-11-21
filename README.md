@@ -125,9 +125,9 @@ unsaved CRM values but requires a fresh review before confirmation.
 Two buttons sit above the Ask message box, even when setup help is closed.
 The **microphone** is **Start voice mode** / **बोलना शुरू करें**. Use it on
 **localhost or HTTPS**.
-The browser must support on-device recognition for **the chosen language**.
-Allow the microphone when prompted. It pauses during spoken replies and listens
-again for the next command. You can also just type the same commands and press
+On Windows, use current desktop Chrome or Edge. If browser speech is unavailable,
+install the optional offline packs below. Allow the microphone when prompted.
+It pauses during spoken replies and listens again for the next command. You can also just type the same commands and press
 Enter, with **no microphone, speech pack or read-aloud voice**.
 
 | Try this | English | हिन्दी |
@@ -149,38 +149,61 @@ can be dictated as **May 12 2027** or **१२ मई २०२७**. CRM grants
 fields, revision checks and the audited confirmation step apply in both
 languages. Closing Ask, hiding the tab or signing out stops app voice mode.
 
-### If a local speech pack or read-aloud voice is unavailable
+### Indian English and Hindi on Windows (no browser speech packs required)
 
-* **Recognition (listening):** open the app in its own tab on localhost or HTTPS
-  in a supported desktop browser. Embedded or managed pages can block speech or
-  the microphone. Ask checks only variants of the chosen language (English:
-  preferred English locales, `en-US`, `en-IN`, `en-GB`, `en`; Hindi: preferred
-  Hindi locales, `hi-IN`, `hi`). **`en-IN` is Indian English, not Hindi.**
-* **Installation:** if the browser offers a pack, the separate **Install English
-  speech pack** / **हिन्दी स्पीच पैक इंस्टॉल करें** button requests it. For a
-  download in progress, wait and select **Check again** / **फिर जाँचें**.
-  Choosing a language never installs anything. If a pack is unavailable to this
-  site, the app cannot supply it; it does not switch to English or cloud speech.
-  A missing pack and denied microphone permission are different problems.
-* **Speaker (read-aloud):** before the first reply, click **Test speaker** /
-  **स्पीकर जाँचें** to hear a short sample. After a typed question, the same
-  button becomes **Read last reply** / **पिछला जवाब सुनें**. Click it again
-  to stop playback. Neither action uses the microphone or its recognition pack.
-  Read-aloud needs a local system voice in the chosen language. If the test
-  finishes silently, check the output device and volume. In hands-free voice
-  mode, replies play automatically when a local voice is available.
-* **No microphone or speakers?** Type your question and press **Enter**; the
-  reply appears in Ask. Typed CRM commands use the same review and confirm steps.
-* **Device dictation:** if your OS supports *offline* dictation in your language,
-  focus the Ask message box, dictate, then submit. For English on supported Windows
-  11 PCs: **Start → Voice access**, finish English setup, focus the box, dictate
-  and say **“Press Enter”**. Hindi availability depends on the OS and its supported
-  languages; choosing हिन्दी in Ask does not add it to Windows. Windows controls
-  its own microphone. **Win+H** is a separate online voice typing feature.
+**“No local English speech pack” refers to the browser recognizer, not your
+microphone hardware.** Hearing an English reply does not mean the browser can
+recognize English, recognize Hindi, or speak Hindi. Rechecking an unavailable
+pack cannot add any of those capabilities.
 
-No database reset, reinstall of the app, or workbook re-import is needed for
-speech setup. If you still need help, note the browser name/version, Windows
-version, whether it is a standalone tab, and the exact status shown in Ask.
+1. In the updated app folder, double-click **`setup-voice-windows.bat`** and
+   choose **Y**. Or, from a terminal in the same folder, run **`npm run voice:setup`**
+   (`npm.cmd run voice:setup` in PowerShell if script execution is restricted).
+   This optional one-time setup downloads about **155 MB** from npm and GitHub.
+   It installs two Vosk recognizers and two CMU Flite voices; model downloads are
+   checked against pinned SHA-256 hashes. It does **not** open the microphone,
+   touch the database, re-import anything, or require administrator access.
+   On a restricted network an administrator can run setup on a connected machine
+   with the same app version and copy its `voice/` folder to the installation.
+2. Start the updated app as usual (`start-windows.bat`). Open **http://localhost:4000**
+   in its own Chrome or Edge tab on the server PC, or use HTTPS. Open **Ask**,
+   choose a workbook project, then **English** or **हिन्दी**. There is no Windows
+   language-pack setting to change. If you installed the packs while the updated
+   app was running, just stop any current voice session and start a new one.
+3. Select **Test speaker** / **स्पीकर जाँचें**. With the packs installed,
+   English uses the **Indian English KSP** voice model; हिन्दी uses a
+   separate **Hindi** voice model, not an English voice tagged `hi-IN`. The
+   speaker never opens the mic. After a reply the same button reads it aloud;
+   pressing it again stops playback.
+4. Select **Start voice mode** / **बोलना शुरू करें**, and allow this site's
+   microphone. First use can take a few seconds to load the model into browser
+   storage. Wait for **Listening (en-IN · offline)** / **सुन रहे हैं (hi-IN · ऑफ़लाइन)**.
+   Try **“How many people?”** or **“कुल कितने कर्मचारी हैं?”**, then pause at
+   the end of the question. Ask shows what it heard, releases the microphone
+   while it answers aloud, then listens again. Use **Stop voice** / **माइक बंद करें**
+   to finish. Check dictated names, IDs and field values before confirming CRM changes.
+
+**Without the optional download:** the existing browser path still works where
+a matching *on-device* recognizer is available. Ask checks variants of the
+selected language separately. Only a separate **Install … speech pack** click
+asks the browser to install its pack; **Check again** is for a download already
+in progress. Native read-aloud prefers an actual local `en-IN` voice in English
+mode (or tells you which other local English voice was used). Hindi never falls
+back to English. Neither path falls back to a cloud speech service.
+
+**If you cannot hear or be heard after setup:**
+
+- A permission denial is separate from a missing recognizer. Allow the mic in
+  the browser's site controls and **Windows Settings → Privacy & security →
+  Microphone**. Test the selected device under **Settings → System → Sound → Input**.
+  For silent playback, check **Output**, the tab's mute setting and volume instead.
+- If local model loading fails, allow site storage, check free disk space and
+  rerun `npm run voice:setup`. If just one language is needed, use
+  `npm run voice:setup -- en` or `npm run voice:setup -- hi`. The app never
+  downloads missing models at runtime. See [voice files and licenses](voice/README.md).
+- You can always type into Ask and press **Enter**. On supported Windows 11 PCs,
+  **Start → Voice access** is an alternative for English OS dictation. Windows,
+  not Ask, controls that microphone; **Win+H** is a separate online feature.
 
 ### The approval step
 

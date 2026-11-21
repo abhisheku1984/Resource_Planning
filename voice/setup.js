@@ -1,0 +1,50 @@
+'use strict';
+// Run only from the explicit, optional setup command, never from the server.
+const fs = require('node:fs');
+const { mkdir, rename, rm } = require('node:fs/promises');
+const path = require('node:path');
+const { createHash, randomUUID } = require('node:crypto');
+const { pipeline } = require('node:stream/promises');
+const assets = require('./assets');
+
+async function verified(file, asset) {
+  if (fs.statSync(file, { throwIfNoEntry: false })?.size !== asset.bytes) return false;
+  const hash = createHash('sha256');
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+  return hash.digest('hex') === asset.sha256;
+}
+async function install(asset, dir, download = fetch) {
+  const file = path.join(dir, asset.file);
+  if (await verified(file, asset)) return 'already verified';
+  const temp = file + '.' + randomUUID() + '.part';
+  try {
+    const res = await download(asset.url, { headers: { Accept: 'application/vnd.github.raw+json', 'Accept-Encoding': 'identity', 'User-Agent': 'ResourcePlanning-Voice-Setup' }, signal: AbortSignal.timeout(300_000) });
+    if (!res.ok) throw new Error(`Download returned HTTP ${res.status}`);
+    let bytes = 0;
+    await pipeline(res.body, async function* (chunks) {
+      for await (const chunk of chunks) {
+        if ((bytes += chunk.length) > asset.bytes) throw new Error('Download larger than expected');
+        yield chunk;
+      }
+    }, fs.createWriteStream(temp, { flags: 'wx' }));
+    if (!await verified(temp, asset)) throw new Error('Size or SHA-256 mismatch; file was not installed');
+    await rename(temp, file);
+    return 'installed';
+  } finally { await rm(temp, { force: true }); }
+}
+async function main() {
+  const lang = process.argv[2];
+  if (lang && !['en', 'hi'].includes(lang)) throw new Error('Use npm run voice:setup, optionally followed by -- en or -- hi');
+  const dir = path.join(__dirname, '.cache', 'models');
+  await mkdir(dir, { recursive: true });
+  for (const asset of assets.filter((a) => !lang || a.lang === lang)) {
+    console.log(`Checking ${asset.file} (${Math.ceil(asset.bytes / 1e6)} MB)…`);
+    console.log('  ' + await install(asset, dir));
+  }
+  console.log('Ready. Open Ask on localhost, choose English or हिन्दी, and select Start voice mode or Test speaker.');
+}
+if (require.main === module) main().catch((err) => {
+  console.error(`Voice setup failed: ${err.cause?.message || err.message}. Check your connection and disk space, then rerun the command. No workbook data was changed.`);
+  process.exitCode = 1;
+});
+module.exports = { install };

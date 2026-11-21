@@ -31,7 +31,12 @@ app.use((req, res, next) => {
   // or analytics from anywhere else.
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
-    "script-src 'self'",
+    // Policies on external workers are separate from the page. The pinned Vosk
+    // worker generates Embind JS adapters as well as compiling WASM. It is a
+    // self-contained module: permit that compilation but NO script imports or
+    // child workers. Flite needs WASM only. The page never gets either exception.
+    req.path === '/speech/vosk.worker.js' ? "script-src 'unsafe-eval'; worker-src 'none'"
+      : req.path === '/js/speech/speaker-worker.js' ? "script-src 'self' 'wasm-unsafe-eval'; worker-src 'none'" : "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self'",
@@ -66,6 +71,8 @@ app.use('/api', (req, res, next) => {
 app.use('/api', router);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+
+app.use('/speech', require('./speech-assets').speechAssets());
 
 // Static SPA. The app is plain ES modules with no build step, so a browser that
 // caches a module will keep running old code after an update - which looks like

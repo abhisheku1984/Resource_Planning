@@ -1,0 +1,14 @@
+{
+  "name": "resource-planning-offline-voice",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional, same-origin browser speech runtimes. Install only with npm run voice:setup.",
+  "dependencies": {
+    "@bjorn3/browser_wasi_shim": "0.4.2",
+    "@echogarden/flite-wasi": "0.1.1",
+    "@lichess-org/vosk-browser": "0.0.3"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.1"
+  }
+}
