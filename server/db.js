@@ -306,8 +306,8 @@ function migrate() {
   add('fields', 'group_name', 'group_name TEXT');
   add('fields', 'imported', 'imported INTEGER NOT NULL DEFAULT 0');
   // New filterable/submit fields must reach categories that already exist, not
-  // just the ones seeded after this release.
-  add('category_fields', 'filterable', 'filterable INTEGER NOT NULL DEFAULT 0');
+  // just the ones seeded after this release, so the column is added before any
+  // category layout is read.
   add('employees', 'name_source', "name_source TEXT DEFAULT 'manual'");
   add('employees', 'first_name', 'first_name TEXT');
   add('employees', 'last_name', 'last_name TEXT');
