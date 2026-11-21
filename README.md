@@ -212,10 +212,10 @@ accepts hierarchy writes; only the screens were removed.)
 
 As an administrator, open **Administration → Data model** and choose a
 **Category**. **New field** adds a definition to the shared catalogue. To use a
-new field in this category, check **Visible**, choose its **Editable** / **Required**
-settings and **Order**, then click **Save layout**. Open the same category in
-Project Workspace to see the result. A layout change does not remove its filter
-or supervisor-update settings.
+new field in this category, check **Visible**, choose its **Editable** and
+**Required** settings, then click **Save layout**. Open the same category in
+Project Workspace to see the result. Saving these settings keeps the existing
+column sequence, filters and supervisor-update settings.
 
 `GET /api/employees?categoryId=…` returns both `rows` and the `columns` that
 apply to that category. The client renders whatever it is given, so a category

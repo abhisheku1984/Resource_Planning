@@ -176,7 +176,7 @@ function columnsForCategory(categoryId, user) {
 
 function setCategoryFields(categoryId, rows, actor) {
   return tx(() => {
-    // The layout form edits only visibility, editability, required and order.
+    // The layout form changes checkbox settings and keeps the existing order.
     // Replacing its rows must not clear facet/submit flags or section metadata.
     const previous = new Map(q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId).map((r) => [r.field_id, r]));
     q.run('DELETE FROM category_fields WHERE category_id = ?', categoryId);

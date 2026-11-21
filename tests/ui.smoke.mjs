@@ -1016,17 +1016,24 @@ test('Data model renders a populated category, opens the field form and saves th
   documentShim.body.replaceChildren(content);
   const fetch = t.mock.method(globalThis, 'fetch');
   await renderAdmin(content, {});
-  const order = content.querySelectorAll('input').find((i) => i.attrs.type === 'number');
-  assert.equal(Number(order.value), 27, 'display the persisted order, not the catalogue index');
+  const matrix = content.querySelector('.matrix-table');
+  assert.deepEqual(matrix.querySelectorAll('th').flatMap(th => flatten(th)), ['Field', 'Type', 'Visible', 'Editable', 'Required']);
+  const row = matrix.querySelector('tbody').querySelector('tr');
+  assert.equal(row.querySelectorAll('td').length, 5);
+  const inputs = row.querySelectorAll('input');
+  assert.ok(inputs.every(i => i.getAttribute('type') === 'checkbox'), 'no numeric order editor');
   button(content, 'New field').click();
   assert.ok(flatten(body.querySelector('.overlay')).includes('Field key'));
   button(body.querySelector('.overlay'), 'Cancel').click();
-  order.value = 9;
-  order.dispatchEvent({ type: 'change' });
+  const required = inputs.find(i => i.getAttribute('aria-label') === 'Required: Notes');
+  required.checked = true;
+  required.dispatchEvent({ type: 'change' });
   button(content, 'Save layout').click();
   await settleClicks();
   const write = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/categories/4/columns' && opts.method === 'PUT');
-  assert.equal(JSON.parse(write.arguments[1].body).fields[0].sort_order, 9);
+  assert.deepEqual(JSON.parse(write.arguments[1].body).fields, [
+    { field_id: 3, visible: true, editable: true, required: true, sort_order: 27 },
+  ], 'saving a checkbox preserves the field’s existing position');
 });
 
 test('Directory has no KPI strip and keeps the row count correct on filter, clear, failure and retry', async (t) => {

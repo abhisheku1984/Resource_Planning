@@ -266,13 +266,11 @@ async function renderDataModel(host, initialCategory = null) {
         h('th', { class: 'center' }, 'Visible'),
         h('th', { class: 'center' }, 'Editable'),
         h('th', { class: 'center' }, 'Required'),
-        h('th', { class: 'center' }, 'Order'),
       )),
       h('tbody', null, ...rows.map((r) => {
         const cbVisible = h('input', { type: 'checkbox', 'aria-label': `Visible: ${r.label}`, checked: r.visible, disabled: r.system, onchange: () => { r.visible = cbVisible.checked; rowSync(); } });
         const cbEditable = h('input', { type: 'checkbox', 'aria-label': `Editable: ${r.label}`, checked: r.editable, onchange: () => { r.editable = cbEditable.checked; } });
         const cbRequired = h('input', { type: 'checkbox', 'aria-label': `Required: ${r.label}`, checked: r.required, onchange: () => { r.required = cbRequired.checked; } });
-        const order = h('input', { class: 'input', type: 'number', 'aria-label': `Order: ${r.label}`, value: r.sort_order, style: { width: '70px', height: '26px', fontSize: '12px' }, onchange: () => { r.sort_order = Number(order.value); } });
         const tr = h('tr', { class: r.visible ? '' : 'is-hidden-row' },
           h('td', null, h('div', { class: 'row', style: { gap: '6px' } },
             h('span', { style: { fontWeight: '600' } }, r.label),
@@ -282,7 +280,6 @@ async function renderDataModel(host, initialCategory = null) {
           h('td', { class: 'center' }, cbVisible),
           h('td', { class: 'center' }, cbEditable),
           h('td', { class: 'center' }, cbRequired),
-          h('td', { class: 'center' }, order),
         );
         function rowSync() {
           tr.classList.toggle('is-hidden-row', !r.visible);

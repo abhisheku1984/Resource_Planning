@@ -490,7 +490,7 @@ test('per-category column configuration round-trips and validates required field
     visible,
     editable: f.editable,
     required: f.required,
-    // The form only sends the settings it edits.
+    // The layout form carries the display order through unchanged.
     sort_order: f.sort_order,
   });
   const payload = original.map((f) => toPayload(f, f.key === 'remarks' ? false : f.visible));
@@ -505,7 +505,8 @@ test('per-category column configuration round-trips and validates required field
     // the hidden column disappears from the table for supervisors
     const sup = client(await login('priya.nair@resourceplanning.io'));
     const cols = (await sup('GET', `/employees?categoryId=${cat.id}`)).data.columns.map((c) => c.key);
-    assert.ok(!cols.includes('remarks'), 'hidden columns must not be returned at all');
+    assert.deepEqual(cols, original.filter(f => f.visible && f.key !== 'remarks').map(f => f.key),
+      'hiding a field keeps the remaining supervisor columns in their original sequence');
   } finally {
     // PUT replaces the whole layout, so restore it. Later tests read this
     // category and must not inherit a half-configured column set.
