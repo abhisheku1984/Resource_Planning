@@ -10,7 +10,9 @@ const schema = require('./schema');
 function crmForm(user, id, projectName) {
   if (!can(user, 'crm.use')) throw denied('You do not have CRM permission.');
   assertAssignment(user, id, 'can_crm');
-  if (typeof projectName !== 'string' || !q.get(`SELECT 1 FROM giga_assignments WHERE assignment_id = ? AND project_name = ?`, id, projectName)) {
+  const placement = typeof projectName === 'string' && q.get(`SELECT e.name, e.emp_code FROM giga_assignments g
+    JOIN employees e ON e.id = g.employee_id WHERE g.assignment_id = ? AND g.project_name = ?`, id, projectName);
+  if (!placement) {
     throw denied('This placement is not in the selected Giga project. Reopen the CRM record.');
   }
   const row = getAssignment(user, id);
@@ -20,7 +22,7 @@ function crmForm(user, id, projectName) {
     const { label, type, options, editable, required } = layout.get(key);
     return { key, label, type, options, required, editable: !!(canEdit && (user.isAdmin || editable)), value: row.values[key] ?? '' };
   });
-  return { assignmentId: id, projectName, name: row.values.name, empCode: row.values.emp_code, rev: row.rev, fields };
+  return { assignmentId: id, projectName, name: placement.name, empCode: placement.emp_code, rev: row.rev, fields };
 }
 
 function checkCrmSubmit(user, id, body) {

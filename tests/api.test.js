@@ -643,6 +643,34 @@ test('assistant answers for a workbook name across placements, intersected with 
   assert.ok((await api('GET', '/agent/projects')).data.projectNames.includes(name));
 });
 
+test('Hindi Ask resolves full workbook names, scopes metrics like English, and declines unknown names and filters', async () => {
+  const api = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const ask = async (message, projectName) => (await api('POST', '/agent/ask', { message, projectName, language: 'hi' })).data;
+  const name = 'Giga One';
+  assert.equal((await ask('बेंच पर कितने लोग हैं?')).kind, 'choose_project');
+  assert.equal((await ask('प्रोजेक्ट गीगा वन चुनें।')).projectName, name);
+  for (const [message, en, kind] of [
+    ['गीगा एक में बेंच पर कितने कर्मचारी हैं?', 'How many are on bench?', 'count'],
+    ['बेंच पर कौन-कौन है?', 'Who is on bench?', 'list'],
+    ['बेंच श्रेणी शैडो पर कितने लोग हैं?', 'How many bench category shadow?', 'count'],
+    ['बी एल २ पर कितने कर्मचारी हैं?', 'How many on BL-2?', 'count'],
+    ['बिलिंग स्थिति का विवरण दिखाएँ।', 'Break down billing status', 'breakdown'],
+    ['इस प्रोजेक्ट में हार्ड ब्लॉक पर कितने लोग हैं?', 'How many on hard block?', 'count'],
+  ]) {
+    const result = await ask(message, name), english = (await api('POST', '/agent/ask', { message: en, projectName: name })).data;
+    assert.equal(result.kind, kind); assert.equal(result.projectName, name); assert.match(result.reply, /कर्मचारी/u);
+    assert.deepEqual(result.data, english.data); assert.deepEqual(result.table.rows, english.table.rows);
+    assert.ok(result.suggestions.every((s) => s.includes(name) && s.includes('में')));
+  }
+  for (const unknown of ['NEXUS', 'Giga One East', 'गीगा एक ईस्ट']) {
+    const result = await ask(`${unknown} में बेंच पर कितने लोग हैं?`, name);
+    assert.equal(result.kind, 'denied'); assert.ok(!result.data && !result.table && !result.crm);
+  }
+  for (const question of ['बेंच पर नहीं हैं कितने लोग?', 'अज्ञात फ़िल्टर पर कितने हैं?']) assert.equal((await ask(question, name)).kind, 'help');
+  assert.equal((await ask('कितने कर्मचारी हैं?', 'Old selection')).kind, 'denied');
+  assert.equal((await api('POST', '/agent/ask', { message: 'How many?', language: 'xx' })).status, 422);
+});
+
 test('assistant does not substitute a hierarchy, unknown name, or stale selection', () => {
   const user = { isAdmin: true };
   for (const q of ['How many are on bench in NEXUS?', 'Who is on bench in Giga One East?', 'Open CRM for EMP-12345 in Not A Project']) {
@@ -1263,6 +1291,25 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     await foreignFilter.arrayBuffer();
   });
 
+  await t.test('Hindi CRM, placements and change proposals cannot use a hidden sibling as the target', async () => {
+    const ask = async (message) => (await xyz('POST', '/agent/ask', { message, projectName: A, language: 'hi' })).data;
+    for (const command of ['कितने कर्मचारी हैं?', 'बेंच पर कौन है?', 'GIG-88001 का सीआरएम खोलें', 'GIG-88003 को हार्ड ब्लॉक करें']) {
+      const denied = await ask(`${B} में ${command}`);
+      assert.equal(denied.kind, 'denied'); assert.ok(!denied.crm && !denied.table && !denied.proposal && !denied.data);
+    }
+    assert.equal((await ask(`${A} में सी आर एम खोलें।`)).kind, 'crm_lookup');
+    const found = await ask(`${A} में GIG डैश आठ आठ शून्य शून्य एक का सीआरएम खोलें`);
+    assert.equal(found.kind, 'crm'); assert.equal(found.crm.assignmentId, one.assignmentId); assert.equal(found.crm.projectName, A);
+    assert.equal(found.crm.name, q.get('SELECT name FROM employees WHERE id=?', one.employeeId).name, 'review speaks the real employee name, not a missing workbook column');
+    assert.match(found.reply, /बदलाव की समीक्षा/); assert.ok(found.crm.fields.some((f) => f.key === 'detail_comments' && f.editable));
+    assert.equal((await ask(`प्लेसमेंट ${sharedOther.assignmentId} का CRM खोलें`)).kind, 'crm_lookup');
+    assert.equal((await ask(`प्लेसमेंट ${one.assignmentId} का CRM खोलें`)).crm.assignmentId, one.assignmentId);
+    assert.equal((await ask('GIG-88003 को हार्ड ब्लॉक करें')).proposal, null);
+    const proposed = await ask('GIG-88001 को हार्ड ब्लॉक करें');
+    assert.equal(proposed.proposal.assignmentId, one.assignmentId); assert.equal(proposed.proposal.status, 'pending');
+    assert.notEqual((await xyz('GET', `/employees/${one.assignmentId}`)).data.record.values.block_status, 'Hard Block');
+  });
+
   await t.test('voice CRM resolves an exact placement and confirmed submit rechecks scope, fields, revision and permissions', async () => {
     const opened = await xyz('POST', '/agent/ask', { message: `Open C R M for G I G dash 88001 in ${A}` });
     assert.equal(opened.status, 200); assert.equal(opened.data.kind, 'crm');
@@ -1281,6 +1328,7 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     assert.equal((await xyz('POST', url, body)).status, 409);
     assert.equal((await admin('PUT', accessPath, { gigaProjectName: A, capabilities: { ...caps, 'crm.use': false } })).status, 200);
     assert.equal((await xyz('POST', '/agent/ask', { message: 'Open CRM for GIG-88001' })).data.kind, 'denied');
+    assert.equal((await xyz('POST', '/agent/ask', { language: 'hi', message: 'GIG-88001 का सीआरएम खोलें' })).data.kind, 'denied');
     assert.equal((await xyz('POST', url, { ...body, rev: ok.data.record.rev })).status, 403);
     assert.equal((await admin('PUT', accessPath, { gigaProjectName: A, capabilities: caps })).status, 200);
   });
