@@ -93,35 +93,53 @@ Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere.
 npm test          # integration + UI smoke tests
 ```
 
-## The assistant (in-app, offline, propose-only)
+## Ask: answers by workbook project name
 
-Press **Ctrl+K** or the **Ask** button in the top bar. It is not a chatbot
-connected to a language model — it is a rules-based parser inside this app.
+Open **Ask** (or **Ctrl+K**). Say or select a **Giga Project Name** from your
+workbook. This is not the hierarchy project or its code. If several names are
+available and you don't give one, Ask requests a name instead of returning a
+database-wide total. Follow-ups keep the selected name until you change it;
+permissions and live workbook membership are checked on every request.
 
-- **It never touches the internet.** No API key, no outbound call. That keeps the
-  "zero network traffic" promise in `SECURITY.md` true.
-- **It never invents numbers.** Every count is a real SQL query, scoped to the
-  projects the asking user may see. Ask about another project and it says it has
-  no access instead of quietly answering for a different one.
-- **It never writes.** A change request becomes a *proposal* holding the exact
-  before/after values. Nothing reaches the master data until an administrator
-  clicks **Approve & save**.
-
-| You type | What happens |
+| Example (use your actual workbook name and employee ID) | Result |
 |---|---|
-| `how many people are on bench in NEXUS?` | Count, plus a breakdown table |
-| `how many are hard block in nexus` | Count by block status |
-| `who is on bench in NEXUS?` | First 25 matching people |
-| `set EMP-10001 to hard block` | A proposal awaiting approval |
-| `mark EMP-10001 as bench` | A proposal awaiting approval |
+| `How many are on bench in Giga One?` | Distinct people, plus the bench breakdown for **Giga One only** |
+| `How many are hard block?` | Count in the selected Giga project |
+| `Who is on bench?` | Up to 25 matching people in that project |
+| `Break down billing status` | People by billing status in that project |
+| `Set EMP-10001 to hard block` | If the placement matches, a proposal for administrator approval |
+| `Open CRM for EMP-10001` | The employee’s scoped CRM form inside Ask |
 
-Anything outside those patterns gets "I did not understand that" plus examples —
-never a guess.
+Counts, lists and breakdowns use live SQLite data, not an AI provider. Unknown
+names or unsupported filters do not produce estimates. A person with multiple
+matching placements counts once per bucket; distinct buckets can overlap.
+
+### Voice mode and CRM entry
+
+1. Open the app directly on **localhost or HTTPS** in a desktop browser that
+   supports **on-device** English (US) speech recognition. Click **Start voice
+   mode** and allow the microphone. If offered, **Install English speech pack**
+   is a separate, optional browser download. No audio is uploaded. For spoken
+   replies, install a local English system voice as well. If the app is embedded
+   and permission is blocked, open it in a standalone tab. Typed commands always work.
+2. Ask **“How many are on bench in Giga One?”**. The mic pauses during replies
+   and listens for the next turn automatically. Say **“Open CRM”**, then an
+   employee ID or exact full name. For multiple matches, say **“placement”** and
+   the offered number. No CRM access means no form; read-only users cannot edit.
+3. Say **“List fields”**, **“Read Detail Comments”**, or **“Set Detail Comments
+   to ready for interview”**. Use any editable field on that CRM form, including
+   the BC–BS supervisor fields. For dates, say e.g. **“May 12 2027”**.
+4. Say **“Review changes”** to hear the employee, project and values. Then say
+   **“Confirm save”** or **“Discard changes”**. Only confirmation writes the
+   form, through the existing audited supervisor-save path. A changed record
+   must be reopened; there is no automatic overwrite or voice autosave.
+5. Say **“Close CRM”** to return to questions, or **“Stop listening”** to turn
+   off the microphone. Closing Ask, hiding the tab or signing out also stops it.
 
 ### The approval step
 
 1. A supervisor asks for a change; it is stored in `agent_actions` as pending.
-2. An administrator sees it pinned at the top of the assistant panel, old value
+2. An administrator selects the Giga project and sees its proposals at the top of Ask, old value
    struck through, new value beside it.
 3. If the record still holds the old value, **Approve** writes it and records
    both the approver and the requester in the audit trail.

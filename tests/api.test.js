@@ -621,29 +621,36 @@ test('access control on submit: read-only grants and other projects are refused'
 /* ------------------------------------------------- assistant (§25) */
 const agent = require('../server/agent');
 
-test('assistant answers counts from the database and scopes them to the user', async () => {
-  const priya = { id: 1, name: 'Priya', isAdmin: false, projects: [{ id: q.get("SELECT id FROM projects WHERE code='NEXUS'").id }] };
-  const nexus = q.get("SELECT id FROM projects WHERE code='NEXUS'");
-  const bench = q.get("SELECT id FROM fields WHERE key='bench_category'");
-
-  const expected = q.get(
-    `SELECT COUNT(*) c FROM assignment_values v JOIN assignments a ON a.id = v.assignment_id
-      WHERE a.active = 1 AND a.project_id = ? AND v.field_id = ? AND v.value = 'Bench'`,
-    nexus.id, bench.id
-  ).c;
-
-  const plan = agent.understand(priya, 'how many people are on bench in nexus?');
-  assert.equal(plan.kind, 'count');
-  assert.equal(plan.data.count, expected, 'the assistant must report the real count, not a guess');
-  assert.match(plan.reply, new RegExp(String(expected)));
+test('assistant answers for a workbook name across placements, intersected with the caller’s grants', async () => {
+  const hierarchy = q.get("SELECT id FROM projects WHERE code='NEXUS'").id;
+  const user = { isAdmin: false, projects: [{ id: hierarchy }] };
+  const name = 'Giga One';
+  for (const actor of [user, { isAdmin: true }]) {
+    const expected = q.get(`SELECT COUNT(DISTINCT g.employee_id) c FROM giga_assignments g
+      JOIN assignment_values v ON g.assignment_id=v.assignment_id JOIN fields f ON f.id=v.field_id
+      WHERE g.project_name=? AND f.key='bench_category' AND v.value='Bench' AND (? OR g.project_id=?)`, name, +!!actor.isAdmin, hierarchy).c;
+    const result = agent.understand(actor, 'how many people are on bench in Giga 1?');
+    assert.equal(result.kind, 'count'); assert.equal(result.data.project, name);
+    assert.equal(result.data.count, expected); assert.match(result.reply, /Giga One/);
+    assert.equal(Number(result.table.rows.find(([v]) => v === 'Bench')?.[1] || 0), expected);
+    assert.ok(result.suggestions.every((s) => s.includes(name)));
+    assert.equal(agent.understand(actor, 'How many employees in Giga One are on bench?').data.count, expected);
+    const who = agent.understand(actor, 'Who is on bench?', name);
+    assert.equal(who.data.count, expected); assert.ok(who.table.rows.every((row) => row[2] === name));
+  }
+  const api = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  assert.equal((await api('POST', '/agent/ask', { message: 'How many are on bench?' })).data.kind, 'choose_project');
+  assert.ok((await api('GET', '/agent/projects')).data.projectNames.includes(name));
 });
 
-test('assistant refuses to report on a project the user cannot see', () => {
-  const priya = { id: 1, name: 'Priya', isAdmin: false, projects: [{ id: q.get("SELECT id FROM projects WHERE code='NEXUS'").id }] };
-  const plan = agent.understand(priya, 'how many are on bench in ATLAS');
-  assert.equal(plan.kind, 'denied');
-  assert.match(plan.reply, /do not have access/i);
-  assert.ok(!plan.data, 'no numbers are returned for an unauthorized project');
+test('assistant does not substitute a hierarchy, unknown name, or stale selection', () => {
+  const user = { isAdmin: true };
+  for (const q of ['How many are on bench in NEXUS?', 'Who is on bench in Giga One East?', 'Open CRM for EMP-12345 in Not A Project']) {
+    const plan = agent.understand(user, q, 'Giga One');
+    assert.equal(plan.kind, 'denied'); assert.ok(!plan.data && !plan.table && !plan.crm);
+  }
+  assert.equal(agent.understand(user, 'How many are hard block?', 'Former Giga Name').kind, 'denied');
+  assert.equal(agent.understand(user, 'How many unknown things in Giga One?').data, undefined);
 });
 
 test('assistant never writes: it only raises a proposal an admin must approve', async () => {
@@ -651,11 +658,13 @@ test('assistant never writes: it only raises a proposal an admin must approve', 
   const sup = client(await login('priya.nair@resourceplanning.io'));
   const field = q.get("SELECT id FROM fields WHERE key='block_status'");
   // pick someone who is not already hard blocked, so the request is a real change
-  const row = (await sup('GET', '/employees?pageSize=200')).data.rows.find((r) => r.values.block_status !== 'Hard Block');
+  const target = q.get(`SELECT g.assignment_id, g.project_name FROM giga_assignments g JOIN projects p ON p.id=g.project_id
+    JOIN assignment_values v ON v.assignment_id=g.assignment_id WHERE p.code='NEXUS' AND v.field_id=? AND v.value <> 'Hard Block' LIMIT 1`, field.id);
+  const row = (await sup('GET', `/employees/${target.assignment_id}`)).data.record;
   assert.ok(row, 'the test seed must contain a person who is not hard blocked');
   const before = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', row.assignmentId, field.id);
 
-  const res = await sup('POST', '/agent/ask', { message: `set ${row.values.emp_code} to hard block` });
+  const res = await sup('POST', '/agent/ask', { message: `set ${row.values.emp_code} to hard block in ${target.project_name}` });
   assert.equal(res.status, 200);
   assert.ok(res.data.proposal, 'a change request becomes a proposal');
   assert.equal(res.data.proposal.status, 'pending');
@@ -1217,11 +1226,20 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     const ask = async (message) => (await xyz('POST','/agent/ask',{ message })).data;
     assert.equal((await ask('How many people in my projects?')).data.count, expected.length);
     assert.ok(!(await ask('Set GIG-88003 to hard block')).proposal);
-    const hiddenProposal = await admin('POST','/agent/ask',{ message: 'Set GIG-88003 to hard block' });
+    assert.deepEqual((await xyz('GET', '/agent/projects')).data.projectNames, [A]);
+    for (const question of ['List people', 'How many', 'Open CRM for GIG-88001', 'Set GIG-88001 to hard block']) {
+      const denied = await ask(`${question} in ${B}`);
+      assert.equal(denied.kind, 'denied'); assert.ok(!denied.data && !denied.table && !denied.proposal && !denied.crm);
+    }
+    const hiddenProposal = await admin('POST','/agent/ask',{ message: `Set GIG-88003 to hard block in ${B}` });
     assert.ok(hiddenProposal.data.proposal);
     const proposals = (await xyz('GET','/agent/proposals')).data;
     assert.ok(proposals.proposals.every((r) => expected.includes(r.assignmentId)));
     assert.equal(proposals.pending, 0);
+    tag(other.assignmentId, A); // no account should inherit the previous Giga's proposal
+    assert.equal((await xyz('GET','/agent/proposals')).data.pending, 0);
+    assert.equal((await admin('POST',`/agent/proposals/${hiddenProposal.data.proposal.id}/approve`,{})).status, 409);
+    tag(other.assignmentId, B);
     for (const entity of ['assignment','employee','user']) {
       const rows = (await xyz('GET','/audit?entity=' + entity)).data.activity;
       assert.ok(rows.every((r) => r.entity === 'assignment' ? expected.includes(r.entity_id) : r.entity === 'employee' && r.entity_id !== other.employeeId));
@@ -1245,6 +1263,28 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     await foreignFilter.arrayBuffer();
   });
 
+  await t.test('voice CRM resolves an exact placement and confirmed submit rechecks scope, fields, revision and permissions', async () => {
+    const opened = await xyz('POST', '/agent/ask', { message: `Open C R M for G I G dash 88001 in ${A}` });
+    assert.equal(opened.status, 200); assert.equal(opened.data.kind, 'crm');
+    const form = opened.data.crm;
+    assert.equal(form.assignmentId, one.assignmentId, 'not the second placement in the hidden sibling project');
+    assert.equal(form.projectName, A); assert.ok(form.fields.some((f) => f.key === 'detail_comments' && f.editable));
+    assert.ok(!form.fields.some((f) => ['giga_project_name','emp_code'].includes(f.key)));
+    const url = `/employees/${form.assignmentId}/submit`;
+    const body = { crmProjectName: A, changes: { detail_comments: 'Dictated confirmed note' }, rev: form.rev };
+    assert.equal((await xyz('POST', url, { ...body, rev: null })).status, 422);
+    assert.equal((await xyz('POST', url, { ...body, changes: { giga_project_name: B } })).status, 403);
+    assert.equal((await xyz('POST', url, { ...body, crmProjectName: B })).status, 403);
+    assert.equal((await xyz('POST', `/employees/${sharedOther.assignmentId}/submit`, body)).status, 403);
+    const ok = await xyz('POST', url, body);
+    assert.equal(ok.status, 200); assert.equal(ok.data.record.values.detail_comments, body.changes.detail_comments);
+    assert.equal((await xyz('POST', url, body)).status, 409);
+    assert.equal((await admin('PUT', accessPath, { gigaProjectName: A, capabilities: { ...caps, 'crm.use': false } })).status, 200);
+    assert.equal((await xyz('POST', '/agent/ask', { message: 'Open CRM for GIG-88001' })).data.kind, 'denied');
+    assert.equal((await xyz('POST', url, { ...body, rev: ok.data.record.rev })).status, 403);
+    assert.equal((await admin('PUT', accessPath, { gigaProjectName: A, capabilities: caps })).status, 200);
+  });
+
   await t.test('Edit access replaces the grant immediately; disappearing names and revocation fail closed', async () => {
     for (const invalid of [{ gigaProjectName: 'invented' }, { gigaProjectName: [A,B] }, { projects: [{ project_id: p.project_id }] },
       { gigaProjectName: B, capabilities: { 'import.data': true } }]) {
@@ -1264,6 +1304,8 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     assert.equal((await admin('PUT',accessPath,{ gigaProjectName: null })).status, 200);
     assert.deepEqual(await ids(), []);
     assert.equal((await xyz('GET','/bootstrap')).data.totals.assignments, 0);
+    assert.deepEqual((await xyz('GET','/agent/projects')).data.projectNames, []);
+    assert.equal((await xyz('POST','/agent/ask',{ message: 'How many on bench?', projectName: A })).data.kind, 'denied');
     assert.equal((await xyz('GET', `/employees/${blank.assignmentId}`)).status, 403);
     assert.equal((await xyz('GET','/export')).status, 403);
     assert.deepEqual((await admin('GET','/users')).data.users.find((u)=>u.email===email).gigaAccess, { name: null });
@@ -1330,6 +1372,9 @@ test('Directory totals follow the full filtered result, not bootstrap or the cur
   };
   const all = await query();
   assert.deepEqual(all.summary, { people: 7, placements: 8, hierarchyProjects: 2, gigaProjects: 2, pendingReviews: 3 });
+  const headcount = await admin('POST', '/agent/ask', { message: `How many people in ${north}?` });
+  assert.equal(headcount.data.data.count, 5, 'a person with two matching placements is counted once');
+  assert.equal((await admin('POST', '/agent/ask', { message: `Open CRM for DSYNC-1 in ${north}` })).data.kind, 'crm_lookup');
   const filtered = await query({ f_giga_project_name: north });
   assert.equal(filtered.rows.length, 5);
   assert.deepEqual(filtered.summary, { people: 5, placements: 6, hierarchyProjects: 2, gigaProjects: 1, pendingReviews: 2 });

@@ -326,6 +326,8 @@ globalThis.fetch = async (url, opts = {}) => {
   }
   if (path.startsWith('/imports')) return jsonResponse({ imports: [] });
   if (path.startsWith('/audit')) return jsonResponse({ activity: [{ id: 1, entity: 'assignment', entity_id: 1, action: 'update', field_key: 'status', old_value: 'A', new_value: 'B', actor_name: 'P', at: '2026-11-19 10:00:00', ref: 'EMP-1' }] });
+  if (path.startsWith('/agent/projects')) return jsonResponse({ projectNames: ['Giga One', 'Giga Two'] });
+  if (path.startsWith('/agent/proposals')) return jsonResponse({ proposals: [] });
   if (path.startsWith('/projects')) return jsonResponse({ projects: [] });
   if (path.startsWith('/suppliers')) return jsonResponse({ suppliers: [] });
   if (path.startsWith('/groups')) return jsonResponse({ groups: [] });
@@ -602,7 +604,7 @@ test('the assistant opens from the Ask event and answers a question', async () =
   // and a question round-trips through the API layer
   document.dispatchEvent({ type: 'rp:assistant' });
   const payload = JSON.stringify({
-    reply: '446 people in bench category "Bench" in Nexus Digital Transformation.',
+    reply: '125 people (Bench Category: Bench) in Giga One.',
     understood: true, kind: 'count', table: null, suggestions: [],
   });
   const assistantFetch = globalThis.fetch;
@@ -622,13 +624,13 @@ test('the assistant opens from the Ask event and answers a question', async () =
   const sendBtn = foot.children.find((c) => c.classList && c.classList.contains('btn-primary'));
   assert.ok(input, 'the composer is rendered');
   assert.ok(sendBtn, 'the send button is rendered');
-  input.value = 'how many on bench in nexus?';
+  input.value = 'how many on bench in Giga One?';
   sendBtn.click();
   await new Promise((r) => setTimeout(r, 60));
 
   const walk = (n) => (n.children || []).map((c) => (c.textContent || '') + walk(c)).join(' ');
   const text = walk(assistant.el);
-  assert.match(text, /446 people/, 'the answer is rendered in the panel');
+  assert.match(text, /125 people/, 'the answer is rendered in the panel');
   globalThis.fetch = assistantFetch;
 });
 
@@ -943,4 +945,79 @@ test('Directory cards and row count switch together on filter, clear, failure an
   button(content, 'Try again').click(); await settleClicks();
   assert.deepEqual(counts(), selected);
   assert.deepEqual(core.state.totals, { employees: 88888, assignments: 90000 });
+});
+
+test('hands-free Ask: speech → scoped question → open CRM → dictate → review → confirm, without an automatic write', async (t) => {
+  const { createAssistant } = await import('../public/js/views/assistant.js');
+  let mic, listening = false, packInstalled = false;
+  const heard = [], asks = [], saves = [];
+  const define = (key, value) => { const old = Object.getOwnPropertyDescriptor(window, key); Object.defineProperty(window, key, { configurable: true, value }); t.after(() => old ? Object.defineProperty(window, key, old) : delete window[key]); };
+  class Recognition {
+    processLocally = false;
+    static available = async (o) => { assert.equal(o.processLocally, true); return packInstalled ? 'available' : 'downloadable'; };
+    static install = async () => (packInstalled = true);
+    start() { assert.equal(this.processLocally, true); assert.equal(listening, false); mic = this; listening = true; }
+    stop() { listening = false; this.onend(); }
+    abort() { listening = false; this.onend?.(); }
+  }
+  define('SpeechRecognition', Recognition); define('isSecureContext', true);
+  define('SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
+  define('speechSynthesis', { getVoices: () => [{ lang: 'en-US', localService: false }, { lang: 'en-US', localService: true }],
+    speak(u) { assert.ok(!listening && u.voice.localService); heard.push(u.text); u.onend(); }, cancel() {} });
+  core.state.user = { id: 7, isAdmin: false };
+  const name = 'Summer Project', form = { projectName: name, assignmentId: 73, name: 'Alex Rao', empCode: 'QA-123', rev: 4,
+    fields: [{ key: 'detail_comments', label: 'Detail Comments', editable: true, type: 'textarea', value: 'Original' },
+      { key: 'billing_start_date', label: 'Billing Start Date', editable: true, type: 'date', value: '' },
+      { key: 'demand_number', label: 'Demand Number', editable: false, type: 'text', value: '' }] };
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url === '/api/agent/projects') return jsonResponse({ projectNames: [name, 'Autumn Project'] });
+    const body = JSON.parse(opts.body);
+    if (url === '/api/agent/ask') {
+      asks.push(body);
+      if (!body.projectName && !body.message.includes(name)) return jsonResponse({ kind: 'choose_project', reply: 'Which project?' });
+      if (body.message === name) return jsonResponse({ kind: 'project', projectName: name, reply: 'Selected' });
+      if (body.message === 'Open CRM') return jsonResponse({ kind: 'crm_lookup', projectName: name, reply: 'Whose CRM record?' });
+      if (body.message === 'Open CRM for QA 123') return jsonResponse({ kind: 'crm', projectName: name, reply: 'CRM open for Alex', crm: form });
+      return jsonResponse({ kind: 'count', reply: '3 people on bench in Summer Project.', projectName: name });
+    }
+    assert.equal(url, '/api/employees/73/submit'); saves.push(body);
+    return jsonResponse({ record: { rev: 5, values: body.changes } });
+  });
+  const assistant = createAssistant(); documentShim.body.replaceChildren(assistant.el); assistant.open(); await settleClicks();
+  button(assistant.el, 'Start voice mode').click(); await settleClicks();
+  assert.ok(!packInstalled && !listening, 'install requires a separate explicit gesture');
+  button(assistant.el, 'Install English speech pack').click(); await settleClicks();
+  const say = async (text) => {
+    assert.ok(listening, 'next turn must not require clicking the mic');
+    const result = [{ transcript: text }]; result.isFinal = true;
+    mic.onresult({ results: [result] }); await settleClicks();
+  };
+  await say('How many on bench?'); await say(name);
+  assert.match(heard.at(-1), /3 people on bench/);
+  assert.deepEqual(asks.at(-1), { message: 'How many on bench?', projectName: name });
+  await say('Open CRM'); await say('QA 123'); assert.match(heard.at(-1), /CRM open for Alex/);
+  await say('Set Demand Number to forbidden'); assert.match(heard.at(-1), /read-only/);
+  await say('Set Detail Comments to Ready for interview');
+  assert.equal(assistant.el.querySelector('.assistant-crm').querySelector('textarea').value, 'Ready for interview');
+  await say('Confirm save'); assert.equal(saves.length, 0);
+  await say('Review changes'); assert.match(heard.at(-1), /Alex Rao.*QA-123.*Summer Project.*Detail Comments: Ready for interview/);
+  await say('Set Billing Start Date to May 12 2027'); await say('Confirm save'); assert.equal(saves.length, 0, 'changing a value invalidates the review');
+  await say('Review changes'); await say('Confirm save');
+  assert.deepEqual(saves, [{ crmProjectName: name, changes: { detail_comments: 'Ready for interview', billing_start_date: '2027-05-12' }, rev: 4, reason: 'Confirmed CRM form in assistant' }]);
+  await say('Set Detail Comments to Do not keep'); await say('Discard changes'); await say('Close CRM');
+  assert.ok(!assistant.el.querySelector('.assistant-crm').children.length); assert.equal(saves.length, 1);
+  const late = mic; assistant.toggle(false); assert.ok(!listening);
+  const result = [{ transcript: 'Confirm save' }]; result.isFinal = true;
+  late.onresult({ results: [result] }); await settleClicks(); assert.equal(saves.length, 1);
+});
+
+test('voice does not fall back to a cloud-only recognizer or require a mic for text', async () => {
+  const { createLocalVoice } = await import('../public/js/voice.js');
+  let started = false, state;
+  window.isSecureContext = true;
+  window.SpeechRecognition = class { start() { started = true; } };
+  try {
+    const voice = createLocalVoice({ onCommand: () => assert.fail('must not capture audio'), onState: (s) => { state = s; } });
+    await voice.toggle(); assert.equal(started, false); assert.equal(state.active, false); assert.match(state.text, /type instead/);
+  } finally { delete window.SpeechRecognition; delete window.isSecureContext; }
 });

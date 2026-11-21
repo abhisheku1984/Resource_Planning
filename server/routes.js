@@ -7,6 +7,7 @@ const schema = require('./schema');
 const emp = require('./employees');
 const query = require('./query');
 const agent = require('./agent');
+const { checkCrmSubmit } = require('./assistant-crm');
 const agentstore = require('./agentstore');
 const excel = require('./excel');
 const { record, auditScope, recentActivity } = require('./audit');
@@ -411,6 +412,7 @@ router.post('/employees/:id/submit', requireAuth, wrap((req, res) => {
     return res.status(403).json({ error: 'You do not have permission to update employee records.' });
   }
   const id = Number(req.params.id);
+  if (Object.hasOwn(req.body, 'crmProjectName')) checkCrmSubmit(req.user, id, req.body);
   const before = query.getAssignment(req.user, id, 'can_edit');
   if (!before) return res.status(404).json({ error: 'Employee record not found.' });
 
@@ -560,9 +562,14 @@ router.post('/duplicates/:id/resolve', requireAuth, requireAdmin, wrap((req, res
  * within the caller's project scope; change requests become proposals that an
  * administrator must approve. This endpoint never writes master data.
  */
+router.get('/agent/projects', requireAuth, wrap((req, res) => {
+  res.json({ projectNames: agent.visibleProjectNames(req.user) });
+}));
+
 router.post('/agent/ask', requireAuth, wrap((req, res) => {
-  const message = String(req.body?.message || '').slice(0, 500);
-  const plan = agent.understand(req.user, message);
+  const message = String(req.body?.message || '').trim();
+  if (message.length > 1000) return res.status(422).json({ error: 'Keep your question under 1,000 characters.' });
+  const plan = agent.understand(req.user, message, req.body?.projectName);
   let proposal = null;
   if (plan.proposal) {
     // raising a proposal needs the ability to edit at all; approving it is admin-only
@@ -575,6 +582,8 @@ router.post('/agent/ask', requireAuth, wrap((req, res) => {
   res.json({
     reply: plan.reply,
     understood: !!plan.understood,
+    projectName: plan.projectName || null,
+    crm: plan.crm || null,
     kind: plan.kind || 'answer',
     table: plan.table || null,
     data: plan.data || null,
@@ -585,7 +594,8 @@ router.post('/agent/ask', requireAuth, wrap((req, res) => {
 
 router.get('/agent/proposals', requireAuth, wrap((req, res) => {
   const status = req.query.status ? String(req.query.status) : null;
-  res.json({ proposals: agentstore.listProposals(req.user, status), pending: agentstore.pendingCount(req.user) });
+  const name = req.query.projectName ? String(req.query.projectName) : null;
+  res.json({ proposals: agentstore.listProposals(req.user, status, name), pending: agentstore.pendingCount(req.user, name) });
 }));
 
 router.post('/agent/proposals/:id/approve', requireAuth, requireAdmin, wrap((req, res) => {

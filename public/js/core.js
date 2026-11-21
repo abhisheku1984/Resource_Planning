@@ -198,6 +198,7 @@ export async function api(path, { method = 'GET', body, signal } = {}) {
 }
 
 export function setToken(token) {
+  if (!token && state.token) document.dispatchEvent(new CustomEvent('rp:logout'));
   state.token = token;
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
