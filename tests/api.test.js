@@ -17,7 +17,7 @@ process.env.DB_FILE = path.join(TMP, 'test.db');
 process.env.NODE_ENV = 'test';
 
 const { app } = require('../server/index');
-const { q } = require('../server/db');
+const { db, q } = require('../server/db');
 const seed = require('../server/seed');
 const fielddefs = require('../server/fielddefs');
 
@@ -35,8 +35,9 @@ test.before(async () => {
   });
 });
 
-test.after(() => {
-  if (server) server.close();
+test.after(async () => {
+  if (server) await new Promise((resolve) => server.close(resolve));
+  db.close(); // release the SQLite files before removing them on Windows
   fs.rmSync(TMP, { recursive: true, force: true });
 });
 
@@ -456,6 +457,8 @@ test('admin-only configuration endpoints are protected', async () => {
   assert.equal((await sup('POST', '/projects', { code: 'X', name: 'X' })).status, 403);
   assert.equal((await sup('POST', '/fields', { key: 'x', label: 'X' })).status, 403);
   assert.equal((await sup('GET', '/users')).status, 403);
+  assert.equal((await sup('POST', '/users', {})).status, 403);
+  assert.equal((await sup('DELETE', '/users/1')).status, 403);
   const cat = q.get('SELECT * FROM categories LIMIT 1');
   assert.equal((await sup('PUT', `/categories/${cat.id}/columns`, { fields: [] })).status, 403);
 });
@@ -473,8 +476,7 @@ test('per-category column configuration round-trips and validates required field
     visible,
     editable: f.editable,
     required: f.required,
-    filterable: !!f.filterable,
-    submit_field: !!f.submit_field,
+    // The form only sends the settings it edits.
     sort_order: f.sort_order,
   });
   const payload = original.map((f) => toPayload(f, f.key === 'remarks' ? false : f.visible));
@@ -482,6 +484,10 @@ test('per-category column configuration round-trips and validates required field
   assert.equal(put.status, 200);
 
   try {
+    const savedLayout = (await admin('GET', `/categories/${cat.id}/columns`)).data.fields;
+    const flags = (fields) => fields.map((f) => [f.id, f.filterable, f.submit_field, f.section, f.sort_order]);
+    assert.ok(original.some((f) => f.filterable) && original.some((f) => f.submit_field));
+    assert.deepEqual(flags(savedLayout), flags(original), 'a layout save preserves the filter and supervisor field metadata');
     // the hidden column disappears from the table for supervisors
     const sup = client(await login('priya.nair@resourceplanning.io'));
     const cols = (await sup('GET', `/employees?categoryId=${cat.id}`)).data.columns.map((c) => c.key);
@@ -1042,17 +1048,57 @@ test('an administrator cannot delete their own account, but can delete another a
   assert.equal(after.data.users.filter((u) => u.role === 'admin').length, 1);
 });
 
-test('deleting a user keeps their import history but clears the uploader link', async () => {
+test('deleting a user with work history revokes their session, not their records or export attribution', async () => {
   const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const place = q.get('SELECT project_id, subproject_id, category_id FROM assignments LIMIT 1');
+  const email = 'importer@resourceplanning.io';
   const created = await admin('POST', '/users', {
-    name: 'Importer', email: 'importer@resourceplanning.io', role: 'supervisor', password: 'Import@12345',
+    name: 'Importer', email, role: 'supervisor', password: 'Import@12345',
+    projects: [{ project_id: place.project_id }], capabilities: { 'employee.create': true, 'employee.edit': true },
   });
   assert.equal(created.status, 200);
   const id = created.data.user.id;
-  q.run('INSERT INTO imports (filename, uploaded_by, created, updated) VALUES (?, ?, ?, ?)', 'importer-daily.xlsx', id, 3, 1);
+  const sup = client(await login(email, 'Import@12345'));
+  const person = await sup('POST', '/employees', { ...place, emp_code: 'TEST-HISTORY', name: 'Retained Employee' });
+  assert.equal(person.status, 200);
+  const aid = person.data.assignmentId;
+  const edit = await sup('POST', `/employees/${aid}/submit`, { changes: { leader_input_this_week: 'Approved for next week' } });
+  assert.equal(edit.status, 200);
+  const entry = (await admin('GET', `/employees/${aid}/history`)).data.history.find((row) => row.field_key === 'leader_input_this_week');
+  assert.equal(entry.actor_name, 'Importer');
+  const upload = q.run('INSERT INTO imports (filename, uploaded_by) VALUES (?, ?)', 'daily.xlsx', id).lastInsertRowid;
+  const job = q.run('INSERT INTO import_jobs (filename, user_id) VALUES (?, ?)', 'daily.xlsx', id).lastInsertRowid;
+  const proposal = q.run(`INSERT INTO agent_actions (kind, summary, before_json, after_json, requested_by, requested_by_name, decided_by, decided_by_name)
+    VALUES ('update_assignment', 'Example', '{}', '{}', ?, 'Importer', ?, 'Importer')`, id, id).lastInsertRowid;
 
-  assert.equal((await admin('DELETE', `/users/${id}`)).status, 200);
-  const row = q.get('SELECT * FROM imports WHERE filename = ?', 'importer-daily.xlsx');
-  assert.ok(row, 'the import record survives');
-  assert.equal(row.uploaded_by, null, 'the uploader link is cleared');
+  const removed = await admin('DELETE', `/users/${id}`);
+  assert.equal(removed.status, 200, JSON.stringify(removed.data));
+  assert.equal((await sup('GET', '/auth/me')).status, 401, 'even an already signed-in session is revoked');
+  assert.equal((await admin('DELETE', `/users/${id}`)).status, 404);
+  assert.equal(q.get('SELECT uploaded_by FROM imports WHERE id = ?', upload).uploaded_by, null);
+  assert.equal(q.get('SELECT user_id FROM import_jobs WHERE id = ?', job).user_id, null);
+  const action = q.get('SELECT * FROM agent_actions WHERE id = ?', proposal);
+  assert.deepEqual([action.requested_by, action.decided_by, action.requested_by_name, action.decided_by_name], [null, null, 'Importer', 'Importer']);
+  assert.deepEqual(q.all('PRAGMA foreign_key_check'), []);
+  assert.equal((await admin('GET', `/employees/${aid}`)).data.record.values.leader_input_this_week, 'Approved for next week');
+  const report = require('../server/excel').collectRows({ isAdmin: true }, { categoryId: place.category_id });
+  const exported = report.rows.find((r) => r.emp_code === 'TEST-HISTORY');
+  assert.equal(exported.updated_by, 'Importer');
+  assert.equal(exported.leader_input_this_week__updated_by, 'Importer');
+  assert.equal(exported.leader_input_this_week__updated_at, entry.at);
+});
+
+test('a failed project grant leaves no partial account; creation can be retried with the same email', async () => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const account = { name: ' New leader ', email: ' retry@example.test ', password: 'Example123', role: 'supervisor' };
+  const grant = { project_id: q.get('SELECT id FROM projects LIMIT 1').id, can_export: 0 };
+  const failed = await admin('POST', '/users', { ...account, projects: [grant, { project_id: -1 }] });
+  assert.equal(failed.status, 422);
+  assert.ok(!q.get('SELECT id FROM users WHERE trim(email) = ?', account.email.trim()));
+  const retry = await admin('POST', '/users', { ...account, projects: [grant] });
+  assert.equal(retry.status, 200);
+  const reader = client(await login('retry@example.test', 'Example123'));
+  const me = (await reader('GET', '/auth/me')).data.user;
+  assert.equal(me.name, 'New leader');
+  assert.equal(me.projects[0].can_export, 0);
 });

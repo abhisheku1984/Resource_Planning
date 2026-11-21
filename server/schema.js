@@ -145,52 +145,41 @@ function groupedFields() {
   return [...groups.entries()].map(([name, fields]) => ({ name, fields }));
 }
 
-/**
- * Effective column configuration for a category.
- * Falls back to a sensible default set when a category has never been configured,
- * so new categories are instantly usable.
- */
-function columnsForCategory(categoryId) {
-  const key = `cols:${categoryId}`;
-  const cached = remember(key, () => null);
-  if (cached) return cached;
-  const fields = q.all('SELECT * FROM fields ORDER BY id').map(fieldDef);
-  const config = new Map(
-    q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId).map((r) => [r.field_id, r])
-  );
-  // (kept for readability of the fallback above)
-  const configured = config.size > 0;
-  void configured;
-  const out = [];
-  for (const f of fields) {
+/** The editor and employee table must agree on visibility and order, including
+ *  catalogue fields that do not have a category_fields row yet. */
+function categoryLayout(categoryId) {
+  const config = new Map(q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId).map((r) => [r.field_id, r]));
+  return listFields().map((f) => {
     const c = config.get(f.id);
-    // A category with no stored layout (e.g. auto-created by an import) falls
-    // back to the catalogue defaults, so its supervisor fields and facets still
-    // work instead of the record opening with an empty form.
-    const visible = c ? !!c.visible : (f.core || f.filterable || f.submit || f.key === 'remarks');
-    if (!visible) continue;
-    out.push({
+    return {
       ...f,
-      visible: true,
+      visible: c ? !!c.visible : !!(f.core || f.filterable || f.submit || f.key === 'remarks'),
       editable: c ? !!c.editable : true,
-      required: c ? !!c.required : false,
+      required: !!c?.required,
       filterable: c ? !!c.filterable : !!f.filterable,
-      submitField: c ? !!c.submit_field : !!f.submit,
-      sort: c ? c.sort_order : f.id,
-      section: c ? c.section : null,
-    });
-  }
-  const sorted = out.sort((a, b) => a.sort - b.sort || a.id - b.id);
-  // cache inside the current request only
-  remember(key, () => sorted);
-  return sorted;
+      submit_field: c ? !!c.submit_field : !!f.submit,
+      sort_order: c?.sort_order ?? f.id,
+      section: c?.section ?? null,
+      configured: !!c,
+      canHide: !f.system,
+    };
+  }).sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+}
+
+function columnsForCategory(categoryId) {
+  return remember(`cols:${categoryId}`, () => categoryLayout(categoryId).filter((f) => f.visible)
+    .map(({ sort_order, submit_field, configured, canHide, ...f }) => ({ ...f, sort: sort_order, submitField: submit_field })));
 }
 
 function setCategoryFields(categoryId, rows, actor) {
   return tx(() => {
+    // The layout form edits only visibility, editability, required and order.
+    // Replacing its rows must not clear facet/submit flags or section metadata.
+    const previous = new Map(q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId).map((r) => [r.field_id, r]));
     q.run('DELETE FROM category_fields WHERE category_id = ?', categoryId);
     let order = 10;
     for (const r of rows) {
+      const prev = previous.get(r.field_id);
       q.run(
         `INSERT INTO category_fields
            (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order, section)
@@ -200,10 +189,10 @@ function setCategoryFields(categoryId, rows, actor) {
         r.visible === false ? 0 : 1,
         r.editable === false ? 0 : 1,
         r.required ? 1 : 0,
-        r.filterable ? 1 : 0,
-        r.submit_field ? 1 : 0,
-        r.sort_order ?? order,
-        r.section || null
+        (r.filterable ?? prev?.filterable) ? 1 : 0,
+        (r.submit_field ?? prev?.submit_field) ? 1 : 0,
+        r.sort_order ?? prev?.sort_order ?? order,
+        r.section === undefined ? prev?.section ?? null : r.section
       );
       order += 10;
     }
@@ -281,6 +270,7 @@ module.exports = {
   fieldDef,
   parseOptions,
   supplierOptions,
+  categoryLayout,
   columnsForCategory,
   setCategoryFields,
   crmKeys,

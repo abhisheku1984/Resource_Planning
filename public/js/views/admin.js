@@ -9,8 +9,8 @@
    in the same step.
    ========================================================================= */
 import {
-  h, mount, icon, api, state, toast, modal, spinner, emptyState, fmtNum,
-  confirmDialog, initials, fmtRelative,
+  h, mount, icon, api, state, toast, modal, spinner, emptyState,
+  closeModal, confirmDialog, initials, setRouteFromHash,
 } from '../core.js';
 
 const TABS = [
@@ -18,6 +18,17 @@ const TABS = [
   { key: 'crm', label: 'CRM panel', icon: 'contact' },
   { key: 'access', label: 'Users & access', icon: 'shield' },
 ];
+
+// Shared by Data model and New user, independently of which tab is open.
+let fieldId = 0;
+function field(label, control, hint) {
+  control.id = `admin-field-${++fieldId}`;
+  if (hint) control.setAttribute('aria-describedby', `${control.id}-hint`);
+  return h('div', { class: 'field' },
+    h('label', { class: 'field-label', for: control.id }, label), control,
+    hint ? h('div', { class: 'field-help', id: `${control.id}-hint` }, hint) : null,
+  );
+}
 
 export async function renderAdmin(content, ctx) {
   if (!state.user?.isAdmin) {
@@ -28,7 +39,7 @@ export async function renderAdmin(content, ctx) {
     })));
     return;
   }
-  let tab = ctx.tab || 'columns';
+  let tab = TABS.some((t) => t.key === ctx.tab) ? ctx.tab : 'columns';
   const bodyHost = h('div', { id: 'admin-body' });
   const tabHost = h('div', { class: 'tabs', style: { borderRadius: '10px 10px 0 0', border: '1px solid var(--line)', background: 'var(--surface)' } });
 
@@ -38,6 +49,7 @@ export async function renderAdmin(content, ctx) {
       onclick: () => {
         tab = t.key;
         history.replaceState(null, '', `#/${t.key === 'access' ? 'access' : 'admin'}${t.key === 'access' ? '' : `?tab=${t.key}`}`);
+        setRouteFromHash();
         paintTabs();
         paint();
       },
@@ -56,13 +68,16 @@ export async function renderAdmin(content, ctx) {
   ));
 
   function paint() {
-    if (tab === 'columns') renderDataModel(bodyHost);
-    else if (tab === 'crm') renderCrmColumns(bodyHost);
-    else renderAccess(bodyHost);
+    // An older tab's response must never overwrite the tab just selected.
+    const panel = h('div');
+    mount(bodyHost, panel);
+    if (tab === 'columns') return renderDataModel(panel);
+    if (tab === 'crm') return renderCrmColumns(panel);
+    return renderAccess(panel);
   }
 
   paintTabs();
-  paint();
+  return paint();
 }
 
 /* ============================================================ CRM panel */
@@ -164,8 +179,13 @@ async function renderDataModel(host, initialCategory = null) {
 
   mount(host, h('div', { class: 'card' }, h('div', { class: 'card-body row' }, spinner(), h('span', { class: 'muted' }, 'Loading data model…'))));
 
-  const [fieldsRes] = await Promise.all([api('/fields')]);
-  state.fields = fieldsRes.fields;
+  try {
+    state.fields = (await api('/fields')).fields;
+  } catch (err) {
+    mount(host, emptyState({ title: 'Could not load the data model', message: err.message, iconName: 'alert',
+      action: h('button', { class: 'btn', onclick: () => renderDataModel(host, startCat) }, 'Retry') }));
+    return;
+  }
   const tree = state.tree;
 
   // flatten categories for the picker
@@ -177,7 +197,12 @@ async function renderDataModel(host, initialCategory = null) {
 
   const picker = h('select', {
     class: 'select', style: { maxWidth: '420px' },
-    onchange: (e) => { selected = Number(e.target.value); paintMatrix(); },
+    onchange: (e) => {
+      selected = Number(e.target.value);
+      history.replaceState(null, '', `#/admin?tab=columns&category=${selected}`);
+      setRouteFromHash();
+      paintMatrix();
+    },
   }, ...cats.map((c) => h('option', { value: c.id, selected: c.id === selected }, `${c.projectName} › ${c.subprojectName} › ${c.name}`)));
 
   const matrixHost = h('div');
@@ -195,7 +220,7 @@ async function renderDataModel(host, initialCategory = null) {
         h('div', { class: 'card-body' }, cats.length
           ? h('div', { class: 'col', style: { gap: '12px' } },
             field('Category', picker),
-            h('div', { id: 'matrix-slot', class: 'col', style: { gap: '10px' } }, matrixHost),
+            matrixHost,
           )
           : emptyState({ title: 'No categories yet', message: 'Create projects, subprojects and categories first.', iconName: 'layers' })),
       ),
@@ -223,20 +248,16 @@ async function renderDataModel(host, initialCategory = null) {
   );
 
   async function paintMatrix() {
-    const slot = document.getElementById('matrix-slot');
-    if (!slot) return;
-    mount(matrixHost, h('div', { class: 'row' }, spinner(), h('span', { class: 'muted' }, 'Loading layout…')));
+    const categoryId = selected;
+    const slot = h('div', { class: 'col', style: { gap: '10px' } });
+    mount(matrixHost, slot);
+    mount(slot, h('div', { class: 'row' }, spinner(), h('span', { class: 'muted' }, 'Loading layout…')));
     let res;
-    try { res = await api(`/categories/${selected}/columns`); } catch (err) {
-      mount(matrixHost, emptyState({ title: 'Could not load layout', message: err.message, iconName: 'alert' }));
+    try { res = await api(`/categories/${categoryId}/columns`); } catch (err) {
+      mount(slot, emptyState({ title: 'Could not load layout', message: err.message, iconName: 'alert' }));
       return;
     }
-    const rows = res.fields.map((f) => ({
-      ...f,
-      visible: f.visible,
-      editable: f.editable,
-      required: f.required,
-    }));
+    const rows = res.fields;
 
     const table = h('table', { class: 'matrix-table' },
       h('thead', null, h('tr', null,
@@ -247,11 +268,11 @@ async function renderDataModel(host, initialCategory = null) {
         h('th', { class: 'center' }, 'Required'),
         h('th', { class: 'center' }, 'Order'),
       )),
-      h('tbody', null, ...rows.map((r, i) => {
-        const cbVisible = h('input', { type: 'checkbox', checked: r.visible, disabled: r.system, onchange: () => { r.visible = cbVisible.checked; rowSync(); } });
-        const cbEditable = h('input', { type: 'checkbox', checked: r.editable, onchange: () => { r.editable = cbEditable.checked; rowSync(); } });
-        const cbRequired = h('input', { type: 'checkbox', checked: r.required, onchange: () => { r.required = cbRequired.checked; } });
-        const order = h('input', { class: 'input', type: 'number', value: (i + 1) * 10, style: { width: '70px', height: '26px', fontSize: '12px' }, onchange: () => { r.sort_order = Number(order.value); } });
+      h('tbody', null, ...rows.map((r) => {
+        const cbVisible = h('input', { type: 'checkbox', 'aria-label': `Visible: ${r.label}`, checked: r.visible, disabled: r.system, onchange: () => { r.visible = cbVisible.checked; rowSync(); } });
+        const cbEditable = h('input', { type: 'checkbox', 'aria-label': `Editable: ${r.label}`, checked: r.editable, onchange: () => { r.editable = cbEditable.checked; } });
+        const cbRequired = h('input', { type: 'checkbox', 'aria-label': `Required: ${r.label}`, checked: r.required, onchange: () => { r.required = cbRequired.checked; } });
+        const order = h('input', { class: 'input', type: 'number', 'aria-label': `Order: ${r.label}`, value: r.sort_order, style: { width: '70px', height: '26px', fontSize: '12px' }, onchange: () => { r.sort_order = Number(order.value); } });
         const tr = h('tr', { class: r.visible ? '' : 'is-hidden-row' },
           h('td', null, h('div', { class: 'row', style: { gap: '6px' } },
             h('span', { style: { fontWeight: '600' } }, r.label),
@@ -265,8 +286,9 @@ async function renderDataModel(host, initialCategory = null) {
         );
         function rowSync() {
           tr.classList.toggle('is-hidden-row', !r.visible);
-          if (!r.visible) cbEditable.checked = false;
+          cbEditable.disabled = cbRequired.disabled = !r.visible;
         }
+        rowSync();
         return tr;
       })),
     );
@@ -277,7 +299,7 @@ async function renderDataModel(host, initialCategory = null) {
         saveBtn.disabled = true;
         saveBtn.replaceChildren(spinner(), 'Saving…');
         try {
-          await api(`/categories/${selected}/columns`, {
+          await api(`/categories/${categoryId}/columns`, {
             method: 'PUT',
             body: { fields: rows.map((r) => ({ field_id: r.id, visible: r.visible, editable: r.editable, required: r.required, sort_order: r.sort_order })) },
           });
@@ -292,7 +314,7 @@ async function renderDataModel(host, initialCategory = null) {
       },
     }, icon('check', 14), 'Save layout');
 
-    mount(matrixHost,
+    mount(slot,
       h('div', { class: 'note' }, icon('info', 15),
         h('span', null, 'Unchecked fields disappear from the employee table and CRM form for this category. "Editable" controls whether supervisors can change the value.')),
       h('div', { class: 'matrix' }, table),
@@ -319,15 +341,15 @@ async function renderDataModel(host, initialCategory = null) {
         field('Options', options, 'Only used for dropdown fields.'),
       ),
       footer: h('div', { class: 'row', style: { gap: '8px', justifyContent: 'flex-end', width: '100%' } },
-        h('button', { class: 'btn', onclick: close }, 'Cancel'),
+        h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
         h('button', {
           class: 'btn btn-primary',
           onclick: async () => {
             const opts = options.value.trim() ? options.value.split(',').map((s) => s.trim()).filter(Boolean) : null;
             try {
               await api('/fields', { method: 'POST', body: { key: key.value, label: label.value, type: type.value, options: opts } });
-              close(); toast('Field created', 'Enable it per category in the layout matrix.', 'success');
-              renderAdmin(document.getElementById('content'), { tab: 'columns' });
+              closeModal(); toast('Field created', 'Enable it per category in the layout matrix.', 'success');
+              await renderDataModel(host, selected);
             } catch (err) { toast('Could not create field', err.message, 'error'); }
           },
         }, 'Create field'),
@@ -345,7 +367,7 @@ async function renderDataModel(host, initialCategory = null) {
         f.type === 'select' ? field('Options', options) : h('div', { class: 'field-help' }, 'Options apply to dropdown fields only.'),
       ),
       footer: h('div', { class: 'row', style: { gap: '8px', justifyContent: 'flex-end', width: '100%' } },
-        h('button', { class: 'btn', onclick: close }, 'Cancel'),
+        h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
         h('button', {
           class: 'btn btn-primary',
           onclick: async () => {
@@ -353,8 +375,8 @@ async function renderDataModel(host, initialCategory = null) {
             if (f.type === 'select') body.options = options.value.split(',').map((s) => s.trim()).filter(Boolean);
             try {
               await api(`/fields/${f.id}`, { method: 'PATCH', body });
-              close(); toast('Field updated', label.value, 'success');
-              renderAdmin(document.getElementById('content'), { tab: 'columns' });
+              closeModal(); toast('Field updated', label.value, 'success');
+              await renderDataModel(host, selected);
             } catch (err) { toast('Could not save', err.message, 'error'); }
           },
         }, 'Save'),
@@ -362,8 +384,7 @@ async function renderDataModel(host, initialCategory = null) {
     });
   }
 
-  const close = () => document.querySelector('.overlay')?.remove();
-  paintMatrix();
+  if (selected) await paintMatrix();
 }
 
 /* ================================================================= access */
@@ -418,7 +439,9 @@ async function renderAccess(host) {
         : h('span', { class: 'badge badge-outline' }, `${Object.values(u.capabilities).filter(Boolean).length} granted`)),
       h('td', null, h('div', { class: 'row', style: { gap: '4px', justifyContent: 'flex-end' } },
         h('button', { class: 'btn btn-ghost btn-xs', onclick: () => openEditor(u) }, icon('sliders', 12), 'Access'),
-        h('button', { class: 'btn btn-ghost btn-xs', onclick: () => deleteUser(u) }, icon('trash', 12), 'Delete'),
+        u.id === state.user.id
+          ? h('span', { class: 'subtle', title: 'You cannot delete your own account.' }, 'Your account')
+          : h('button', { class: 'btn btn-ghost btn-xs', onclick: () => deleteUser(u) }, icon('trash', 12), 'Delete'),
       )),
     ))),
   );
@@ -449,7 +472,7 @@ async function renderAccess(host) {
 
     const projectRows = state.tree.map((p) => {
       const g = grants.get(p.id);
-      const cb = h('input', { type: 'checkbox', checked: !!g, onchange: () => {
+      const cb = h('input', { type: 'checkbox', 'aria-label': `Grant access to ${p.name}`, checked: !!g, onchange: () => {
         if (cb.checked) grants.set(p.id, { project_id: p.id, can_edit: true, can_export: true, can_crm: true });
         else grants.delete(p.id);
         paintGrants();
@@ -518,7 +541,7 @@ async function renderAccess(host) {
         controls.capHost,
       ),
       footer: h('div', { class: 'row', style: { gap: '8px', justifyContent: 'flex-end', width: '100%' } },
-        h('button', { class: 'btn', onclick: close }, 'Cancel'),
+        h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
         h('button', {
           class: 'btn btn-primary',
           onclick: async () => {
@@ -527,10 +550,9 @@ async function renderAccess(host) {
                 method: 'PUT',
                 body: { projects: [...grants.values()], capabilities: caps },
               });
-              close();
+              closeModal();
               toast('Access updated', `${u.name}'s permissions are now enforced by the backend.`, 'success', 5000);
-              await window.__rp.refreshAll();
-              renderAdmin(document.getElementById('content'), { tab: 'access' });
+              await renderAccess(host);
             } catch (err) { toast('Could not save access', err.message, 'error'); }
           },
         }, 'Save access'),
@@ -552,11 +574,12 @@ async function renderAccess(host) {
     const role = h('select', { class: 'select', onchange: () => controls.setDisabled(role.value === 'admin') },
       h('option', { value: 'supervisor' }, 'Supervisor'), h('option', { value: 'admin' }, 'Administrator'));
 
+    const error = h('div', { class: 'note warn hidden', role: 'alert' });
     modal({
       title: 'New user',
       size: 'modal-lg',
       body: h('div', { class: 'col', style: { gap: '12px' } },
-        field('Name', name), field('Email', email), field('Title', title), field('Role', role), field('Temporary password', pw),
+        error, field('Name', name), field('Email', email), field('Title', title), field('Role', role), field('Temporary password', pw),
         h('div', { class: 'crm-section-title' }, 'Project access'),
         controls.grantHost,
         h('div', { class: 'crm-section-title' }, 'Capabilities'),
@@ -565,10 +588,13 @@ async function renderAccess(host) {
           h('span', null, 'The account and its access are created together. Administrators get full access automatically.')),
       ),
       footer: h('div', { class: 'row', style: { gap: '8px', justifyContent: 'flex-end', width: '100%' } },
-        h('button', { class: 'btn', onclick: close }, 'Cancel'),
+        h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
         h('button', {
           class: 'btn btn-primary',
-          onclick: async () => {
+          onclick: async (event) => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            error.classList.add('hidden');
             try {
               await api('/users', {
                 method: 'POST',
@@ -577,9 +603,13 @@ async function renderAccess(host) {
                   projects: [...grants.values()], capabilities: caps,
                 },
               });
-              close(); toast('User created', `${email.value} can sign in now, with the access you chose.`, 'success', 5000);
-              renderAdmin(document.getElementById('content'), { tab: 'access' });
-            } catch (err) { toast('Could not create user', err.message, 'error'); }
+              closeModal(); toast('User created', `${email.value} can sign in now, with the access you chose.`, 'success', 5000);
+              await renderAccess(host);
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove('hidden');
+              error.scrollIntoView({ block: 'nearest' });
+            } finally { button.disabled = false; }
           },
         }, 'Create user'),
       ),
@@ -597,9 +627,7 @@ async function renderAccess(host) {
     try {
       await api(`/users/${u.id}`, { method: 'DELETE' });
       toast('User deleted', u.email, 'success');
-      renderAdmin(document.getElementById('content'), { tab: 'access' });
+      await renderAccess(host);
     } catch (err) { toast('Could not delete user', err.message, 'error'); }
   }
-
-  const close = () => document.querySelector('.overlay')?.remove();
 }

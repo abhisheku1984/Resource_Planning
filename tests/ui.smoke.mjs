@@ -33,6 +33,7 @@ class El {
     this.parentElement = null;
     this.isConnected = true;
     this.disabled = false;
+    this.checked = false;
     this.files = [];
   }
   get className() { return this.classList.set.size ? [...this.classList.set].join(' ') : this._className; }
@@ -49,7 +50,7 @@ class El {
   get innerHTML() { return this._html || ''; }
   get rowCount() { return 1; }
   appendChild(c) { c.parentElement = this; this.children.push(c); return c; }
-  append(...c) { c.forEach((x) => x && this.appendChild(x)); }
+  append(...c) { c.forEach((x) => { if (x != null) this.appendChild(x instanceof El ? x : documentShim.createTextNode(String(x))); }); }
   prepend(...c) { c.reverse().forEach((x) => x && this.appendChild(x)); }
   insertBefore(n, ref) {
     const i = ref ? this.children.indexOf(ref) : -1;
@@ -75,7 +76,7 @@ class El {
   addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
   removeEventListener(t, fn) { this.listeners[t] = (this.listeners[t] || []).filter((f) => f !== fn); }
   dispatchEvent(e) { (this.listeners[e.type] || []).forEach((f) => f(e)); return true; }
-  click() { this.dispatchEvent({ type: 'click', target: this, stopPropagation() {}, preventDefault() {}, closest: (sel) => this.closest(sel) }); }
+  click() { this.dispatchEvent({ type: 'click', currentTarget: this, target: this, stopPropagation() {}, preventDefault() {}, closest: (sel) => this.closest(sel) }); }
   focus() { globalThis.document.activeElement = this; }
   select() {}
   setSelectionRange() {}
@@ -338,7 +339,10 @@ globalThis.fetch = async (url, opts = {}) => {
   }
   if (path.startsWith('/fields')) return jsonResponse({ fields: [] });
   if (path.startsWith('/duplicates')) return jsonResponse({ reviews: [] });
-  if (path.startsWith('/categories/') && path.includes('/columns')) return jsonResponse({ category: { id: 4, name: 'Training Cohort' }, fields: [], isConfigured: false });
+  if (path.startsWith('/categories/') && path.includes('/columns')) return jsonResponse({
+    category: { id: 4, name: 'Training Cohort' }, isConfigured: true,
+    fields: [{ id: 3, key: 'notes', label: 'Notes', type: 'text', visible: true, editable: true, required: false, sort_order: 27 }],
+  });
   return jsonResponse({ error: `unstubbed ${method} ${path}` }, 404);
 };
 
@@ -790,4 +794,72 @@ test('Administration shows only Data model, CRM panel and Users & access', async
   assert.ok(text.includes('New user'), 'a new user can be created from here');
   assert.ok(text.includes('Delete'), 'each user can be deleted');
   assert.ok(text.includes('Test Leader'), 'the user list renders');
+});
+
+const button = (root, label) => {
+  const el = root.querySelectorAll('button').find((b) => flatten(b).join('') === label);
+  assert.ok(el, `button rendered: ${label}`);
+  return el;
+};
+const settleClicks = () => new Promise((resolve) => setImmediate(resolve));
+
+test('New user submits the form with its grants; Delete requires confirmation', async (t) => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  core.state.user = { id: 1, isAdmin: true };
+  core.state.tree = [{ id: 1, name: 'Nexus', subprojects: [] }];
+  const content = new El('div');
+  documentShim.body.replaceChildren(content);
+  const fetch = t.mock.method(globalThis, 'fetch'); // call through to the stub; inspect writes
+  await renderAdmin(content, { tab: 'access' });
+  button(content, 'New user').click();
+  const dialog = body.querySelector('.overlay');
+  assert.ok(dialog, 'the modal actually opens');
+  const input = (placeholder) => dialog.querySelectorAll('input').find((el) => el.attrs.placeholder === placeholder);
+  input('Full name').value = 'New supervisor';
+  input('name@company.com').value = 'new@example.test';
+  input('At least 8 characters').value = 'example123';
+  dialog.querySelector('select').value = 'supervisor';
+  const grant = dialog.querySelectorAll('input').find((el) => el.attrs['aria-label'] === 'Grant access to Nexus');
+  const capability = dialog.querySelectorAll('label').find((l) => flatten(l).join('') === 'Edit employee records').querySelector('input');
+  for (const check of [grant, capability]) { check.checked = true; check.dispatchEvent({ type: 'change' }); }
+  button(dialog, 'Create user').click();
+  await settleClicks();
+  const post = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/users' && opts.method === 'POST');
+  const payload = JSON.parse(post.arguments[1].body);
+  assert.equal(payload.email, 'new@example.test');
+  assert.equal(payload.projects[0].project_id, 1);
+  assert.equal(payload.capabilities['employee.edit'], true);
+  assert.ok(!body.querySelector('.overlay'));
+
+  const deletes = () => fetch.mock.calls.filter(({ arguments: [url, opts] }) => url === '/api/users/7' && opts.method === 'DELETE');
+  button(content, 'Delete').click();
+  button(body.querySelector('.overlay'), 'Cancel').click();
+  await settleClicks();
+  assert.equal(deletes().length, 0);
+  button(content, 'Delete').click();
+  button(body.querySelector('.overlay'), 'Delete user').click();
+  await settleClicks();
+  assert.equal(deletes().length, 1);
+  assert.equal(fetch.mock.calls.at(-1).arguments[1].method, 'GET', 'refresh the user list after deletion');
+});
+
+test('Data model renders a populated category, opens the field form and saves the selected layout', async (t) => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  core.state.user = { isAdmin: true };
+  core.state.tree = [{ id: 1, name: 'Nexus', subprojects: [{ name: 'Core', categories: [{ id: 4, name: 'Training' }] }] }];
+  const content = new El('div');
+  documentShim.body.replaceChildren(content);
+  const fetch = t.mock.method(globalThis, 'fetch');
+  await renderAdmin(content, {});
+  const order = content.querySelectorAll('input').find((i) => i.attrs.type === 'number');
+  assert.equal(Number(order.value), 27, 'display the persisted order, not the catalogue index');
+  button(content, 'New field').click();
+  assert.ok(flatten(body.querySelector('.overlay')).includes('Field key'));
+  button(body.querySelector('.overlay'), 'Cancel').click();
+  order.value = 9;
+  order.dispatchEvent({ type: 'change' });
+  button(content, 'Save layout').click();
+  await settleClicks();
+  const write = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/categories/4/columns' && opts.method === 'PUT');
+  assert.equal(JSON.parse(write.arguments[1].body).fields[0].sort_order, 9);
 });

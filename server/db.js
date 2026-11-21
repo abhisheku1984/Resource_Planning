@@ -329,6 +329,8 @@ function migrate() {
   // Optimistic-concurrency token. A timestamp is only second-precise, so two
   // saves inside the same second would compare equal and silently clobber.
   add('assignments', 'rev', 'rev INTEGER NOT NULL DEFAULT 1');
+  // Only populated when unlinking a deleted account; no table rebuild or data reset.
+  add('assignments', 'archived_updater_name', 'archived_updater_name TEXT');
   // value lookups by field are the hot path for filters
   db.exec('CREATE INDEX IF NOT EXISTS idx_av_field_value ON assignment_values(field_id, value)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_assign_proj ON assignments(project_id, category_id, active)');

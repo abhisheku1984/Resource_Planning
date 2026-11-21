@@ -46,7 +46,7 @@ const BASE_SELECT = `
          e.updated_at AS employee_updated_at,
          p.name AS project_name, p.code AS project_code,
          s.name AS subproject_name, c.name AS category_name,
-         sup.name AS supplier, u.name AS updated_by_name
+         sup.name AS supplier, COALESCE(u.name, a.archived_updater_name) AS updated_by_name
     FROM assignments a
     JOIN employees e ON e.id = a.employee_id
     JOIN projects p ON p.id = a.project_id

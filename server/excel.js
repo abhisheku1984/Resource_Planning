@@ -64,7 +64,7 @@ function collectRows(user, scope = {}) {
             p.code AS pcode, p.name AS pname,
             s.code AS scode, s.name AS sname,
             c.code AS ccode, c.name AS cname,
-            sup.name AS supplier, u.name AS updated_by
+            sup.name AS supplier, COALESCE(u.name, a.archived_updater_name) AS updated_by
        FROM assignments a
        JOIN employees e ON e.id = a.employee_id
        JOIN projects p ON p.id = a.project_id

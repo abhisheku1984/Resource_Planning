@@ -405,25 +405,8 @@ router.get('/categories/:id/columns', requireAuth, wrap((req, res) => {
   );
   if (!cat) return res.status(404).json({ error: 'Category not found.' });
   emp.assertProjectAccess(req.user, cat.project_id);
-  const configured = q.all('SELECT * FROM category_fields WHERE category_id = ?', categoryId);
-  const configuredMap = new Map(configured.map((c) => [c.field_id, c]));
-  const all = schema.listFields().map((f) => {
-    const c = configuredMap.get(f.id);
-    return {
-      ...f,
-      visible: c ? !!c.visible : true,
-      editable: c ? !!c.editable : true,
-      required: c ? !!c.required : false,
-      // carried through so a column-config save cannot silently drop the
-      // facet/submit flags the dropdowns and the Update panel depend on
-      filterable: c ? !!c.filterable : !!f.filterable,
-      submit_field: c ? !!c.submit_field : !!f.submit,
-      sort_order: c ? c.sort_order : null,
-      configured: !!c,
-      canHide: !f.system,
-    };
-  });
-  res.json({ category: cat, fields: all, isConfigured: configured.length > 0 });
+  const fields = schema.categoryLayout(categoryId);
+  res.json({ category: cat, fields, isConfigured: fields.some((f) => f.configured) });
 }));
 
 router.put('/categories/:id/columns', requireAuth, requireAdmin, wrap((req, res) => {
@@ -435,8 +418,8 @@ router.put('/categories/:id/columns', requireAuth, requireAdmin, wrap((req, res)
     visible: f.visible !== false,
     editable: f.editable !== false,
     required: !!f.required,
-    filterable: !!f.filterable,
-    submit_field: !!(f.submit_field || f.submitField),
+    filterable: f.filterable,
+    submit_field: f.submit_field ?? f.submitField,
     sort_order: f.sort_order,
     section: f.section,
   }));
@@ -789,58 +772,83 @@ router.get('/users', requireAuth, requireAdmin, wrap((req, res) => {
   res.json({ users, capabilities: auth.ALL_CAPABILITIES });
 }));
 
-router.post('/users', requireAuth, requireAdmin, wrap((req, res) => {
-  const { email, name, role, password, title, projects, capabilities } = req.body || {};
-  if (!email || !name) return res.status(422).json({ error: 'Name and email are required.' });
-  if (q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email)) {
-    return res.status(422).json({ error: 'A user with that email already exists.' });
-  }
-  if (String(password || '').length < 8) return res.status(422).json({ error: 'Use a password of at least 8 characters.' });
-  const r = q.run(
-    'INSERT INTO users (email, name, role, title, password_hash) VALUES (?, ?, ?, ?, ?)',
-    email, name, role === 'admin' ? 'admin' : 'supervisor', title || null, auth.hashPassword(password)
-  );
-  const id = Number(r.lastInsertRowid);
-  // Access can be granted in the same step the account is created, so a new
-  // user is never left able to sign in with nothing to see.
-  if (Array.isArray(projects)) {
-    for (const p of projects) {
-      q.run(
-        `INSERT INTO user_projects (user_id, project_id, can_edit, can_export, can_crm) VALUES (?, ?, ?, ?, ?)`,
-        id, Number(p.project_id ?? p.id), p.can_edit === false ? 0 : 1, p.can_export === false ? 0 : 1, p.can_crm === false ? 0 : 1
-      );
+// Called inside the account transaction. A stale grant must fail the whole
+// write, not leave a sign-in behind which the administrator cannot retry.
+function writeUserAccess(id, { projects, capabilities }) {
+  if (projects !== undefined) {
+    if (!Array.isArray(projects)) throw Object.assign(new Error('Expected a list of project grants.'), { status: 422 });
+    q.run('DELETE FROM user_projects WHERE user_id = ?', id);
+    const seen = new Set();
+    const flag = (v) => v === undefined || v === true || v === 1 ? 1 : 0;
+    for (const grant of projects) {
+      const pid = Number(grant?.project_id ?? grant?.id);
+      if (!Number.isSafeInteger(pid) || seen.has(pid) || !q.get('SELECT id FROM projects WHERE id = ?', pid)) {
+        throw Object.assign(new Error('A project grant is invalid or duplicated. Refresh the project list and try again.'), { status: 422 });
+      }
+      seen.add(pid);
+      q.run('INSERT INTO user_projects (user_id, project_id, can_edit, can_export, can_crm) VALUES (?, ?, ?, ?, ?)',
+        id, pid, flag(grant.can_edit), flag(grant.can_export), flag(grant.can_crm));
     }
   }
-  if (capabilities && typeof capabilities === 'object') {
+  if (capabilities !== undefined) {
+    if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) {
+      throw Object.assign(new Error('Expected a set of capabilities.'), { status: 422 });
+    }
     for (const [cap, allowed] of Object.entries(capabilities)) {
-      q.run(
-        `INSERT INTO user_capabilities (user_id, capability, allowed) VALUES (?, ?, ?)`,
-        id, cap, allowed ? 1 : 0
-      );
+      if (!auth.ALL_CAPABILITIES.includes(cap)) throw Object.assign(new Error(`Unknown capability: ${cap}`), { status: 422 });
+      q.run(`INSERT INTO user_capabilities (user_id, capability, allowed) VALUES (?, ?, ?)
+             ON CONFLICT(user_id, capability) DO UPDATE SET allowed = excluded.allowed`,
+        id, cap, allowed === true || allowed === 1 ? 1 : 0);
     }
   }
-  record({ entity: 'user', entityId: id, ref: email, action: 'create', newValue: `${name} (${role})`, actor: req.user });
-  res.json({ user: q.get('SELECT id, email, name, role, title FROM users WHERE id = ?', id) });
+}
+
+router.post('/users', requireAuth, requireAdmin, wrap((req, res) => {
+  const body = req.body || {};
+  const email = String(body.email || '').trim();
+  const name = String(body.name || '').trim();
+  const role = body.role === 'admin' ? 'admin' : 'supervisor';
+  if (!email || !name) return res.status(422).json({ error: 'Name and email are required.' });
+  if (typeof body.password !== 'string' || body.password.length < 8) return res.status(422).json({ error: 'Use a password of at least 8 characters.' });
+  const user = tx(() => {
+    if (q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email)) {
+      throw Object.assign(new Error('A user with that email already exists.'), { status: 422 });
+    }
+    const r = q.run('INSERT INTO users (email, name, role, title, password_hash) VALUES (?, ?, ?, ?, ?)',
+      email, name, role, body.title || null, auth.hashPassword(body.password));
+    const id = Number(r.lastInsertRowid);
+    if (role !== 'admin') writeUserAccess(id, body);
+    record({ entity: 'user', entityId: id, ref: email, action: 'create', newValue: `${name} (${role})`, actor: req.user });
+    return q.get('SELECT id, email, name, role, title FROM users WHERE id = ?', id);
+  });
+  res.json({ user });
 }));
 
 router.delete('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
   const id = Number(req.params.id);
-  const target = q.get('SELECT * FROM users WHERE id = ?', id);
-  if (!target) return res.status(404).json({ error: 'User not found.' });
   if (id === req.user.id) return res.status(422).json({ error: 'You cannot delete your own account.' });
-  if (target.role === 'admin') {
-    const admins = q.get("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1");
-    if (admins.n <= 1) return res.status(422).json({ error: 'At least one administrator must remain.' });
-  }
-  return tx(() => {
-    // imports.uploaded_by has no cascade; keep the import history, drop the link.
+  tx(() => {
+    const target = q.get('SELECT email, name, role, active FROM users WHERE id = ?', id);
+    if (!target) throw Object.assign(new Error('User not found.'), { status: 404 });
+    if (target.role === 'admin' && target.active && !q.get("SELECT id FROM users WHERE role = 'admin' AND active = 1 AND id <> ?", id)) {
+      throw Object.assign(new Error('At least one administrator must remain.'), { status: 422 });
+    }
+    // Keep the work. These nullable author references in existing databases
+    // do not cascade. Audit and proposal rows already carry author names;
+    // retain the assignment's Last Updated By for the table and export too.
+    q.run('UPDATE employees SET created_by = NULL WHERE created_by = ?', id);
+    q.run('UPDATE employees SET updated_by = NULL WHERE updated_by = ?', id);
+    q.run('UPDATE assignments SET archived_updater_name = ?, updated_by = NULL WHERE updated_by = ?', target.name, id);
+    q.run('UPDATE assignment_values SET updated_by = NULL WHERE updated_by = ?', id);
     q.run('UPDATE imports SET uploaded_by = NULL WHERE uploaded_by = ?', id);
-    // sessions, user_projects, user_subprojects and user_capabilities all
-    // declare ON DELETE CASCADE, so they go with the account.
+    q.run('UPDATE import_jobs SET user_id = NULL WHERE user_id = ?', id);
+    q.run('UPDATE agent_actions SET requested_by = NULL WHERE requested_by = ?', id);
+    q.run('UPDATE agent_actions SET decided_by = NULL WHERE decided_by = ?', id);
+    // Only credentials, sessions and access grants are removed.
     q.run('DELETE FROM users WHERE id = ?', id);
-    record({ entity: 'user', entityId: id, ref: target.email, action: 'delete', newValue: `${target.name} (${target.role})`, actor: req.user });
-    res.json({ ok: true });
+    record({ entity: 'user', entityId: id, ref: target.email, action: 'delete', oldValue: `${target.name} (${target.role})`, actor: req.user });
   });
+  res.json({ ok: true });
 }));
 
 router.patch('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
@@ -864,29 +872,12 @@ router.patch('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
 
 router.put('/users/:id/access', requireAuth, requireAdmin, wrap((req, res) => {
   const id = Number(req.params.id);
-  const { projects, capabilities } = req.body || {};
-  return tx(() => {
-    if (Array.isArray(projects)) {
-      q.run('DELETE FROM user_projects WHERE user_id = ?', id);
-      for (const p of projects) {
-        q.run(
-          `INSERT INTO user_projects (user_id, project_id, can_edit, can_export, can_crm) VALUES (?, ?, ?, ?, ?)`,
-          id, Number(p.project_id ?? p.id), p.can_edit === false ? 0 : 1, p.can_export === false ? 0 : 1, p.can_crm === false ? 0 : 1
-        );
-      }
-    }
-    if (capabilities && typeof capabilities === 'object') {
-      for (const [cap, allowed] of Object.entries(capabilities)) {
-        q.run(
-          `INSERT INTO user_capabilities (user_id, capability, allowed) VALUES (?, ?, ?)
-           ON CONFLICT(user_id, capability) DO UPDATE SET allowed = excluded.allowed`,
-          id, cap, allowed ? 1 : 0
-        );
-      }
-    }
+  if (!q.get('SELECT id FROM users WHERE id = ?', id)) return res.status(404).json({ error: 'User not found.' });
+  tx(() => {
+    writeUserAccess(id, req.body || {});
     record({ entity: 'user', entityId: id, action: 'update', fieldKey: 'access', newValue: 'access policy updated', actor: req.user });
-    res.json({ ok: true });
   });
+  res.json({ ok: true });
 }));
 
 // ---------------------------------------------------------------------------

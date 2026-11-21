@@ -10,17 +10,32 @@ import/export only, supervisors update records in the app.
 > compiled and there are no native modules. `package.json` pulls two pure-JS
 > packages (Express and ExcelJS).
 
+For a **new checkout** of the version on PR #3:
+
 ```bash
-git clone https://github.com/abhisheku1984/Resource_Planning.git
+git clone --branch arena/558e92f0-resource-planning https://github.com/abhisheku1984/Resource_Planning.git
 cd Resource_Planning
-git checkout arena/086f5947-resource-planning
-npm install
-npm run demo      # builds the 12,000-employee demo database (about 10 seconds)
+npm ci
 npm start         # http://localhost:4000
 ```
 
-`npm run demo` wipes `data/` and regenerates everything, so re-run it any time you
-want a clean dataset. `npm run demo -- --rows 500` makes a smaller one.
+To **update an existing installation on Windows**, stop the running server with
+**Ctrl+C**, open PowerShell in the existing `Resource_Planning` folder and run:
+
+```powershell
+git fetch origin
+git switch arena/558e92f0-resource-planning
+git pull --ff-only origin arena/558e92f0-resource-planning
+git log -1 --oneline
+npm.cmd ci
+npm.cmd start
+```
+
+Open <http://localhost:4000> and press **Ctrl+Shift+R**. Start in the **same
+folder** as before to use the same `data/resource_planning.db`. The server
+updates the schema on startup; **do not run `npm run demo` or `npm run seed`
+as part of an update**. Those commands replace data. The large demo is optional
+and intended only for disposable installations.
 
 ### Demo logins
 
@@ -35,7 +50,7 @@ want a clean dataset. `npm run demo -- --rows 500` makes a smaller one.
 | Read-only reviewer | `kavita.rao@resourceplanning.io` | `Super@12345` |
 | HR uploader | `hr.upload@resourceplanning.io` | `Hr@1234567` |
 
-Windows: `start-windows.bat` does the install, demo build and start in one step.
+Windows: after pulling the code, `start-windows.bat` can install missing dependencies and start the app. Use an **Administrator** login for Administration.
 
 ### Checking the five filter dropdowns
 
@@ -54,7 +69,7 @@ dropdown advertised. Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere
 ### Tests
 
 ```bash
-npm test          # 48 integration + UI smoke tests
+npm test          # integration + UI smoke tests
 ```
 
 ## The assistant (in-app, offline, propose-only)
@@ -129,6 +144,13 @@ place to maintain them is a second place to get out of date. (The API still
 accepts hierarchy writes; only the screens were removed.)
 
 ### Dynamic tables
+
+As an administrator, open **Administration → Data model** and choose a
+**Category**. **New field** adds a definition to the shared catalogue. To use a
+new field in this category, check **Visible**, choose its **Editable** / **Required**
+settings and **Order**, then click **Save layout**. Open the same category in
+Project Workspace to see the result. A layout change does not remove its filter
+or supervisor-update settings.
 
 `GET /api/employees?categoryId=…` returns both `rows` and the `columns` that
 apply to that category. The client renders whatever it is given, so a category
@@ -250,12 +272,13 @@ kept: the second copy is stored under `… (2nd column)`.
 **Users & access** is where accounts are created and removed. *New user* takes
 the name, email, role and temporary password **and** the project grants and
 capabilities in the same dialog — `POST /api/users` accepts `projects` and
-`capabilities` and applies them with the account, so a new user is never left
-able to sign in with nothing to see. *Delete* removes the account permanently
-(`DELETE /api/users/:id`): sessions, grants and capabilities cascade away, the
-import history is kept with its uploader link cleared, and the audit trail
-keeps the actor's name. Two guards hold — you cannot delete your own account,
-and the last administrator cannot be deleted.
+`capabilities` in the same transaction. If a grant fails, no account is created:
+correct it and retry with the same email. Supervisors see only the projects you
+grant. To remove someone, click **Delete** beside their name and confirm
+**Delete user**. Deletion revokes sessions and removes project grants and
+capabilities. Their employees, edits, import history and approvals stay in the
+database; the audit trail and employee export keep their past attribution. You
+cannot delete your own account or the last active administrator.
 
 Every read and write re-checks the grant on the server
 (`assertProjectAccess`, `visibleProjectIds`). The UI hides controls as a
@@ -305,20 +328,21 @@ Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticate
 
 ## Tests
 
-`npm test` runs both suites against a temporary database:
+`npm test` runs both suites without modifying your application database:
 
-* `tests/api.test.js` — 17 integration tests covering all twelve required
+* `tests/api.test.js` — HTTP integration tests against a temporary database, covering all twelve required
   scenarios (shared project with six supervisors, multi-project supervisor,
   differing category columns, concurrent edits with conflict detection, CRM
   autosave propagation, duplicate-free updates, creation and validation,
   exports containing fresh data, imports preserving supervisor edits, and
   blocked cross-project access), plus read-only enforcement, admin-only
-  endpoints, layout round-trips and concurrent writes.
-* `tests/ui.smoke.mjs` — 7 tests that render the views against a minimal DOM shim
+  endpoints, layout round-trips, atomic user creation and deletion with work history.
+* `tests/ui.smoke.mjs` — tests that render and interact with the views against a minimal DOM shim
   and a stubbed API, catching import errors, render crashes and broken
   autosave/table wiring without needing a browser. Includes an offline test that
   drops the connection mid-save and asserts the panel reports `Not saved`,
-  keeps the typed value, and succeeds on explicit retry.
+  keeps the typed value, and succeeds on explicit retry. Administration tests open
+  the user and field forms, confirm/cancel deletion, and submit a category layout.
 
 ## Project layout
 

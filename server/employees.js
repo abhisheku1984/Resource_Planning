@@ -85,7 +85,7 @@ function buildRowQuery({ projectId, subprojectId, categoryId }) {
     's.name AS subproject_name',
     'c.name AS category_name',
     'sup.name AS supplier',
-    'u.name AS updated_by_name',
+    'COALESCE(u.name, a.archived_updater_name) AS updated_by_name',
   ];
   const joins = [];
   const dynamic = [];
