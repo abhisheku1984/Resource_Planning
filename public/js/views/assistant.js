@@ -18,14 +18,25 @@ export function createAssistant() {
   const queueHost = h('div', { class: 'assistant-queue' });
   const scopeHost = h('div', { class: 'assistant-scope' });
   const crmHost = h('section', { class: 'assistant-crm', 'aria-label': 'Employee CRM form' });
+  let lastReply = '';
   const voiceText = h('span', { class: 'subtle', role: 'status' }, 'On-device English · no audio uploaded');
   const voiceBtn = h('button', { class: 'btn btn-sm', 'aria-pressed': 'false', onclick: () => voice.toggle() }, 'Start voice mode');
-  const voice = createLocalVoice({ onCommand: send, onState({ text, active, needsPack }) {
-    voiceText.textContent = text; voiceBtn.textContent = needsPack ? 'Install English speech pack' : active ? 'Stop voice' : 'Start voice mode';
-    voiceBtn.setAttribute('aria-pressed', String(active));
+  const readBtn = h('button', { class: 'btn btn-xs', disabled: true, onclick: () => voice.readReply(lastReply) }, 'Read last reply');
+  const help = h('details', { class: 'voice-help hidden' }, h('summary', null, 'Voice setup and device dictation'),
+    window.self !== window.top ? h('a', { href: location.href, target: '_blank', rel: 'noopener noreferrer' }, 'Open the app in its own tab') : null,
+    h('p', null, 'Try the app in a standalone tab in an up-to-date desktop Chrome browser. Use localhost on the server PC or HTTPS.'),
+    h('p', null, h('strong', null, 'Windows 11 alternative: '), 'Open Start → Voice access and complete its English setup. Focus the message box, dictate your question or CRM command, then say “Press Enter”. Windows controls its own microphone.'),
+    h('div', { class: 'row' }, h('button', { class: 'btn btn-xs', onclick: () => el.querySelector('.assistant-input')?.focus() }, 'Focus message box'), readBtn));
+  const voice = createLocalVoice({ onCommand: send, onState({ text, active, action, help: showHelp }) {
+    voiceText.textContent = text;
+    voiceBtn.textContent = ({ stop: 'Stop voice', install: 'Install English speech pack', retry: 'Check again', 'stop-reading': 'Stop reading' })[action] || 'Start voice mode';
+    voiceBtn.setAttribute('aria-pressed', String(active || action === 'stop-reading'));
+    readBtn.disabled = !lastReply || active || action === 'stop-reading';
+    if (showHelp && help.classList.contains('hidden')) help.open = true;
+    help.classList.toggle('hidden', !showHelp);
   } });
   const crm = createAssistantCrm(crmHost, send);
-  mount(el, head, scopeHost, queueHost, crmHost, log, h('div', { class: 'assistant-voice' }, voiceBtn, voiceText), foot);
+  mount(el, head, scopeHost, queueHost, crmHost, log, h('div', { class: 'assistant-voice' }, voiceBtn, voiceText, help), foot);
 
   let open = false;
   let busy = false;
@@ -170,6 +181,12 @@ export function createAssistant() {
   }
   const ask = (message, projectName) => api('/agent/ask', { method: 'POST', body: { message, projectName } });
   async function send(text) {
+    const id = epoch;
+    const reply = await respond(text);
+    if (id === epoch && open && reply) { lastReply = reply; readBtn.disabled = voice.isActive(); }
+    return reply;
+  }
+  async function respond(text) {
     const message = String(text || '').trim();
     if (!message || !open || busy) return '';
     const id = epoch;
@@ -238,7 +255,7 @@ export function createAssistant() {
       if (!log.children.length) seed();
       renderFoot(); refreshProjects(); refreshQueue(); el.querySelector('.assistant-input')?.focus();
     } else {
-      epoch++; busy = false; voice.stop(); waitingPerson = false; pendingQuestion = '';
+      epoch++; busy = false; lastReply = ''; voice.stop(); waitingPerson = false; pendingQuestion = '';
     }
   }
   renderHead(); renderScope(); renderFoot();
