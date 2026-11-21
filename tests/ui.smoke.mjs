@@ -759,6 +759,17 @@ test('Data Hub offers the import template and asks where new rows go', async () 
 
   const selects = content.querySelectorAll('select');
   assert.ok(selects.length >= 3, 'project / subproject / category are selectable');
+  assert.ok(!text.includes('Replace entire roster'), 'import permission is not bulk delete permission');
+
+  core.state.user = { ...core.state.user, isAdmin: true };
+  await renderDataHub(content, {});
+  const replace = content.querySelectorAll('button').find(b => flatten(b).join('').includes('Replace entire roster'));
+  assert.ok(replace); replace.click();
+  const dialog = documentShim.body.querySelector('.modal');
+  assert.match(flatten(dialog).join(' '), /Export current roster/);
+  assert.doesNotMatch(flatten(dialog).join(' '), /Delete old roster and import/);
+  assert.equal(dialog.querySelector('#roster-file'), null, 'a complete export comes before picking a file');
+  core.closeModal();
 });
 
 test('typing in the update panel saves itself: no Submit, no export, straight to the database', async () => {

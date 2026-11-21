@@ -48,6 +48,7 @@ worth re-checking with `npm audit` before each release.
 | `data/resource_planning.db` | **All employee data** — one SQLite file | **Yes** |
 | `data/resource_planning.db-wal` | Write-ahead log, same data, transient | **Yes** |
 | `data/resource_planning.db-shm` | Shared-memory index file, transient | Yes |
+| `roster-backups/<database>.before-last-replace.db` next to the active DB | Latest admin-initiated full-roster replacement restore point (includes credentials/hashes, sessions and history); never served as a download | **Yes** |
 | `exports/hr-master-12000.xlsx` | Generated sample workbook (demo generator only) | Yes |
 | `node_modules/` | Libraries | No |
 
@@ -187,7 +188,7 @@ I would rather you know these than discover them later.
    would upload your database to a third-party cloud.
 4. **No rate limiting on login.** Someone who can reach the port can attempt many
    passwords. Another reason to keep the loopback binding.
-5. **No automatic backups.** Copy `data/` to an encrypted drive on a schedule.
+5. **No scheduled backups.** A confirmed full-roster replacement saves one private SQLite restore point before deletion. This does not replace scheduled, tested backups on encrypted storage; archive dated workforce exports privately.
 6. **The database holds PII** (names, emails, phone numbers, salary/rate data).
    Depending on your jurisdiction this may be regulated; treat the file as
    confidential and define who may copy it.

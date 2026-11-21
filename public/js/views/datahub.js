@@ -6,6 +6,7 @@ import {
   h, mount, icon, api, state, toast, spinner, emptyState, modal, fmtNum,
   fmtDateTime, fmtRelative, downloadExport, downloadWorkbook, confirmDialog,
 } from '../core.js';
+import { openRosterReplacement, readWorkbook } from './replace-roster.js';
 
 export async function renderDataHub(content, ctx) {
   const giga = state.user?.gigaAccess;
@@ -14,9 +15,10 @@ export async function renderDataHub(content, ctx) {
     h('div', { class: 'page-head' },
       h('div', null,
         h('div', { class: 'page-title' }, 'Data Hub'),
-        h('div', { class: 'page-sub' }, giga ? `Giga Project Name: ${giga.name || 'No project access'}` : 'Generate an Excel snapshot of the central database at any scope, or apply a daily dataset without disturbing supervisor edits.'),
+        h('div', { class: 'page-sub' }, giga ? `Giga Project Name: ${giga.name || 'No project access'}` : state.user.isAdmin ? 'Export the current roster, merge changes, or replace it with a complete daily workbook.' : 'Export a workbook or merge permitted updates without disturbing supervisor edits.'),
       ),
       h('div', { class: 'page-actions' },
+        state.user.isAdmin && !giga ? h('button', { class: 'btn', onclick: () => openRosterReplacement(placementPicker) }, 'Replace entire roster') : null,
         h('button', { class: 'btn btn-primary', disabled: !canExport, onclick: () => openExportModal({}) }, icon('download', 15), 'Generate export'),
       ),
     ),
@@ -250,19 +252,13 @@ function importCard(imports) {
     ),
   );
 
-  function handleFile(file) {
+  async function handleFile(file) {
     fileInput.value = ''; // allow choosing the same file again, including after Cancel
-    if (!/\.xlsx$/i.test(file.name)) {
-      toast('Unsupported file', 'Upload an Excel .xlsx workbook.', 'error');
-      return;
-    }
-    // The import endpoint accepts a data URL. Native encoding avoids passing
-    // one function argument per byte (a full HR workbook exceeds that limit).
     const placement = place.categoryId ? { ...place } : {};
-    const reader = new FileReader();
-    reader.onload = () => showImportPreview(file.name, reader.result, placement);
-    reader.onerror = () => toast('Could not read workbook', 'Select the local .xlsx file and try again.', 'error');
-    reader.readAsDataURL(file);
+    try {
+      const content = await readWorkbook(file);
+      if (fileInput.isConnected) showImportPreview(file.name, content, placement);
+    } catch (err) { toast('Could not read workbook', err.message, 'error'); }
   }
 }
 

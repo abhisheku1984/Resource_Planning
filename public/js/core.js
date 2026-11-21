@@ -256,7 +256,7 @@ export async function downloadExport(query) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
-  return { filename, rows: Number(res.headers.get('X-Export-Rows') || 0) };
+  return { filename, rows: Number(res.headers.get('X-Export-Rows') || 0), receipt: res.headers.get('X-Roster-Receipt') };
 }
 
 /* ------------------------------ toasts ------------------------------ */

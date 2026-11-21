@@ -11,6 +11,7 @@ const { checkCrmSubmit } = require('./assistant-crm');
 const agentstore = require('./agentstore');
 const guideReview = require('./guide-review');
 const excel = require('./excel');
+const rosterCycle = require('./roster-cycle');
 const { record, auditScope, recentActivity } = require('./audit');
 
 const router = express.Router();
@@ -540,6 +541,7 @@ router.post('/duplicates/:id/resolve', requireAuth, requireAdmin, wrap((req, res
   const id = Number(req.params.id);
   const review = q.get('SELECT * FROM duplicate_reviews WHERE id = ?', id);
   if (!review) return res.status(404).json({ error: 'Review not found.' });
+  if (review.status !== 'pending') return res.status(409).json({ error: 'This review is no longer pending.' });
   const { action } = req.body || {}; // link | create | dismiss
   if (!['link', 'create', 'dismiss'].includes(action)) {
     return res.status(422).json({ error: 'Choose an action: link, create or dismiss.' });
@@ -672,7 +674,12 @@ router.get('/export', requireAuth, requireCap('export.data'), wrap(async (req, r
   if (scope.subprojectId) parts.push(`subproject-${scope.subprojectId}`);
   if (scope.categoryId) parts.push(`category-${scope.categoryId}`);
   if (scope.supplierId) parts.push(`supplier-${scope.supplierId}`);
-  parts.push(new Date().toISOString().slice(0, 10));
+  if (req.query.forReplacement === '1') {
+    if (!req.user.isAdmin || req.user.gigaAccess) throw access.denied('Administrator access required.');
+    if (Object.keys(scope).length) throw access.invalid('Export the complete unfiltered roster before replacing it.');
+    res.setHeader('X-Roster-Receipt', rosterCycle.startExport(req.user));
+    parts.push('before-replacement', new Date().toISOString().replace(/[:.]/g, '-'));
+  } else parts.push(new Date().toISOString().slice(0, 10));
   await excel.streamWorkbook(res, req.user, scope, `${parts.join('-')}.xlsx`);
   record({ entity: 'export', entityId: null, ref: parts.join('-'), action: 'export', actor: req.user, meta: scope });
 }));
@@ -680,9 +687,10 @@ router.get('/export', requireAuth, requireCap('export.data'), wrap(async (req, r
 // ---------------------------------------------------------------------------
 // import & synchronization
 // ---------------------------------------------------------------------------
-router.post('/import', requireAuth, requireCap('import.data'), wrap(async (req, res) => {
+const importRoute = replace => wrap(async (req, res) => {
   const { filename, content, force, dryRun, projectId, subprojectId, categoryId } = req.body || {};
   if (!content) return res.status(422).json({ error: 'Choose an Excel (.xlsx) file to upload.' });
+  if (replace && !/\.xlsx$/i.test(filename || '')) throw access.invalid('Choose a complete .xlsx workbook.');
   const buffer = Buffer.from(String(content).split(',').pop(), 'base64');
   // Your HR master workbook carries no Project / Subproject / Category column.
   // The chosen placement (or the database's single category) files the people.
@@ -691,9 +699,12 @@ router.post('/import', requireAuth, requireCap('import.data'), wrap(async (req, 
     : null;
   const result = await excel.importWorkbook(req.user, buffer, {
     filename: filename || 'upload.xlsx', force: !!force, dryRun: !!dryRun, defaultPlacement,
+    replace: replace ? { receipt: req.body.receipt, confirmation: req.body.confirmation } : null,
   });
   res.json({ result });
-}));
+});
+router.post('/import', requireAuth, requireCap('import.data'), importRoute(false));
+router.post('/import/replace', requireAuth, requireAdmin, importRoute(true));
 
 // the file you fill in: your own 65 headers plus the 3 placement columns
 router.get('/import/template', requireAuth, requireCap('import.data'), wrap(async (req, res) => {

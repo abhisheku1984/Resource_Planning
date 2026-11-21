@@ -41,7 +41,7 @@ and intended only for disposable installations.
 
 Run **`START-PREVIEW.cmd`** and open **<http://localhost:4110>** when the server is running. By default the preview binds to loopback and uses `data/guided-preview.db`, not the normal `data/resource_planning.db`. If you have activated the workbook preview below, the launcher prints and uses that copy instead. The first start creates synthetic records; no import or reset is needed. Sign in as the demo NEXUS supervisor below and [try a guided update](#try-a-guided-update). Press **Ctrl+C** to stop the preview.
 
-For a ready-made 1,000-person roster, use the [sample workbook and reversible upload walkthrough](samples/README.md).
+For the 1,000-person test roster, see the [sample workbook and preview walkthrough](samples/README.md). For recurring full dumps, follow the [administrator’s daily export and replacement checklist](samples/DAILY-ROSTER.md). Both upload and export work without Excel or Microsoft 365.
 
 ### Demo logins
 
@@ -313,7 +313,7 @@ in. So the portal asks once, and files the rows there:
 4. Drop the file on **Upload a daily dataset**. A **preview** runs in a
    transaction and is rolled back, so nothing is written: check *New employees*,
    *Updated placements*, *Protected values* and any *Rows needing attention*.
-5. Press **Apply import**. The workbook is upserted by **Employee ID**. Rows absent from the file are **not deleted**. To replace the local guided-preview roster rather than merge it, follow the [1,000-record upload and rollback steps](samples/README.md).
+5. Press **Apply import**. The workbook is upserted by **Employee ID**. Rows absent from the file are **not deleted**. For a complete new dump rather than a merge, use **Data Hub → Replace entire roster** as administrator. [Export, replace, verify and recover](samples/DAILY-ROSTER.md).
 
 Header matching is forgiving: case and punctuation are ignored, and the portal
 understands the spellings your file actually uses — `unite manual`,
@@ -413,6 +413,7 @@ and past attribution remain. You cannot delete yourself or the last active admin
 | `GET` | `/api/duplicates`, `POST /api/duplicates/:id/resolve` | Review queue |
 | `GET` | `/api/export` | Excel snapshot (scope-aware) |
 | `POST` | `/api/import` | Daily dataset upsert (dry-run supported, optional `projectId`/`subprojectId`/`categoryId` placement) |
+| `POST` | `/api/import/replace` | Admin-only complete replacement: receipt from unfiltered `/api/export?forReplacement=1`, clean dry run of the same file and placement, `confirmation: "REPLACE"`, private restore point, atomic delete + import |
 | `GET` | `/api/import/template` | Blank workbook: your 65 headers + the 3 placement columns |
 | `GET` | `/api/audit` | Activity feed scoped by project access |
 | `GET`, `POST` | `/api/agent/projects`, `/api/agent/ask` | Visible workbook names; local questions, update goals and scoped employee/placement choices |

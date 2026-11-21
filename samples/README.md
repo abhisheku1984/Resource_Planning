@@ -2,6 +2,8 @@
 
 [**workforce-1000.xlsx**](workforce-1000.xlsx) is ready to upload. The `Employees` sheet has one header row and **1,000 synthetic employees**, one placement per ID (`TEST-0001` through `TEST-1000`). Columns A–C give the placement; the other 65 columns match the app’s HR template, including the repeated headers and blank spacer. Don't delete a sample row or select a default placement.
 
+**Already using the preloaded 1,000-employee preview?** Skip setup and upload: sign in as administrator and go straight to the checks in section 3. To replace the live roster on subsequent days, use the [daily export → replace → verify checklist](DAILY-ROSTER.md), not a new preview folder. Neither exporting nor uploading requires Excel or Microsoft 365.
+
 ## 1. Start with an empty roster, without losing the current one
 
 A normal Data Hub upload **merges by Employee ID**. It does **not** delete people missing from the file. For a complete replacement on the **Windows guided preview at port 4110**, keep the old database as the rollback copy and activate an empty roster instead:
