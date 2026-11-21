@@ -3,6 +3,7 @@ const ExcelJS = require('exceljs');
 const { q, tx } = require('./db');
 const { record } = require('./audit');
 const schema = require('./schema');
+const fielddefs = require('./fielddefs');
 const emp = require('./employees');
 
 const BASE_HEADERS = [
@@ -265,7 +266,29 @@ function isDerivedHeader(header) {
  *  - unknown projects/subprojects/categories/suppliers are auto-created when the
  *    user may manage schema, otherwise reported as row errors
  */
-async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = false, dryRun = false } = {}) {
+/**
+ * Your HR master workbook has no Project / Subproject / Category columns - the
+ * hierarchy lives only in the portal. Rather than reject the whole file, resolve
+ * one default placement for the upload: whatever the caller chose, else the only
+ * project/category in the database, else null (rows then report the required
+ * column instead of a misleading partial import).
+ */
+function resolveDefaultPlacement() {
+  const projects = q.all('SELECT id, name FROM projects ORDER BY id');
+  const categories = q.all(
+    `SELECT c.id, c.name, s.id AS subproject_id, s.name AS subproject_name, p.id AS project_id, p.name AS project_name
+       FROM categories c JOIN subprojects s ON s.id = c.subproject_id JOIN projects p ON p.id = s.project_id
+      ORDER BY c.id`
+  );
+  const pick = (list) => (list.length === 1 ? list[0] : null);
+  const cat = pick(categories);
+  if (!cat) return null;
+  const proj = pick(projects);
+  if (!proj) return null;
+  return { projectId: proj.id, subprojectId: cat.subproject_id, categoryId: cat.id };
+}
+
+async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = false, dryRun = false, defaultPlacement = null } = {}) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
   const sheet = wb.getWorksheet('Employees') || wb.worksheets[0];
@@ -285,11 +308,37 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
     labelToField.set(headerKey(f.label), f);
     labelToField.set(headerKey(f.key), f);
   }
+  // spellings your real workbook uses that differ from the catalogue label
+  const byKey = new Map(allFields.map((f) => [f.key, f]));
+  for (const [alias, key] of Object.entries(fielddefs.HEADER_ALIASES || {})) {
+    const f = byKey.get(key);
+    if (f) labelToField.set(alias, f);
+  }
   const specials = {
     project_code: 'project.code', project: 'project.name',
     subproject_code: 'subproject.code', subproject: 'subproject.name',
     category_code: 'category.code', category: 'category.name',
   };
+
+  // Repeated headers (your workbook has "account", "billing status" and
+  // "allocation percentage" twice) cannot both resolve to one field: the first
+  // occurrence wins the field and each later one is looked up as
+  // "<header>_2nd_column" so its own values land in their own column.
+  const seenHeaders = new Map();
+  const colField = new Map();
+  labels.forEach((label, col) => {
+    if (!label) return;
+    const n = (seenHeaders.get(label) || 0) + 1;
+    seenHeaders.set(label, n);
+    const wanted = n === 1 ? label : `${label}_${n}${n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}_column`;
+    const f = labelToField.get(wanted) || labelToField.get(label);
+    if (f) colField.set(col, f);
+  });
+
+  // Your file has no Project / Subproject / Category columns; without one of the
+  // three there is nowhere to file the person, so fall back to a single
+  // placement when the database only has one category.
+  const placement = defaultPlacement || resolveDefaultPlacement();
 
   const report = { created: 0, updated: 0, protected: 0, flagged: 0, rows: [], errors: [], dryRun };
   const parsed = [];
@@ -311,7 +360,8 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
       }
       if (v === undefined || v === '') return;
       if (specials[label]) { rec.meta[specials[label]] = String(v).trim(); return; }
-      const f = labelToField.get(label);
+      const f = colField.get(col);
+      // a repeated header's second copy is kept separately, never overwriting
       if (f) rec.values[f.key] = v;
     });
     rec.identity.emp_code = rec.values.emp_code;
@@ -328,7 +378,7 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
   const run = () => {
     for (const rec of parsed) {
       try {
-        applyRow(user, rec, { force, report });
+        applyRow(user, rec, { force, report, placement });
       } catch (e) {
         report.errors.push({ row: rec._row, message: e.message });
       }
@@ -361,7 +411,7 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
   });
 }
 
-function applyRow(user, rec, { force, report }) {
+function applyRow(user, rec, { force, report, placement }) {
   const s = rec.meta;
   const fieldsByKey = new Map(schema.listFields().map((f) => [f.key, f]));
   let changed = false;
@@ -377,6 +427,7 @@ function applyRow(user, rec, { force, report }) {
     if (!p) throw new Error(`Unknown project "${s['project.name'] || s['project.code']}" — create it in Administration first.`);
     projectId = p.id;
   }
+  if (!projectId && placement) projectId = placement.projectId;
   if (!projectId) throw new Error('Project column is required for import rows.');
 
   if (s['subproject.name'] || s['subproject.code']) {
@@ -387,6 +438,7 @@ function applyRow(user, rec, { force, report }) {
     if (!sp) throw new Error(`Unknown subproject "${s['subproject.name'] || s['subproject.code']}" in the selected project.`);
     subprojectId = sp.id;
   }
+  if (!subprojectId && placement) subprojectId = placement.subprojectId;
   if (!subprojectId) throw new Error('Subproject column is required for import rows.');
 
   if (s['category.name'] || s['category.code']) {
@@ -397,6 +449,7 @@ function applyRow(user, rec, { force, report }) {
     if (!c) throw new Error(`Unknown category "${s['category.name'] || s['category.code']}".`);
     categoryId = c.id;
   }
+  if (!categoryId && placement) categoryId = placement.categoryId;
   if (!categoryId) throw new Error('Category column is required for import rows.');
 
   if (!user.isAdmin) {
@@ -518,4 +571,71 @@ function applyRow(user, rec, { force, report }) {
   if (changed) report.updated += 1;
 }
 
-module.exports = { collectRows, buildWorkbook, streamWorkbook, importWorkbook, BASE_HEADERS };
+/**
+ * Builds the import template: your own 65 headers, in your own order, with the
+ * three hierarchy columns the importer needs prepended - because a spreadsheet
+ * row has no place to say which project it belongs to. One example row shows the
+ * expected shape; delete it before uploading.
+ */
+async function buildTemplateWorkbook({ placement = null } = {}) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Resource Planning';
+  const ws = wb.addWorksheet('Employees');
+  const place = placement || resolveDefaultPlacement();
+  const hier = place
+    ? q.all(
+      `SELECT p.name project, s.name subproject, c.name category
+         FROM categories c JOIN subprojects s ON s.id = c.subproject_id JOIN projects p ON p.id = s.project_id
+        WHERE c.id = ?`
+    )[0]
+    : { project: '', subproject: '', category: '' };
+
+  const headers = ['Project', 'Subproject', 'Category', ...fielddefs.WORKBOOK_HEADERS.map(([label]) => label)];
+  ws.addRow(headers);
+  ws.getRow(1).font = { bold: true };
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
+
+  const example = new Array(headers.length).fill('');
+  example[0] = hier?.project || '';
+  example[1] = hier?.subproject || '';
+  example[2] = hier?.category || '';
+  const put = (label, value) => {
+    const i = headers.indexOf(label);
+    if (i >= 0) example[i] = value;
+  };
+  put('employee ID', 'EMP-00001');
+  put('first name', 'Example');
+  put('last name', 'Row — delete me');
+  put('leader input this week', 'Free text the leader types');
+  put('Opp ID', 'OPP-00000');
+  put('Hardblock/Softblock', 'Soft Block');
+  put('demand number', 'DEM-00000');
+  ws.addRow(example);
+
+  const widths = headers.map((h) => Math.min(Math.max(String(h).length + 2, 12), 40));
+  ws.columns.forEach((c, i) => { c.width = widths[i]; });
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+  const notes = wb.addWorksheet('How to use');
+  notes.columns = [{ width: 100 }];
+  [
+    'RESOURCE PLANNING — IMPORT TEMPLATE',
+    '',
+    '1. Fill the Employees sheet, one person per row. Column order matches your own workbook.',
+    '2. Project, Subproject and Category are required by the portal (a spreadsheet row has',
+    '   nowhere else to say where the person sits). Fill them on every row, or lock the',
+    '   placement in Data Hub when you upload but do not change the columns here.',
+    '3. Employee ID identifies the row: an existing ID is updated, a new one is created.',
+    '4. "account", "billing status" and "allocation percentage" appear twice, exactly as in',
+    '   your workbook; both copies are stored.',
+    '5. Delete the example row before uploading.',
+    '6. Upload in Data Hub -> Upload a daily dataset. You get a preview first, nothing is',
+    '   written until you press Apply import.',
+    '7. Values a supervisor has edited in the portal are protected: a later upload reports',
+    '   them as "protected" and leaves them alone unless an admin forces the overwrite.',
+  ].forEach((line) => notes.addRow([line]));
+
+  return wb;
+}
+
+module.exports = { collectRows, buildWorkbook, streamWorkbook, importWorkbook, BASE_HEADERS, resolveDefaultPlacement, buildTemplateWorkbook };

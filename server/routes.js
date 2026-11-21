@@ -735,11 +735,27 @@ router.get('/export', requireAuth, requireCap('export.data'), wrap(async (req, r
 // import & synchronization
 // ---------------------------------------------------------------------------
 router.post('/import', requireAuth, requireCap('import.data'), wrap(async (req, res) => {
-  const { filename, content, force, dryRun } = req.body || {};
+  const { filename, content, force, dryRun, projectId, subprojectId, categoryId } = req.body || {};
   if (!content) return res.status(422).json({ error: 'Choose an Excel (.xlsx) file to upload.' });
   const buffer = Buffer.from(String(content).split(',').pop(), 'base64');
-  const result = await excel.importWorkbook(req.user, buffer, { filename: filename || 'upload.xlsx', force: !!force, dryRun: !!dryRun });
+  // Your HR master workbook carries no Project / Subproject / Category column.
+  // The chosen placement (or the database's single category) files the people.
+  const defaultPlacement = Number(categoryId) && Number(subprojectId) && Number(projectId)
+    ? { projectId: Number(projectId), subprojectId: Number(subprojectId), categoryId: Number(categoryId) }
+    : null;
+  const result = await excel.importWorkbook(req.user, buffer, {
+    filename: filename || 'upload.xlsx', force: !!force, dryRun: !!dryRun, defaultPlacement,
+  });
   res.json({ result });
+}));
+
+// the file you fill in: your own 65 headers plus the 3 placement columns
+router.get('/import/template', requireAuth, requireCap('import.data'), wrap(async (req, res) => {
+  const wb = await excel.buildTemplateWorkbook({});
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="resource-planning-import-template.xlsx"');
+  await wb.xlsx.write(res);
+  res.end();
 }));
 
 router.get('/imports', requireAuth, wrap((req, res) => {

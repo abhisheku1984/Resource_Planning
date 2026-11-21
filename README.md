@@ -54,7 +54,7 @@ dropdown advertised. Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere
 ### Tests
 
 ```bash
-npm test          # 44 integration + UI smoke tests
+npm test          # 47 integration + UI smoke tests
 ```
 
 ## The assistant (in-app, offline, propose-only)
@@ -177,6 +177,37 @@ matches alone are always queued — never auto-merged.
 * A `dryRun` flag validates a workbook and returns per-row errors without
   writing anything, which is what the Data Hub preview uses.
 
+#### Uploading your own workbook (the 65-column HR file)
+
+Your master file has no **Project / Subproject / Category** column — a
+spreadsheet row has nowhere to say which part of the business the person sits
+in. So the portal asks once, and files the rows there:
+
+1. Sign in as an importer (`admin`, or a supervisor with `import.data` — the
+   demo user is `hr.upload@resourceplanning.io` / `Hr@1234567`).
+2. **Data Hub → Import template** downloads `resource-planning-import-template.xlsx`:
+   your own 65 headers, in your own order, with `Project, Subproject, Category`
+   prepended. A **How to use** sheet and one example row are included — delete
+   the example row. (If you would rather keep your file untouched, skip this
+   step: any `.xlsx` with your 65 headers is accepted.)
+3. **Data Hub → Where should new rows go?** pick the project, subproject and
+   category. This is only needed because your file has no placement columns;
+   rows that *do* carry Project / Subproject / Category still use their own.
+4. Drop the file on **Upload a daily dataset**. A **preview** runs in a
+   transaction and is rolled back, so nothing is written: check *New employees*,
+   *Updated placements*, *Protected values* and any *Rows needing attention*.
+5. Press **Apply import**. The workbook is upserted by **Employee ID**.
+
+Header matching is forgiving: case and punctuation are ignored, and the portal
+understands the spellings your file actually uses — `unite manual`,
+`billing end date`, `PID awaited account + blocked date` and
+`Hardblock/Softblock` all land on their own columns. The three headers your
+workbook repeats (`account`, `billing status`, `allocation percentage`) are both
+kept: the second copy is stored under `… (2nd column)`.
+
+`GET /api/import/template` returns the same blank workbook
+(requires `import.data`).
+
 ### Access control
 
 * **Roles** — `admin` (everything) and `supervisor`.
@@ -222,7 +253,8 @@ verb on foreign projects.
 | `PUT` | `/api/users/:id/access` | Project grants + capabilities |
 | `GET` | `/api/duplicates`, `POST /api/duplicates/:id/resolve` | Review queue |
 | `GET` | `/api/export` | Excel snapshot (scope-aware) |
-| `POST` | `/api/import` | Daily dataset upsert (dry-run supported) |
+| `POST` | `/api/import` | Daily dataset upsert (dry-run supported, optional `projectId`/`subprojectId`/`categoryId` placement) |
+| `GET` | `/api/import/template` | Blank workbook: your 65 headers + the 3 placement columns |
 | `GET` | `/api/audit` | Activity feed scoped by project access |
 
 Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticated,

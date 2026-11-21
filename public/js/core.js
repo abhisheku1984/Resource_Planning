@@ -202,6 +202,33 @@ export function setToken(token) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
+/**
+ * Downloads any authenticated workbook route (export, blank import template) as
+ * a file. The route decides the name through Content-Disposition.
+ */
+export async function downloadWorkbook(path, query, fallbackName = 'download.xlsx') {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(query || {})) if (v !== null && v !== undefined && v !== '') params.set(k, v);
+  const res = await fetch(`${path}?${params}`, { headers: { Authorization: `Bearer ${state.token}` } });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(data.error || 'Download failed.', res.status, data);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match ? match[1] : fallbackName;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return { filename };
+}
+
 export async function downloadExport(query) {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(query || {})) if (v !== null && v !== undefined && v !== '') params.set(k, v);

@@ -167,6 +167,111 @@ const LEGACY = [
 const ALL = [...CORE, ...IMPORTED, ...LEGACY];
 
 /**
+ * Header spellings from the real workbook that differ from the catalogue label.
+ * The importer normalises a header (lowercase, punctuation -> underscore) and
+ * looks it up here as a fallback, so your existing file imports unchanged
+ * instead of silently dropping those columns.
+ *
+ *   units / unite manual        -> Unit Manual
+ *   Billing End Date            -> Billing Ended Date
+ *   Hardblock/Softblock         -> Hard Block / Soft Block
+ *   PID awaited account + blocked date
+ *                               -> PID Awaited Account (the date part belongs in
+ *                                  PID Awaited Blocked Date; the template asks
+ *                                  for the two columns separately)
+ */
+/**
+ * The 65 headers of your HR master workbook, verbatim and in order, with the
+ * field key each one maps to. #43 is the blank column; three headers appear
+ * twice (Account, Billing Status, Allocation Percentage) - the second copy of
+ * each is written under its own label and read back into its own key, because
+ * Excel cannot hold two identical headers in one sheet.
+ *
+ * This is what the "Download the import template" button writes, so the file
+ * you fill in has exactly the shape your own data already has.
+ */
+const WORKBOOK_HEADERS = [
+  ['capability', 'capability'],
+  ['employee ID', 'emp_code'],
+  ['first name', 'first_name'],
+  ['last name', 'last_name'],
+  ['revised allocation', 'revised_allocation'],
+  ['build status', 'build_status'],
+  ['job profile family', 'job_profile_family'],
+  ['management level', 'management_level'],
+  ['DOJ', 'doj'],
+  ['country', 'country'],
+  ['manager ID', 'manager_id'],
+  ['manager name', 'manager_name'],
+  ['cost center ID', 'cost_center_id'],
+  ['cost center name', 'cost_center_name'],
+  ['PMI project name', 'pmi_project_name'],
+  ['project ID', 'project_id_ext'],
+  ['allocation start date', 'allocation_start_date'],
+  ['allocation ended date', 'allocation_end_date'],
+  ['last week end date', 'last_week_end_date'],
+  ['allocation percentage', 'allocation_percentage'],
+  ['account', 'account'],
+  ['vertical', 'vertical'],
+  ['status', 'status'],
+  ['service status', 'service_status'],
+  ['source', 'source'],
+  ['account manual', 'account_manual'],
+  ['bench aging', 'bench_aging'],
+  ['bench aging comment', 'bench_aging_comment'],
+  ['bench aging category', 'bench_aging_category'],
+  ['BL status', 'bl_status'],
+  ['bench later issue date', 'bench_later_issue_date'],
+  ['bench later end date', 'bench_later_end_date'],
+  ['offsite/onsite', 'offsite_onsite'],
+  ['vertical manual', 'vertical_manual'],
+  ['unite manual', 'unit_manual'],
+  ['AE', 'ae'],
+  ['VP mapping', 'vp_mapping'],
+  ['billing status', 'billing_status'],
+  ['bench category', 'bench_category'],
+  ['bench subcategory', 'bench_subcategory'],
+  ['account', 'account_secondary'],
+  ['remarks', 'remarks'],
+  ['', null],
+  ['PID aging in weeks', 'pid_aging_weeks'],
+  ['PID segment', 'pid_segment'],
+  ['leader input last week', 'leader_input_last_week'],
+  ['leader input this week', 'leader_input_this_week'],
+  ['leader input PID account awaited name', 'leader_input_pid_account'],
+  ['billing status', 'billing_status_secondary'],
+  ['billing start date', 'billing_start_date'],
+  ['billing end date', 'billing_end_date'],
+  ['PID awaited account + blocked date', 'pid_awaited_account'],
+  ['Opp ID', 'opp_id'],
+  ['allocation percentage', 'allocation_percentage_secondary'],
+  ['account owner', 'account_owner'],
+  ['allocation closure ETA', 'allocation_closure_eta'],
+  ['role of month', 'role_of_month'],
+  ['role of responses', 'role_of_responses'],
+  ['detail comments', 'detail_comments'],
+  ['Hardblock/Softblock', 'block_status'],
+  ['account name', 'account_name'],
+  ['interviewed by', 'interviewed_by'],
+  ['demand number', 'demand_number'],
+  ['giga project name', 'giga_project_name'],
+  ['ARD date', 'ard_date'],
+];
+
+const HEADER_ALIASES = {
+  'unit_manual': 'unit_manual',
+  'unite_manual': 'unit_manual',
+  'billing_end_date': 'billing_end_date',
+  'hardblock_softblock': 'block_status',
+  'hard_block_softblock': 'block_status',
+  'pid_awaited_account_blocked_date': 'pid_awaited_account',
+  // second occurrences of a repeated header land on their own key
+  'billing_status_2nd_column': 'billing_status_secondary',
+  'account_2nd_column': 'account_secondary',
+  'allocation_percentage_2nd_column': 'allocation_percentage_secondary',
+};
+
+/**
  * The CRM / Update panel.
  *
  * A supervisor sees the person (Employee ID, First Name, Last Name) and then
@@ -207,5 +312,5 @@ const CRM_KEYS = [
 module.exports = {
   BENCH_CATEGORIES, ALLOCATION_STATUS, BLOCK_STATUS,
   BILLING_STATUS, MANAGEMENT_LEVEL, CAPABILITY, ROW_STATUS, SERVICE_STATUS, SOURCE,
-  CORE, IMPORTED, LEGACY, ALL, CRM_KEYS,
+  CORE, IMPORTED, LEGACY, ALL, CRM_KEYS, HEADER_ALIASES, WORKBOOK_HEADERS,
 };

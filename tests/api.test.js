@@ -19,6 +19,7 @@ process.env.NODE_ENV = 'test';
 const { app } = require('../server/index');
 const { q } = require('../server/db');
 const seed = require('../server/seed');
+const fielddefs = require('../server/fielddefs');
 
 let server;
 let base;
@@ -891,4 +892,90 @@ test('every one of the BC-BS update columns resolves on every record', async () 
     const missing = keys.filter((k) => !have.has(k));
     assert.deepEqual(missing, [], `${rec.categoryName} is missing ${missing.join(', ')}`);
   }
+});
+
+test('a workbook with only your own 65 headers imports once a placement is chosen', async () => {
+  // The real HR master file has no Project / Subproject / Category column.
+  // Pick the placement once in Data Hub and every row is filed there.
+  const token = await login('sameer.khan@resourceplanning.io');
+  const c = client(token);
+  const boot = (await c('GET', '/bootstrap')).data;
+  const proj = boot.tree[0];
+  const sub = proj.subprojects[0];
+  const cat = sub.categories[0];
+  const headers = fielddefs.WORKBOOK_HEADERS.map(([label]) => label);
+  assert.equal(headers.length, 65);
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Sheet1');
+  ws.addRow(headers);
+  const row = new Array(headers.length).fill('');
+  const put = (label, v) => { row[headers.indexOf(label)] = v; };
+  put('employee ID', 'EMP-NEW-0001');
+  put('first name', 'Real');
+  put('last name', 'Import');
+  put('leader input this week', 'from my own file');
+  put('Opp ID', 'OPP-55555');
+  put('billing end date', '2026-12-31');
+  put('unite manual', 'Unit Seven');
+  put('PID awaited account + blocked date', 'Northwind Bank');
+  put('Hardblock/Softblock', 'Soft Block');
+  ws.addRow(row);
+  const buf = await wb.xlsx.writeBuffer();
+
+  // without a placement the rows cannot be filed and say so
+  const bare = await c('POST', '/import', { filename: 'mine.xlsx', content: buf.toString('base64'), dryRun: true });
+  assert.equal(bare.status, 200);
+  assert.match(bare.data.result.errors[0].message, /Project column is required/);
+
+  const preview = await c('POST', '/import', {
+    filename: 'mine.xlsx', content: buf.toString('base64'), dryRun: true,
+    projectId: proj.id, subprojectId: sub.id, categoryId: cat.id,
+  });
+  assert.equal(preview.status, 200);
+  assert.deepEqual(preview.data.result.errors, []);
+  assert.equal(preview.data.result.created, 1);
+
+  const applied = await c('POST', '/import', {
+    filename: 'mine.xlsx', content: buf.toString('base64'),
+    projectId: proj.id, subprojectId: sub.id, categoryId: cat.id,
+  });
+  assert.equal(applied.status, 200);
+
+  // the four headers the old matcher dropped now land on their own columns
+  const stored = q.all(
+    `SELECT f.key, av.value FROM assignment_values av
+       JOIN fields f ON f.id = av.field_id
+       JOIN assignments a ON a.id = av.assignment_id
+       JOIN employees e ON e.id = a.employee_id
+      WHERE e.emp_code = 'EMP-NEW-0001'`
+  );
+  const map = new Map(stored.map((r) => [r.key, r.value]));
+  assert.equal(map.get('leader_input_this_week'), 'from my own file');
+  assert.equal(map.get('opp_id'), 'OPP-55555');
+  assert.equal(map.get('billing_end_date'), '2026-12-31');
+  assert.equal(map.get('unit_manual'), 'Unit Seven');
+  assert.equal(map.get('pid_awaited_account'), 'Northwind Bank');
+  assert.equal(map.get('block_status'), 'Soft Block');
+});
+
+test('the import template downloads with your 65 headers and round-trips', async () => {
+  const token = await login('sameer.khan@resourceplanning.io');
+  const res = await fetch(`${base}/api/import/template`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-disposition') || '', /resource-planning-import-template/);
+
+  const buf = Buffer.from(await res.arrayBuffer());
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const ws = wb.getWorksheet('Employees');
+  const headers = ws.getRow(1).values.slice(1).map(String);
+  assert.deepEqual(headers.slice(0, 3), ['Project', 'Subproject', 'Category']);
+  // BC-BS sit exactly where the workbook puts them, offset by the 3 hierarchy columns
+  assert.equal(headers[3 + 37], 'billing status');          // BP
+  assert.equal(headers[3 + 45], 'leader input last week');  // BC
+  assert.equal(headers[3 + 52], 'Opp ID');                  // BJ
+  assert.equal(headers.at(-1), 'ARD date');
+  assert.equal(headers.length, 68);
+  assert.ok(wb.getWorksheet('How to use'), 'the template explains itself');
 });

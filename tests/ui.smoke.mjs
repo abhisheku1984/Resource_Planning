@@ -696,3 +696,27 @@ test('clicking a person name opens the update form for that row', async () => {
   link.click();
   assert.ok(picked && picked.assignmentId, 'clicking the name selects that person');
 });
+
+test('Data Hub offers the import template and asks where new rows go', async () => {
+  core.state.user = { id: 1, name: 'Uploader', isAdmin: false, capabilities: { 'import.data': true } };
+  core.state.tree = [{
+    id: 1, code: 'NEXUS', name: 'Nexus Digital Transformation',
+    subprojects: [{ id: 2, name: 'Core Banking Migration', categories: [{ id: 4, name: 'Training Cohort' }] }],
+  }];
+  core.state.imports = [];
+
+  const { renderDataHub } = await import('../public/js/views/datahub.js');
+  const content = new El('div');
+  content.id = 'content';
+  documentShim.body.replaceChildren(content);
+  await renderDataHub(content, {});
+  await new Promise((r) => setTimeout(r, 60));
+
+  const text = flatten(content).join(' ');
+  assert.ok(text.includes('Import template'), 'the blank template with the 65 headers is downloadable from here');
+  assert.ok(text.includes('Where should new rows go?'), 'the placement picker is offered for files without a Project column');
+  assert.ok(text.includes('Upload a daily dataset'));
+
+  const selects = content.querySelectorAll('select');
+  assert.ok(selects.length >= 3, 'project / subproject / category are selectable');
+});
