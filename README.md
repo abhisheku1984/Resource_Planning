@@ -135,10 +135,11 @@ Hidden columns are never serialised, so they cannot leak through the API.
 
 ### The Update panel (supervisor CRM)
 
-Clicking a row opens **Update**: the person's *Employee ID* and name at the top,
-then one ordered list of the columns a supervisor owns — **Leader Input Last
-Week** through **Giga Project Name**, per the workbook. Not the whole 68-field
-record. Fill anything, press **Submit**, and the fields are written in a single
+Clicking a person's **name** (a link in the table) opens **Update**: *Employee
+ID*, *Name* and *Placement* as read-only context, then one ordered list of the
+18 columns a leader owns — **Leader Input Last Week** through **Giga Project
+Name**, per the workbook. Not the whole 68-field record, and not the contact or
+identity fields: a leader sees only what they are meant to fill in. Fill anything, press **Submit**, and the fields are written in a single
 transaction, audited with the supervisor's name.
 
 The column list is a setting (`crm_fields`), editable in
