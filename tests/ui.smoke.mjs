@@ -998,7 +998,12 @@ for (const language of ['en', 'hi']) test(`hands-free Ask (${language}): speech 
   button(assistant.el, l('English', 'हिन्दी')).click();
   button(assistant.el, l('Start voice mode', 'बोलना शुरू करें')).click(); await settleClicks();
   assert.ok(!packInstalled && !listening, 'install requires a separate explicit gesture');
-  button(assistant.el, l('Install English speech pack', 'हिन्दी स्पीच पैक इंस्टॉल करें')).click(); await settleClicks();
+  const controls = assistant.el.querySelector('.voice-actions');
+  button(controls, l('Test speaker', 'स्पीकर जाँचें')).click();
+  assert.match(heard.at(-1), l(/English speaker test/, /हिन्दी आवाज़ की जाँच/));
+  assert.ok(!packInstalled && !listening && !asks.length, 'testing the speaker does not consume the install action or send a command');
+  button(controls, l('Install English speech pack', 'हिन्दी स्पीच पैक इंस्टॉल करें')).click(); await settleClicks();
+  assert.ok(button(controls, l('Auto read-aloud', 'स्वतः वाचन')).disabled, 'manual playback cannot overlap listening');
   const say = async (text) => {
     assert.ok(listening, 'next turn must not require clicking the mic');
     const result = [{ transcript: text }]; result.isFinal = true;
@@ -1077,6 +1082,49 @@ test('voice setup explains missing installer/policy and ignores an install that 
   await voice.toggle(); assert.match(states.at(-1).text, /permissions policy/); assert.deepEqual(starts, []);
 });
 
+test('standalone speaker before a reply: visible with setup closed, stoppable, no mic, pack probes or commands', async (t) => {
+  const { createAssistant } = await import('../public/js/views/assistant.js');
+  let micChecks = 0, cancelled = 0; const spoken = [], requests = [];
+  replaceForTest(t, window, 'SpeechRecognition', class { constructor() { micChecks++; } });
+  replaceForTest(t, window, 'SpeechSynthesisUtterance', class { constructor(text) { this.text = text; } });
+  replaceForTest(t, window, 'speechSynthesis', { getVoices: () => [{ lang: 'en-US', localService: false }, { lang: 'hi-IN', localService: true }, { lang: 'en-IN', localService: true }],
+    speak(u) { spoken.push(u); }, cancel() { cancelled++; } });
+  t.mock.method(globalThis, 'fetch', async (url) => { requests.push(url); return jsonResponse({ projectNames: ['Summer Project'] }); });
+  core.state.user = { isAdmin: false };
+  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
+  const controls = a.el.querySelector('.voice-actions'), mic = button(controls, 'Start voice mode'), speaker = button(controls, 'Test speaker');
+  assert.ok(!a.el.querySelector('.voice-help').open && !speaker.disabled && !mic.disabled);
+  assert.equal(spoken.length, 0, 'no autoplay on open');
+  speaker.click(); assert.equal(spoken.length, 1); assert.match(spoken[0].text, /English speaker test/);
+  assert.equal(spoken[0].lang, 'en-IN'); assert.ok(spoken[0].voice.localService);
+  assert.ok(mic.disabled); assert.equal(button(controls, 'Stop playback'), speaker); assert.equal(speaker.getAttribute('aria-pressed'), 'true');
+  speaker.click(); assert.equal(cancelled, 1); spoken[0].onend();
+  assert.match(a.el.querySelector('#ask-speaker-status').textContent, /Playback stopped/);
+  assert.equal(button(controls, 'Test speaker'), speaker); assert.ok(!mic.disabled && !speaker.disabled);
+  speaker.click(); spoken[1].onerror(); assert.match(a.el.querySelector('#ask-speaker-status').textContent, /Could not play sound/);
+  assert.ok(!mic.disabled && !speaker.disabled); assert.equal(micChecks, 0); assert.deepEqual(requests, ['/api/agent/projects']);
+  a.toggle(false);
+});
+
+test('both browser audio APIs absent: mic and speaker explain the limitation; typed Ask still returns a written reply', async (t) => {
+  const { createAssistant } = await import('../public/js/views/assistant.js');
+  for (const key of ['SpeechRecognition', 'webkitSpeechRecognition', 'speechSynthesis', 'SpeechSynthesisUtterance']) replaceForTest(t, window, key, undefined);
+  replaceForTest(t, window, 'isSecureContext', true); core.state.user = { isAdmin: false };
+  const messages = [];
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url === '/api/agent/projects') return jsonResponse({ projectNames: ['Summer Project'] });
+    assert.equal(url, '/api/agent/ask'); messages.push(JSON.parse(opts.body));
+    return jsonResponse({ projectName: 'Summer Project', reply: '3 people in Summer Project.' });
+  });
+  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
+  button(a.el, 'Start voice mode').click(); await settleClicks(); button(a.el, 'Test speaker').click();
+  assert.match(a.el.querySelector('#ask-mic-status').textContent, /type instead/);
+  assert.match(a.el.querySelector('#ask-speaker-status').textContent, /No local English read-aloud voice/); assert.deepEqual(messages, []);
+  const input = a.el.querySelector('.assistant-input'); input.value = 'How many people?'; input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
+  assert.deepEqual(messages, [{ message: 'How many people?', projectName: 'Summer Project', language: 'en' }]);
+  assert.match(flatten(a.el.querySelector('.assistant-log')).join(' '), /3 people in Summer Project/); a.toggle(false);
+});
+
 test('unavailable English pack: show Windows dictation steps, accept explicitly sent text and read only with a local voice', async (t) => {
   const { createAssistant } = await import('../public/js/views/assistant.js');
   const { starts } = setupPacks(t, () => 'unavailable', () => assert.fail('no installable pack'));
@@ -1099,7 +1147,7 @@ test('unavailable English pack: show Windows dictation steps, accept explicitly 
   input.value = 'How many people?'; input.dispatchEvent({ type: 'input' }); assert.equal(messages.length, 0);
   input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
   assert.deepEqual(messages, [{ message: 'How many people?', projectName: 'Summer Project', language: 'en' }]);
-  const read = button(help, 'Read last reply'); assert.equal(read.disabled, false);
+  const read = button(a.el.querySelector('.voice-actions'), 'Read last reply'); assert.equal(read.disabled, false);
   read.click(); assert.deepEqual(spoken, []); assert.match(flatten(a.el).join(' '), /No local English read-aloud/);
   local = true; read.click(); assert.deepEqual(spoken, ['3 people in Summer Project.']);
   a.toggle(false); assert.ok(cancelled); assert.deepEqual(starts, []);
@@ -1139,7 +1187,7 @@ test('Hindi without a local pack: typed Ask still works, read-aloud rejects Engl
   voices.push({ lang: 'hi-IN', localService: true }); read.click();
   assert.equal(spoken.length, 1); assert.equal(spoken[0].text, reply); assert.equal(spoken[0].voice, voices.at(-1));
   button(a.el, 'English').click(); spoken[0].onend();
-  assert.equal(cancelled, 1); assert.deepEqual(starts, []); assert.ok(button(a.el, 'Read last reply').disabled);
+  assert.equal(cancelled, 1); assert.deepEqual(starts, []); assert.equal(button(a.el, 'Test speaker').disabled, false, 'only a sample, not the previous-language reply, can now be played');
   a.toggle(false);
 });
 

@@ -26,32 +26,56 @@ export function createAssistant() {
     onclick: () => changeLanguage(lang) }, lang === 'hi' ? 'हिन्दी' : 'English'));
   const languageBar = h('div', { class: 'voice-language', role: 'group', 'aria-label': langTitle },
     h('span', { class: 'field-label' }, langTitle), ...languageButtons);
-  const voiceText = h('span', { class: 'subtle', role: 'status' }, t('On-device English · no audio uploaded', 'डिवाइस पर हिन्दी · आवाज़ अपलोड नहीं होती'));
-  const startLabel = () => t('Start voice mode', 'बोलना शुरू करें');
-  const voiceBtn = h('button', { class: 'btn btn-sm', 'aria-pressed': 'false', onclick: () => voice.toggle() }, startLabel());
-  const readBtn = h('button', { class: 'btn btn-xs', disabled: true, onclick: () => voice.readReply(lastReply) });
+  const voiceText = h('p', { id: 'ask-mic-status', class: 'subtle', role: 'status' },
+    t('Mic off · no audio uploaded. You can also type below and press Enter.', 'माइक बंद है · आवाज़ अपलोड नहीं होती। आप नीचे लिखकर एंटर भी दबा सकते हैं।'));
+  const playbackText = h('p', { id: 'ask-speaker-status', class: 'subtle', role: 'status' });
+  const micLabel = h('span'), speakerLabel = h('span');
+  function audioButton(glyph, label, description, onclick) {
+    const image = icon(glyph, 18); image?.setAttribute('aria-hidden', 'true');
+    return h('button', { type: 'button', class: 'btn btn-sm', 'aria-describedby': description, onclick }, image, label);
+  }
+  const voiceBtn = audioButton('mic', micLabel, 'ask-mic-status', () => voice.toggle());
+  const readBtn = audioButton('speaker', speakerLabel, 'ask-speaker-status', () => voice.togglePlayback(lastReply));
+  const audioActions = h('div', { class: 'voice-actions' }, voiceBtn, readBtn);
   const help = h('details', { class: 'voice-help' });
+  let mic = { active: false, action: 'start' }, playing = false;
+  function renderAudioButtons() {
+    // Update the captions, not the buttons/icons: keep keyboard focus on Stop.
+    micLabel.textContent = ({ stop: t('Stop voice', 'माइक बंद करें'), install: t('Install English speech pack', 'हिन्दी स्पीच पैक इंस्टॉल करें'),
+      retry: t('Check again', 'फिर जाँचें') })[mic.action] || t('Start voice mode', 'बोलना शुरू करें');
+    speakerLabel.textContent = playing ? t('Stop playback', 'सुनना रोकें') : mic.active ? t('Auto read-aloud', 'स्वतः वाचन')
+      : lastReply ? t('Read last reply', 'पिछला जवाब सुनें') : t('Test speaker', 'स्पीकर जाँचें');
+    voiceBtn.disabled = playing; voiceBtn.setAttribute('aria-pressed', String(mic.active));
+    readBtn.disabled = mic.active; readBtn.setAttribute('aria-pressed', String(playing));
+    voiceBtn.title = playing ? t('Stop playback first to use the microphone.', 'माइक का उपयोग करने से पहले आवाज़ रोकें।') : micLabel.textContent;
+    readBtn.title = mic.active ? t('Voice mode reads replies automatically when a local voice is available.', 'स्थानीय आवाज़ उपलब्ध होने पर वॉइस मोड जवाब अपने आप पढ़ता है।') : speakerLabel.textContent;
+  }
   function renderVoiceLabels() {
     languageButtons.forEach((b) => b.setAttribute('aria-pressed', String(language === b.getAttribute('lang'))));
-    readBtn.textContent = t('Read last reply', 'पिछला जवाब सुनें');
+    renderAudioButtons();
     mount(help, h('summary', null, t('Voice setup and device dictation', 'आवाज़ की सेटिंग और डिक्टेशन')),
       window.self !== window.top ? h('a', { href: location.href, target: '_blank', rel: 'noopener noreferrer' }, t('Open the app in its own tab', 'ऐप को अलग टैब में खोलें')) : null,
       h('p', null, t('Try the app in a standalone tab in an up-to-date desktop Chrome browser. Use localhost on the server PC or HTTPS.', 'ऐप को अपडेट किए गए डेस्कटॉप ब्राउज़र में अलग टैब में खोलें। सर्वर कंप्यूटर पर localhost या HTTPS का उपयोग करें।')),
       h('p', null, t('Windows 11 alternative: Open Start → Voice access and complete its English setup. Focus the message box, dictate your question or CRM command, then say “Press Enter”. Windows controls its own microphone.', 'स्थानीय हिन्दी पैक उपलब्ध न हो तो संदेश बॉक्स में हिन्दी में लिखकर Enter दबाएँ। अगर आपके डिवाइस में ऑफ़लाइन हिन्दी डिक्टेशन उपलब्ध है, तो उसका उपयोग भी कर सकते हैं। उस माइक को डिवाइस नियंत्रित करता है, ऐप नहीं।')),
-      h('p', null, t('Read-aloud needs a local English voice; it does not use the microphone.', 'जवाब सुनने के लिए डिवाइस पर हिन्दी की स्थानीय आवाज़ चाहिए। इसके लिए माइक की ज़रूरत नहीं है।')),
-      h('div', { class: 'row' }, h('button', { class: 'btn btn-xs', onclick: () => el.querySelector('.assistant-input')?.focus() }, t('Focus message box', 'संदेश बॉक्स चुनें')), readBtn));
+      h('p', null, t('The speaker needs a local English voice, not a microphone. Without audio, type below and press Enter to get a written reply.', 'स्पीकर के लिए हिन्दी की स्थानीय आवाज़ चाहिए, माइक नहीं। आवाज़ के बिना नीचे लिखें और एंटर दबाएँ। जवाब यहीं पढ़ें।')),
+      h('button', { class: 'btn btn-xs', onclick: () => el.querySelector('.assistant-input')?.focus() }, t('Focus message box', 'संदेश बॉक्स चुनें')));
   }
-  const voice = createLocalVoice({ language, onCommand: send, onState({ text, active, action, help: showHelp }) {
-    voiceText.textContent = text;
-    voiceBtn.textContent = ({ stop: t('Stop voice', 'माइक बंद करें'), install: t('Install English speech pack', 'हिन्दी स्पीच पैक इंस्टॉल करें'),
-      retry: t('Check again', 'फिर जाँचें'), 'stop-reading': t('Stop reading', 'पढ़ना बंद करें') })[action] || startLabel();
-    voiceBtn.setAttribute('aria-pressed', String(active || action === 'stop-reading'));
-    readBtn.disabled = !lastReply || active || action === 'stop-reading';
-    if (showHelp) help.open = true;
-    else if (active) help.open = false;
-  } });
+  const voice = createLocalVoice({ language, onCommand: send,
+    onState(state) {
+      mic = state; playing = false; voiceText.textContent = state.text; playbackText.textContent = '';
+      renderAudioButtons();
+      if (state.help) help.open = true;
+      else if (state.active) help.open = false;
+    },
+    onPlayback(state) {
+      playing = state.playing; playbackText.textContent = state.text; renderAudioButtons();
+      if (state.help) help.open = true;
+    },
+  });
   const crm = createAssistantCrm(crmHost, send, () => language);
-  mount(el, head, scopeHost, queueHost, crmHost, log, h('div', { class: 'assistant-voice' }, languageBar, voiceBtn, voiceText, help), foot);
+  const feedback = h('div', { class: 'voice-feedback' }, voiceText, playbackText);
+  mount(el, head, scopeHost, queueHost, crmHost, log,
+    h('div', { class: 'assistant-voice' }, languageBar, audioActions, feedback, help), foot);
 
   let open = false, busy = false;
   let proposals = [], names = [], selected = null;
@@ -215,7 +239,7 @@ export function createAssistant() {
   async function send(text) {
     const id = epoch;
     const reply = await respond(text);
-    if (id === epoch && open && reply) { lastReply = reply; readBtn.disabled = voice.isActive(); }
+    if (id === epoch && open && reply) { lastReply = reply; renderAudioButtons(); }
     return reply;
   }
   async function respond(text) {
@@ -294,7 +318,7 @@ export function createAssistant() {
     document.querySelectorAll('.assistant-launch').forEach((b) => b.classList.toggle('active', open));
     if (open) {
       if (!log.children.length) seed();
-      renderFoot(); refreshProjects(); refreshQueue(); el.querySelector('.assistant-input')?.focus();
+      voice.prepareSpeaker(); renderFoot(); refreshProjects(); refreshQueue(); el.querySelector('.assistant-input')?.focus();
     } else {
       epoch++; busy = false; lastReply = ''; voice.stop(); waitingPerson = false; pendingQuestion = '';
     }
