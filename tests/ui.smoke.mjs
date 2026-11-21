@@ -453,7 +453,7 @@ test('the CRM panel offers only the configured update columns', async () => {
   const { createCrm } = await import('../public/js/views/crm.js');
   const { state } = await import('../public/js/core.js');
   state.crmKeys = ['leader_input_last_week', 'leader_input_this_week', 'opp_id',
-    'demand_number', 'block_status', 'giga_project_name'];
+    'demand_number', 'block_status'];
   const crm = createCrm({ getScope: () => ({ projectId: 1 }), onChanged() {} });
   documentShim.body.replaceChildren(crm.el);
   crm.showAssignment(1);
@@ -462,7 +462,7 @@ test('the CRM panel offers only the configured update columns', async () => {
   const text = flatten(crm.el).join(' ');
   // identity and placement are context, not inputs
   assert.ok(text.includes('Worker 1'), 'the person is shown');
-  assert.ok(text.includes('EMP-01001'), 'the employee ID is shown');
+  assert.ok(text.includes('Worker 1'), 'the person name is shown');
   assert.ok(!text.includes('Designation'), 'the job title is not an update field');
 
   const edited = ['input', 'select', 'textarea']
@@ -666,7 +666,7 @@ test('the Update panel shows the employee ID, the name and exactly the CRM colum
   await new Promise((r) => setTimeout(r, 80));
 
   const text = flatten(panel.el).join(' ');
-  assert.ok(text.includes('EMP-01001'), 'the employee ID is shown');
+  assert.ok(text.includes('Worker 1'), 'the person name is shown');
   assert.ok(text.includes('Worker 1'), 'the person is shown');
   assert.ok(text.includes('Leader Input This Week'), 'a configured CRM column is rendered');
   assert.ok(!text.includes('Email Address'), 'identity fields are not part of the update form');

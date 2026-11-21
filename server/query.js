@@ -106,6 +106,8 @@ function resolveScope(user, params) {
     scoped.subprojectId = scoped.subprojectId || cat.subproject_id;
     scoped.projectId = scoped.projectId || cat.project_id;
   }
+  // facetsFor() needs the permitted project list when nothing narrower is set
+  scoped.allowed = allowed;
   return { scope: scoped, allowed };
 }
 

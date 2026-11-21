@@ -23,7 +23,7 @@ const FALLBACK_KEYS = [
   'billing_start_date', 'billing_end_date', 'pid_awaited_account',
   'pid_awaited_blocked_date', 'opp_id', 'account_owner', 'allocation_closure_eta',
   'role_of_month', 'role_of_responses', 'detail_comments', 'block_status',
-  'account_name', 'interviewed_by', 'demand_number', 'giga_project_name',
+  'account_name', 'interviewed_by', 'demand_number',
 ];
 
 export function createSubmitPanel({ onSaved, getScope }) {

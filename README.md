@@ -54,7 +54,7 @@ dropdown advertised. Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere
 ### Tests
 
 ```bash
-npm test          # 41 integration + UI smoke tests
+npm test          # 44 integration + UI smoke tests
 ```
 
 ## The assistant (in-app, offline, propose-only)
@@ -135,22 +135,23 @@ Hidden columns are never serialised, so they cannot leak through the API.
 
 ### The Update panel (supervisor CRM)
 
-Clicking a person's **name** (a link in the table) opens **Update**: *Employee
-ID*, *Name* and *Placement* as read-only context, then one ordered list of the
-18 columns a leader owns — **Leader Input Last Week** through **Giga Project
-Name**, per the workbook. Not the whole 68-field record, and not the contact or
-identity fields: a leader sees only what they are meant to fill in. Fill anything, press **Submit**, and the fields are written in a single
-transaction, audited with the supervisor's name.
+Clicking a person's **name** opens **Update**: the name, then the 17 workbook
+columns **BC–BS** and nothing else — Leader Input Last Week through Demand
+Number. There is no Employee ID field (the row identifies the person), no
+contact details, no placement, no remarks:
 
-The column list is a setting (`crm_fields`), editable in
-*Administration → CRM panel*: add, remove and reorder without a code change.
-Submit needs no Excel round trip — see *Excel synchronisation* for how the next
-export shows the change.
+| | | |
+|---|---|---|
+| Leader Input Last Week | Leader Input This Week | Leader Input PID Account Awaited Name |
+| Billing Start Date | Billing Ended Date | PID Awaited Account |
+| PID Awaited Blocked Date | Opp ID | Account Owner |
+| Allocation Closure ETA | Role of Month | Role of Responses |
+| Detail Comments | Hard Block / Soft Block | Account Name |
+| Interviewed By | Demand Number | |
 
-The separate CRM panel stays for people management (contact details, new
-joiners, placements and per-field history). It autosaves with a 900 ms debounce
-and reports `Unsaved → Saving… → Saved`; on failure it shows `Not saved` with an
-explicit retry, and the pending values stay in the form.
+Fill anything, press **Submit**: the values are written in a single transaction
+and audited with the leader's name. `crmKeys` in `server/fielddefs.js` is the
+single source for that list, and it drives the panel order and the export order.
 
 ### Duplicate prevention
 

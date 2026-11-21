@@ -696,6 +696,14 @@ table.data td.cell-emp { white-space: nowrap; }
 }
 .crm-section-title:first-child { margin-top: 2px; }
 .crm-section-title::after { content: ''; flex: 1 1 auto; height: 1px; background: var(--line); }
+/* one-line person header: avatar + name, nothing else */
+.crm-person {
+  display: flex; align-items: center; gap: 11px;
+  padding-bottom: 12px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.crm-person .select { max-width: 210px; width: auto; }
+
 /* read-only context line (project · subproject · category) */
 .crm-context {
   display: flex; flex-direction: column; gap: 6px;

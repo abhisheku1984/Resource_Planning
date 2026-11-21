@@ -136,6 +136,9 @@ const FILTER_KEYS = ['bench_category', 'status', 'allocation_percentage', 'accou
   'billing_status', 'build_status', 'capability', 'management_level', 'bench_aging_category',
   'vertical', 'account_name', 'country', 'bl_status', 'offsite_onsite', 'giga_project_name'];
 const SUBMIT_KEYS = fielddefs.SUBMIT_KEYS || fielddefs.ALL.filter((f) => f.submit).map((f) => f.key);
+// the leader's update columns (BC-BS) must exist in every category, even though
+// most of them are not visible table columns
+const CRM_KEYS = fielddefs.CRM_KEYS;
 const ACCOUNTS = ['Northwind Bank', 'Helios Retail', 'Vertex Insurance', 'Cobalt Telecom'];
 const SKILLS = ['Java', 'Salesforce', 'SAP', 'Data Engineering', 'Testing', 'DevOps', 'Oracle Fusion', 'UI/UX'];
 
@@ -253,7 +256,8 @@ function run({ reset = false, quiet = false } = {}) {
             // must be resolvable so the Submit form can render it
             // facets and supervisor fields must resolve in every category, or
             // the dropdowns and the Update panel come up empty
-            const visible = layout.show.includes(f.key) || submitField || filterable;
+            const crmField = CRM_KEYS.includes(f.key);
+            const visible = layout.show.includes(f.key) || submitField || filterable || crmField;
             q.run(
               `INSERT INTO category_fields
                  (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order)
@@ -262,7 +266,7 @@ function run({ reset = false, quiet = false } = {}) {
               layout.readonly.includes(f.key) ? 0 : 1,
               layout.required.includes(f.key) ? 1 : 0,
               filterable ? 1 : 0,
-              submitField ? 1 : 0,
+              (submitField || crmField) ? 1 : 0,
               layout.show.includes(f.key) ? order++ : 900 + f.id
             );
           }

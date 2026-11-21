@@ -217,7 +217,11 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
             // resolvable, so facets and the Submit form work even when the
             // column is not displayed as a table column by default.
             const isSubmit = !!fielddefs.ALL.find((x) => x.key === f.key)?.submit;
-            const visible = def.show.includes(f.key) || def.filterable.includes(f.key) || isSubmit;
+            // the leader's update columns (BC-BS) must exist in every category,
+            // whether or not that category shows them as a table column
+            const isCrm = fielddefs.CRM_KEYS.includes(f.key);
+            const visible = def.show.includes(f.key) || def.filterable.includes(f.key)
+              || isSubmit || isCrm;
             q.run(
               `INSERT INTO category_fields
                  (category_id, field_id, visible, editable, required, filterable, submit_field, sort_order)
@@ -226,7 +230,7 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
               f.key === 'emp_code' ? 0 : 1,
               f.key === 'bench_category' && catName === 'Delivery Status' ? 1 : 0,
               def.filterable.includes(f.key) ? 1 : 0,
-              isSubmit ? 1 : 0,
+              (isSubmit || isCrm) ? 1 : 0,
               visible ? order++ : 900 + f.id
             );
           }

@@ -154,9 +154,11 @@ test('scenario 3 + 4: different categories expose different dynamic columns', as
   // column that is neither a facet nor a supervisor field
   assert.ok(!tCols.includes('bench_subcategory'));
   assert.ok(bCols.includes('billing_status') && bCols.includes('build_status') && bCols.includes('billing_start_date'));
-  // giga_project_name is now a facet, so it resolves everywhere; use a column
-  // that is neither shown, a facet, nor a supervisor field
-  assert.ok(!bCols.includes('leader_input_this_week'));
+  // The BC-BS update columns resolve in every category by design (the leader
+  // form must always render), so compare on a column that is neither shown, a
+  // facet, nor an update field.
+  assert.ok(!bCols.includes('bench_subcategory'));
+  assert.ok(!bCols.includes('manager_name'));
   assert.notDeepEqual(tCols, bCols);
   assert.ok(dCols.includes('status'));
   assert.ok(dCols.includes('block_status'), 'Delivery Status tracks hard/soft block');
@@ -755,19 +757,21 @@ test('the CRM panel offers the workbook supervisor columns and nothing else', as
   const res = await admin('GET', '/settings/crm-fields');
   assert.equal(res.status, 200);
 
+  // BC-BS of the workbook, and nothing else: Giga Project Name is not in that
+  // strip, so it must not appear in the leader's form
   const want = ['leader_input_last_week', 'leader_input_this_week', 'leader_input_pid_account',
     'billing_start_date', 'billing_end_date', 'pid_awaited_account', 'pid_awaited_blocked_date',
     'opp_id', 'account_owner', 'allocation_closure_eta', 'role_of_month', 'role_of_responses',
-    'detail_comments', 'block_status', 'account_name', 'interviewed_by', 'demand_number',
-    'giga_project_name'];
-  assert.deepEqual(res.data.keys, want, 'the panel shows exactly these columns, in workbook order');
+    'detail_comments', 'block_status', 'account_name', 'interviewed_by', 'demand_number'];
+  assert.deepEqual(res.data.keys, want, 'the panel shows exactly the BC-BS columns, in order');
   // identity is not one of them: Employee ID and the names are the header, not editable fields
   for (const k of ['emp_code', 'first_name', 'last_name']) assert.ok(!res.data.keys.includes(k));
 
   const labels = res.data.fields.map((f) => f.label);
   assert.ok(labels.includes('Leader Input Last Week'));
   assert.ok(labels.includes('Hard Block / Soft Block'));
-  assert.ok(labels.includes('Giga Project Name'));
+  assert.ok(labels.includes('Demand Number'));
+  assert.ok(!labels.includes('Giga Project Name'), 'Giga Project Name is outside BC-BS');
 });
 
 test('an administrator can change the CRM columns without a code change', async () => {
@@ -869,4 +873,22 @@ test('re-importing our own export does not create fields from the change stamps'
   assert.equal(after.length, before, `the import did not add fields (before ${before}, after ${after.length})`);
   assert.ok(!after.some((k) => /updated_by$|updated_at$|last_supervisor_update/.test(k)),
     '"— Updated By" / "Last Supervisor Update" are ignored, not turned into fields');
+});
+
+test('every one of the BC-BS update columns resolves on every record', async () => {
+  // Regression: the panel rendered from `record.columns`, so a column the
+  // category never listed silently vanished from the leader's form. On the demo
+  // data six of the seventeen were missing in every category.
+  const priya = client(await login('priya.nair@resourceplanning.io'));
+  const keys = (await priya('GET', '/bootstrap')).data.crmKeys;
+  assert.equal(keys.length, 17, 'BC through BS');
+
+  const rows = (await priya('GET', '/employees?pageSize=20')).data.rows;
+  assert.ok(rows.length > 3);
+  for (const row of rows) {
+    const rec = (await priya('GET', `/employees/${row.assignmentId}`)).data.record;
+    const have = new Set(rec.columns.map((c) => c.key));
+    const missing = keys.filter((k) => !have.has(k));
+    assert.deepEqual(missing, [], `${rec.categoryName} is missing ${missing.join(', ')}`);
+  }
 });

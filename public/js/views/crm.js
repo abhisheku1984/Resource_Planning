@@ -17,7 +17,7 @@ const FALLBACK_KEYS = [
   'billing_start_date', 'billing_end_date', 'pid_awaited_account',
   'pid_awaited_blocked_date', 'opp_id', 'account_owner', 'allocation_closure_eta',
   'role_of_month', 'role_of_responses', 'detail_comments', 'block_status',
-  'account_name', 'interviewed_by', 'demand_number', 'giga_project_name',
+  'account_name', 'interviewed_by', 'demand_number',
 ];
 
 export function createCrm({ onChanged, getScope }) {
@@ -286,29 +286,18 @@ export function createCrm({ onChanged, getScope }) {
     const crmKeys = (state.crmKeys && state.crmKeys.length ? state.crmKeys : FALLBACK_KEYS)
       .filter((k) => k !== 'remarks');
     const typeOf = (k) => colMap.get(k)?.type || state.fields?.find((f) => f.key === k)?.type;
-    const context = [
-      ['Employee ID', v.emp_code],
-      ['Name', v.name],
-      ['Placement', `${rec.projectName} · ${rec.subprojectName} · ${rec.categoryName}`],
-    ].filter(([, val]) => val);
+    // The row already identifies the associate, so the form needs no Employee ID
+    // and no placement details: one name, then the columns they update.
+    const person = v.name || `${v.first_name || ''} ${v.last_name || ''}`.trim();
 
     mount(bodyHost,
       h('div', { class: 'crm-form' },
-        h('div', { class: 'row', style: { gap: '11px', paddingBottom: '12px', borderBottom: '1px solid var(--line)' } },
-          h('div', { class: 'avatar avatar-lg' }, initials(v.name || '')),
+        h('div', { class: 'crm-person' },
+          h('div', { class: 'avatar avatar-lg' }, initials(person)),
           h('div', { class: 'col grow', style: { minWidth: '0' } },
-            h('div', { class: 'truncate', style: { fontWeight: '650', fontSize: '14px' } }, v.name),
-            h('div', { class: 'mono subtle', style: { fontSize: '11.5px' } }, v.emp_code),
-            h('div', { class: 'row', style: { gap: '5px', marginTop: '4px', flexWrap: 'wrap' } },
-              statusBadge(v.status),
-              h('span', { class: 'badge badge-outline' }, rec.categoryName),
-            ),
+            h('div', { class: 'truncate', style: { fontWeight: '650', fontSize: '15px' } }, person || 'Select a person'),
           ),
-        ),
-        h('div', { class: 'crm-context' },
-          ...context.map(([label, val]) => h('span', null,
-            h('b', { style: { fontWeight: '650' } }, `${label}: `), val)),
-          placementSwitcher,
+          placementSwitcher || null,
         ),
         h('div', { class: 'crm-section-title' }, 'Supervisor update'),
         h('div', { class: 'crm-grid' },
