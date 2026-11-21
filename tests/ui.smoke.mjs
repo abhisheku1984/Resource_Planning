@@ -1000,7 +1000,7 @@ for (const language of ['en', 'hi']) test(`hands-free Ask (${language}): speech 
   assert.ok(!packInstalled && !listening, 'install requires a separate explicit gesture');
   const controls = assistant.el.querySelector('.voice-actions');
   button(controls, l('Test speaker', 'स्पीकर जाँचें')).click();
-  assert.match(heard.at(-1), l(/English speaker test/, /हिन्दी आवाज़ की जाँच/));
+  assert.match(heard.at(-1), l(/project update is ready/, /प्रोजेक्ट की रिपोर्ट/));
   assert.ok(!packInstalled && !listening && !asks.length, 'testing the speaker does not consume the install action or send a command');
   button(controls, l('Install English speech pack', 'हिन्दी स्पीच पैक इंस्टॉल करें')).click(); await settleClicks();
   assert.ok(button(controls, l('Auto read-aloud', 'स्वतः वाचन')).disabled, 'manual playback cannot overlap listening');
@@ -1095,7 +1095,7 @@ test('standalone speaker before a reply: visible with setup closed, stoppable, n
   const controls = a.el.querySelector('.voice-actions'), mic = button(controls, 'Start voice mode'), speaker = button(controls, 'Test speaker');
   assert.ok(!a.el.querySelector('.voice-help').open && !speaker.disabled && !mic.disabled);
   assert.equal(spoken.length, 0, 'no autoplay on open');
-  speaker.click(); assert.equal(spoken.length, 1); assert.match(spoken[0].text, /English speaker test/);
+  speaker.click(); assert.equal(spoken.length, 1); assert.match(spoken[0].text, /project update is ready/);
   assert.equal(spoken[0].lang, 'en-IN'); assert.ok(spoken[0].voice.localService);
   assert.ok(mic.disabled); assert.equal(button(controls, 'Stop playback'), speaker); assert.equal(speaker.getAttribute('aria-pressed'), 'true');
   speaker.click(); assert.equal(cancelled, 1); spoken[0].onend();
@@ -1235,4 +1235,25 @@ test('switching Ask language keeps the scoped CRM draft, but neither an old revi
   assert.equal(a.el.querySelector('.assistant-crm').querySelector('textarea').value, 'सहेजने की पुष्टि करें');
   await type('Confirm save'); assert.equal(saves.length, 0); await type('Review changes'); await type('Confirm save');
   assert.deepEqual(saves, [{ crmProjectName: project, changes: { detail_comments: 'सहेजने की पुष्टि करें' }, rev: 8, reason: 'Confirmed CRM form in assistant' }]); a.toggle(false);
+});
+
+test('Ask remembers speaker settings for the next playback, including after switching language, without opening a mic', async (t) => {
+  const { createAssistant } = await import('../public/js/views/assistant.js');
+  for (const key of ['rp.speakerMode', 'rp.speakerVolume', 'rp.askLanguage']) {
+    localStorage.removeItem(key); t.after(() => localStorage.removeItem(key));
+  }
+  const spoken = [], voices = ['en-IN', 'hi-IN'].map((lang) => ({ lang, localService: true }));
+  replaceForTest(t, window, 'SpeechSynthesisUtterance', class {});
+  replaceForTest(t, window, 'speechSynthesis', { getVoices: () => voices, speak(u) { spoken.push(u); u.onend(); } });
+  t.mock.method(globalThis, 'fetch', async (url) => { assert.equal(url, '/api/agent/projects'); return jsonResponse({ projectNames: [] }); });
+  core.state.user = { isAdmin: false };
+  const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
+  const select = a.el.querySelector('#ask-speaker-mode'), slider = a.el.querySelector('#ask-speaker-volume');
+  assert.equal(select.value, 'auto'); assert.equal(slider.value, '100');
+  select.value = 'device'; select.dispatchEvent({ type: 'change' }); slider.value = '65'; slider.dispatchEvent({ type: 'input' });
+  assert.equal(slider.getAttribute('aria-valuetext'), '65%'); assert.equal(spoken.length, 0);
+  button(a.el, 'Test speaker').click(); assert.equal(spoken[0].volume, 0.65); assert.equal(spoken[0].lang, 'en-IN');
+  button(a.el, 'हिन्दी').click(); await settleClicks(); assert.equal(a.el.querySelector('#ask-speaker-mode').value, 'device');
+  assert.equal(a.el.querySelector('#ask-speaker-volume').value, '65'); button(a.el, 'स्पीकर जाँचें').click();
+  assert.equal(spoken[1].volume, 0.65); assert.equal(spoken[1].lang, 'hi-IN'); a.toggle(false);
 });

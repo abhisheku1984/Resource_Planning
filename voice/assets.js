@@ -16,4 +16,11 @@ module.exports = [
   { lang: 'hi', kind: 'output', file: 'cmu-indic-hin-ab-2017.flitevox', bytes: 30897320,
     url: blob(voices, '4963a08c77502c5ae5cb6e4b3a04ba98c449d00f'),
     sha256: '4be49f3da1c46c32f155d74974c73bcf10ffd91ec508c74210274fc074cf60ad' },
+  // Separate opt-in download: native-language 24 kHz VITS/HiFi-GAN models, not EQ presets.
+  { lang: 'en', kind: 'studio', file: 'ninada-5.1.2-en-IN.onnx', bytes: 29280152,
+    url: blob('hemanth/ninada', '2755df1c39aec3981d47e1f2d1114801afa62740'),
+    sha256: 'ee8840fe000fed659ddf916f8a070f42b07a6a6c234e5d13209d53c025a95652' },
+  { lang: 'hi', kind: 'studio', file: 'ninada-5.1.2-hi-IN.onnx', bytes: 29283680,
+    url: blob('hemanth/ninada', 'cb77f6883bc203c0473e383ca10f3dbad5db4b49'),
+    sha256: 'c4caca31b52c26989a847767b212109b3a8c9aa56ebb8ab78198f8d893378867' },
 ];

@@ -28,7 +28,14 @@ function blockedByPolicy(feature) {
   return policy?.features?.().includes(feature) && !policy.allowsFeature(feature);
 }
 
-export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, language: initial = 'en', offline = offlineSpeech }) {
+export function speakerSettings(mode, percent) {
+  const n = percent == null || percent === '' ? 100 : Number(percent);
+  return { mode: ['studio', 'standard', 'device'].includes(mode) ? mode : 'auto',
+    volume: (Number.isFinite(n) ? Math.min(200, Math.max(0, n)) : 100) / 100 };
+}
+
+export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, language: initial = 'en',
+  offline = offlineSpeech, getSpeaker = speakerSettings }) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let language = initial === 'hi' ? 'hi' : 'en';
   const t = (en, hi) => language === 'hi' ? hi : en;
@@ -58,28 +65,55 @@ export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, la
   function speak(text, done, knownPacks) {
     const token = {}; speaking = token;
     function finish(ok, note = '') { if (speaking === token) { speaking = null; done(ok, note); } }
+    const { mode, volume } = getSpeaker(); // snapshot for this test/reply, never changes the mic
+    if (!volume) return finish(false, t('Speaker volume is 0%. Raise it in Speaker settings.', 'वॉल्यूम 0% है। स्पीकर सेटिंग में इसे बढ़ाएँ।'));
+    const studioSetup = t('For Studio, run npm.cmd run voice:studio in the app folder, then refresh Ask.', 'स्टूडियो के लिए ऐप फ़ोल्डर में npm.cmd run voice:studio चलाएँ, फिर ऐप रीफ़्रेश करें।');
+    function device(prefix) {
+      const synth = window.speechSynthesis;
+      const voices = synth?.getVoices().filter((v) => v.localService === true && family(v.lang) === language) || [];
+      // Recognition locale is NOT a synthesis accent. Select an actual device voice.
+      const indian = voices.find((v) => tag(v.lang) === `${language}-in`), voice = indian || voices[0];
+      if (!voice || !window.SpeechSynthesisUtterance) return finish(false, prefix + noSpeaker() + (mode === 'device'
+        ? t(' Choose Auto to use an installed speaker pack.', ' इंस्टॉल किया गया स्पीकर पैक उपयोग करने के लिए स्वतः चुनें।') : ''));
+      const note = prefix + t(`Device voice: ${voice.name || voice.lang} (${voice.lang}).`, `डिवाइस की आवाज़: ${voice.name || voice.lang} (${voice.lang})।`)
+        + (!indian && language === 'en' ? ' For an Indian accent, run npm.cmd run voice:studio.' : '');
+      const u = new window.SpeechSynthesisUtterance(text); u.voice = voice; u.lang = voice.lang; u.volume = Math.min(1, volume);
+      token.cancel = () => synth.cancel();
+      u.onend = () => finish(true, note); u.onerror = () => finish(false);
+      synth.speak(u);
+    }
     function choose(packs) {
       if (speaking !== token) return;
-      try {
-        if (packs?.output && offline.canPlay()) {
-          const label = t('Voice: Indian English (KSP, offline).', 'आवाज़: हिन्दी (ऑफ़लाइन)।');
-          token.cancel = offline.play(packs.output, text, (ok) => finish(ok, ok ? label : setup()));
-          return;
-        }
-        const synth = window.speechSynthesis;
-        const voices = synth?.getVoices().filter((v) => v.localService === true && family(v.lang) === language) || [];
-        // Recognition locale is NOT a synthesis accent. Select an actual device voice.
-        const indian = voices.find((v) => tag(v.lang) === `${language}-in`);
-        const voice = indian || voices[0];
-        if (!voice || !window.SpeechSynthesisUtterance) return finish(false, noSpeaker());
-        const note = !indian && language === 'en' ? `Device voice: ${voice.lang}. For an Indian accent, run npm run voice:setup.` : '';
-        const u = new window.SpeechSynthesisUtterance(text); u.voice = voice; u.lang = voice.lang;
-        token.cancel = () => synth.cancel();
-        u.onend = () => finish(true, note); u.onerror = () => finish(false);
-        synth.speak(u);
-      } catch { finish(false); }
+      const models = { studio: packs?.studio, standard: packs?.output };
+      const order = mode === 'auto' ? [...['studio', 'standard'].filter((e) => models[e] && offline.canPlay()), 'device'] : [mode];
+      function next(prefix = '') {
+        if (speaking !== token) return;
+        const engine = order.shift();
+        if (engine === 'device') { try { device(prefix); } catch { finish(false); } return; }
+        const studio = engine === 'studio';
+        if (!models[engine] || !offline.canPlay()) return finish(false, studio ? studioSetup : setup());
+        const label = studio ? t('Studio · Indian English', 'स्टूडियो · हिन्दी') : t('Standard · Indian English (KSP)', 'स्टैंडर्ड · हिन्दी');
+        const report = (message) => {
+          if (speaking !== token) return;
+          if (active) status(message + t(' Microphone paused.', ' माइक रुका हुआ है।'));
+          else onPlayback({ playing: true, text: message + t(' The app microphone is off.', ' ऐप का माइक बंद है।') });
+        };
+        report(t(`Preparing ${label}…`, `${label} की आवाज़ तैयार हो रही है…`));
+        const onStart = () => report(t(`Playing ${label}.`, `${label} की आवाज़ चल रही है।`));
+        const ended = (ok, started) => {
+          if (speaking !== token) return;
+          // Never replay already-audible content (especially CRM confirmation prompts).
+          if (!ok && !started && order.length) return queueMicrotask(() => next(prefix + (studio
+            ? t('Studio could not start. ', 'स्टूडियो शुरू नहीं हुआ। ') : t('Standard could not start. ', 'स्टैंडर्ड शुरू नहीं हुआ। '))));
+          const error = studio ? t('Studio playback failed. Try Standard or a local device voice in Speaker settings.', 'स्टूडियो की आवाज़ नहीं चल सकी। स्पीकर सेटिंग में स्टैंडर्ड या डिवाइस की आवाज़ चुनें।') : setup();
+          finish(ok, prefix + (ok ? t(`Voice: ${label} (offline).`, `आवाज़: ${label} (ऑफ़लाइन)।`) : error));
+        };
+        try { token.cancel = offline.play(models[engine], text, ended, { engine, language, volume, onStart }); }
+        catch { ended(false, false); }
+      }
+      next();
     }
-    if (knownPacks || !offline.canPlay()) choose(knownPacks);
+    if (knownPacks || mode === 'device' || !offline.canPlay()) choose(knownPacks);
     else offline.packs(language).then(choose, () => choose(null));
   }
   function micError(code, lang) {
@@ -186,13 +220,13 @@ export function createLocalVoice({ onCommand, onState, onPlayback = () => {}, la
       cancelSpeech();
       return onPlayback({ playing: false, text: t('Playback stopped. The app microphone is off.', 'आवाज़ बंद कर दी गई है। ऐप का माइक बंद है।') });
     }
-    const sample = t('This is the English speaker test. To ask a question, select Start voice mode.', 'नमस्ते। यह हिन्दी आवाज़ की जाँच है। सवाल पूछने के लिए बोलना शुरू करें चुनें।');
+    const sample = t('Your project update is ready for review.', 'आपके प्रोजेक्ट की रिपोर्ट समीक्षा के लिए तैयार है।');
     onPlayback({ playing: true, text: reply ? t('Reading the last reply. The app microphone is off.', 'पिछला जवाब पढ़ा जा रहा है। ऐप का माइक बंद है।')
       : t('Playing a speaker test. The app microphone is off.', 'स्पीकर की जाँच हो रही है। ऐप का माइक बंद है।') });
     const finished = reply ? t('Finished reading. The app microphone is off.', 'जवाब पढ़ लिया गया। ऐप का माइक बंद है।')
       : t('Speaker test finished. No sound? Check your output device and volume.', 'स्पीकर की जाँच पूरी हुई। आवाज़ नहीं आई? स्पीकर और वॉल्यूम जाँचें।');
     speak(reply || sample, (ok, note) => onPlayback({ playing: false, help: !ok,
-      text: [ok ? finished : t('Could not play sound. Check your output device and volume.', 'आवाज़ नहीं चलाई जा सकी। आउटपुट डिवाइस और वॉल्यूम जाँचें।'), note].filter(Boolean).join(' ') }));
+      text: ok ? [finished, note].filter(Boolean).join(' ') : note || t('Could not play sound. Check your output device and volume.', 'आवाज़ नहीं चलाई जा सकी। आउटपुट डिवाइस और वॉल्यूम जाँचें।') }));
   }
   return { toggle, stop, togglePlayback, prepareSpeaker, setLanguage, isActive: () => active || !!speaking };
 }

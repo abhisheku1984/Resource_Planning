@@ -34,7 +34,7 @@ app.use((req, res, next) => {
     // Policies on external workers are separate from the page. The pinned Vosk
     // worker generates Embind JS adapters as well as compiling WASM. It is a
     // self-contained module: permit that compilation but NO script imports or
-    // child workers. Flite needs WASM only. The page never gets either exception.
+    // child workers. Both speaker engines need WASM only. The page gets neither exception.
     req.path === '/speech/vosk.worker.js' ? "script-src 'unsafe-eval'; worker-src 'none'"
       : req.path === '/js/speech/speaker-worker.js' ? "script-src 'self' 'wasm-unsafe-eval'; worker-src 'none'" : "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",

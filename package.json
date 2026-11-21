@@ -13,7 +13,8 @@
     "seed": "node --disable-warning=ExperimentalWarning server/seed.js --reset",
     "check:filters": "node --disable-warning=ExperimentalWarning scripts/check-filters.js",
     "voice:setup": "npm ci --prefix voice --omit=dev --ignore-scripts --no-audit --no-fund && node voice/setup.js",
-    "voice:check": "node --disable-warning=ExperimentalWarning voice/check-browser.mjs"
+    "voice:check": "node --disable-warning=ExperimentalWarning voice/check-browser.mjs",
+    "voice:studio": "npm ci --prefix voice/studio --omit=dev --ignore-scripts --no-audit --no-fund && node voice/setup.js --studio"
   },
   "engines": {
     "node": ">=22.5"

@@ -23,15 +23,26 @@ function speechAssets(root = path.join(__dirname, '../voice')) {
   serve('/vosk.wasm', vosk + 'vosk.wasm');
   serve('/flite.wasm', 'node_modules/@echogarden/flite-wasi/flite.wasm');
   for (const name of ['debug', 'fd', 'fs_mem', 'fs_opfs', 'index', 'strace', 'wasi', 'wasi_defs']) serve(`/wasi/${name}.js`, `${wasi}${name}.js`);
+  const studioFiles = [];
+  for (const [dir, names] of [
+    ['ort', ['ort.wasm.min.mjs', 'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']],
+    ['tokens', ['studio_g2p.js', 'g2p.js', 'ipa_g2p.js']],
+  ]) {
+    const pkg = dir === 'ort' ? 'onnxruntime-web/dist/' : 'ninada/src/';
+    for (const name of names) {
+      const url = `/${dir}/${name}`;
+      serve(url, 'studio/node_modules/' + pkg + name); studioFiles.push(url);
+    }
+  }
   for (const a of assets) serve('/models/' + a.file, '.cache/models/' + a.file);
   router.get('/status', (req, res) => {
     const packs = { en: {}, hi: {} };
     const has = (url) => fs.existsSync(files.get(url));
-    const input = has('/vosk.wasm') && has('/vosk.worker.js');
-    const output = has('/flite.wasm') && has('/wasi/index.js');
+    const ready = { input: has('/vosk.wasm') && has('/vosk.worker.js'), output: has('/flite.wasm') && has('/wasi/index.js'),
+      studio: studioFiles.every(has) };
     for (const a of assets) {
       const url = '/models/' + a.file;
-      if ((a.kind === 'input' ? input : output) && fs.statSync(files.get(url), { throwIfNoEntry: false })?.size === a.bytes) packs[a.lang][a.kind] = '/speech' + url;
+      if (ready[a.kind] && fs.statSync(files.get(url), { throwIfNoEntry: false })?.size === a.bytes) packs[a.lang][a.kind] = '/speech' + url;
     }
     res.set('Cache-Control', 'no-store').json(packs);
   });

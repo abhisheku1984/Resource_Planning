@@ -1,0 +1,10 @@
+{
+  "name": "resource-planning-studio-voices",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional offline neural speaker. No CDN, hosted TTS or GPU required.",
+  "dependencies": {
+    "ninada": "5.1.2",
+    "onnxruntime-web": "1.31.1"
+  }
+}

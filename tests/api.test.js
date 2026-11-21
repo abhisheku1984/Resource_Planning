@@ -76,9 +76,10 @@ test('offline speech serves only fixed local assets, never an install/upload end
   assert.equal(status.status, 200); assert.equal(status.headers.get('cache-control'), 'no-store');
   const packs = await status.json(); assert.deepEqual(Object.keys(packs).sort(), ['en', 'hi']);
   for (const p of Object.values(packs)) for (const url of Object.values(p)) assert.match(url, /^\/speech\/models\/[\w.-]+$/);
-  for (const url of ['/speech/install', '/speech/models/not-installed.tar.gz', '/speech/node_modules/anything', '/speech/setup.js']) assert.equal((await fetch(base + url)).status, 404);
+  for (const url of ['/speech/install', '/speech/models/not-installed.tar.gz', '/speech/node_modules/anything', '/speech/setup.js', '/speech/studio/install', '/speech/tokens/index.js', '/speech/ort/ort.webgpu.min.mjs', '/speech/models/voice.onnx.part']) assert.equal((await fetch(base + url)).status, 404);
   assert.equal((await fetch(base + '/speech/status', { method: 'POST' })).status, 404);
   for (const [url, directive] of [['/', "script-src 'self'"], ['/js/voice.js', "script-src 'self'"],
+    ['/js/speech/studio.js', "script-src 'self'"], ['/speech/ort/ort.wasm.min.mjs', "script-src 'self'"],
     ['/speech/vosk.worker.js', "script-src 'unsafe-eval'"], ['/js/speech/speaker-worker.js', "script-src 'self' 'wasm-unsafe-eval'"]]) {
     const headers = (await fetch(base + url, { method: 'HEAD' })).headers;
     const csp = headers.get('content-security-policy').split('; ');
