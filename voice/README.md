@@ -1,4 +1,8 @@
-# Optional offline speech files
+# Offline speech files
+
+On Windows, **`start-windows.bat`** prepares voice before opening the app. `voice:prepare` checks the local runtimes and verifies already-downloaded model sizes and SHA-256s. It installs only missing/invalid microphone files and the Standard speaker for languages without Studio. A Studio-only install needs about 82 MB of mic models, plus the small baseline runtime if missing. Ready installations work offline; no npm reinstall, prompt or extra launcher is needed. `--no-voice` skips the startup preflight. A failure prints the cause and does not prevent the app from starting. No web request can run this installer.
+
+## Explicit manual setup
 
 `npm run voice:setup` is an operator-initiated download, not a server endpoint. It installs the pinned NPM packages here and verifies the four model files in `.cache/models/` against their byte lengths and SHA-256 digests in `assets.js`. No model or generated audio belongs in Git. `-- en` or `-- hi` after the npm command installs just that language. A failed download is not served; rerunning checks existing files before downloading again. Do not substitute an arbitrary model, a ZIP renamed to `.tar.gz`, or a language tag as a voice.
 
@@ -33,4 +37,4 @@ npm.cmd run voice:check                  # Standard speaker + Vosk in both langu
 npm.cmd run voice:check -- --studio      # after voice:studio: Auto / Studio + Vosk in both languages
 ```
 
-This starts a temporary loopback server with **in-memory demo data** and launches headless Chromium with native speech APIs disabled. It generates questions using the selected real engine, reports raw/leveled RMS and peak in dBFS, passes the leveled WAV through Chromium's file-backed microphone, and checks the scoped response. It observes actual playback buffers, peak headroom and track release during reply/after Stop. These measurements test the app signal, not a laptop's acoustic volume or subjective listening quality. It does **not** test physical hardware or require a browser binary download. The ordinary `npm test` suite requires neither these packs nor a browser.
+This starts a temporary loopback server with **in-memory demo data** and launches headless Chromium with native speech APIs disabled. It generates questions using the selected real engine, reports raw/leveled RMS and peak in dBFS, passes the leveled WAV through Chromium's file-backed microphone, and checks the scoped response. The microphone is the first audio action, not warmed up by Test speaker. The check observes actual playback, peak headroom, release during reply/after Stop and standalone speaker testing without any new mic request. These measurements test the app signal, not a laptop's acoustic volume or subjective listening quality. It does **not** test physical hardware or require a browser binary download. The ordinary `npm test` suite requires neither these packs nor a browser.

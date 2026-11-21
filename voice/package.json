@@ -2,7 +2,7 @@
   "name": "resource-planning-offline-voice",
   "version": "1.0.0",
   "private": true,
-  "description": "Optional, same-origin browser speech runtimes. Install only with npm run voice:setup.",
+  "description": "Optional, same-origin browser speech runtimes. Prepared by the Windows launcher or explicit CLI setup.",
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "0.4.2",
     "@echogarden/flite-wasi": "0.1.1",

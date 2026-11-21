@@ -27,7 +27,9 @@ export function createAssistant() {
   const languageBar = h('div', { class: 'voice-language', role: 'group', 'aria-label': langTitle },
     h('span', { class: 'field-label' }, langTitle), ...languageButtons);
   const voiceText = h('p', { id: 'ask-mic-status', class: 'subtle', role: 'status' },
-    t('Mic off · no audio uploaded. You can also type below and press Enter.', 'माइक बंद है · आवाज़ अपलोड नहीं होती। आप नीचे लिखकर एंटर भी दबा सकते हैं।'));
+    t('Microphone off.', 'माइक बंद है।'));
+  const partialText = h('p', { class: 'voice-partial', 'aria-live': 'off', dir: 'auto' });
+  const openTab = window.self !== window.top ? h('a', { href: location.href, target: '_blank', rel: 'noopener noreferrer', class: 'hidden' }) : null;
   const playbackText = h('p', { id: 'ask-speaker-status', class: 'subtle', role: 'status' });
   const micLabel = h('span'), speakerLabel = h('span');
   function audioButton(glyph, label, description, onclick) {
@@ -70,28 +72,26 @@ export function createAssistant() {
   function renderVoiceLabels() {
     languageButtons.forEach((b) => b.setAttribute('aria-pressed', String(language === b.getAttribute('lang'))));
     renderAudioButtons();
-    mount(help, h('summary', null, t('Speaker settings and voice setup', 'स्पीकर सेटिंग और वॉइस सेटअप')), speakerControls(),
-      h('p', null, t('Changes apply to the next test or reply. Above 100% boosts Studio and Standard; device voices use system volume. For Studio, double-click install-studio-voices-windows.bat in the app folder or run npm.cmd run voice:studio (about 100 MB). Refresh Ask, then test the speaker.', 'सेटिंग अगले परीक्षण या जवाब पर लागू होगी। 100% से ऊपर का बूस्ट स्टूडियो और स्टैंडर्ड के लिए है। डिवाइस की आवाज़ सिस्टम वॉल्यूम पर निर्भर है। स्टूडियो के लिए ऐप फ़ोल्डर में install-studio-voices-windows.bat पर डबल-क्लिक करें या npm.cmd run voice:studio चलाएँ (लगभग 100 MB)। ऐप रीफ़्रेश करके स्पीकर जाँचें।')),
-      window.self !== window.top ? h('a', { href: location.href, target: '_blank', rel: 'noopener noreferrer' }, t('Open the app in its own tab', 'ऐप को अलग टैब में खोलें')) : null,
-      h('p', null, t('For the offline microphone and faster Standard voices, run npm.cmd run voice:setup in the app folder, or use setup-voice-windows.bat (about 155 MB).', 'ऑफ़लाइन माइक और तेज़ स्टैंडर्ड आवाज़ों के लिए ऐप फ़ोल्डर में npm.cmd run voice:setup चलाएँ या setup-voice-windows.bat का उपयोग करें (लगभग 155 MB)।')),
-      h('p', null, t('Open Ask in its own tab on localhost or HTTPS in current desktop Chrome or Edge. Select English or हिन्दी, then Test speaker or Start voice mode. Allow the microphone, wait for “Listening”, speak, then pause. Audio stays in this browser.', 'डेस्कटॉप Chrome या Edge के अलग टैब में localhost या HTTPS पर ऐप खोलें। हिन्दी चुनें, फिर “स्पीकर जाँचें” या “बोलना शुरू करें” दबाएँ। माइक की अनुमति दें। “सुन रहे हैं” दिखने पर सवाल पूछें और थोड़ा रुकें। आवाज़ इसी ब्राउज़र में रहती है।')),
-      h('p', null, t('No microphone? Type below and press Enter. On supported Windows 11 PCs you can also dictate English into the box using Voice access.', 'माइक नहीं है? नीचे हिन्दी में लिखकर एंटर दबाएँ। स्पीकर जाँचने के लिए माइक की ज़रूरत नहीं है।')),
-      h('button', { class: 'btn btn-xs', onclick: () => el.querySelector('.assistant-input')?.focus() }, t('Focus message box', 'संदेश बॉक्स चुनें')));
+    if (openTab) openTab.textContent = t('Open Ask in its own tab', 'Ask को अलग टैब में खोलें');
+    mount(help, h('summary', null, t('Speaker settings', 'स्पीकर सेटिंग')), speakerControls(),
+      h('p', { class: 'subtle' }, t('Volume above 100% boosts Studio and Standard voices on the next reply.', '100% से ऊपर का वॉल्यूम अगले जवाब में स्टूडियो और स्टैंडर्ड आवाज़ों को बढ़ाता है।')));
   }
   const voice = createLocalVoice({ language, getSpeaker, onCommand: send,
+    onPartial(text) {
+      const preview = text ? t(`Hearing: ${text}`, `सुनाई दे रहा है: ${text}`) : '';
+      if (partialText.textContent !== preview) partialText.textContent = preview;
+    },
     onState(state) {
       mic = state; playing = false; voiceText.textContent = state.text; playbackText.textContent = '';
       renderAudioButtons();
-      if (state.help) help.open = true;
-      else if (state.active) help.open = false;
+      openTab?.classList.toggle('hidden', !state.help);
     },
     onPlayback(state) {
       playing = state.playing; playbackText.textContent = state.text; renderAudioButtons();
-      if (state.help) help.open = true;
     },
   });
   const crm = createAssistantCrm(crmHost, send, () => language);
-  const feedback = h('div', { class: 'voice-feedback' }, voiceText, playbackText);
+  const feedback = h('div', { class: 'voice-feedback' }, voiceText, partialText, playbackText, openTab);
   mount(el, head, scopeHost, queueHost, crmHost, log,
     h('div', { class: 'assistant-voice' }, languageBar, audioActions, feedback, help), foot);
 
@@ -338,12 +338,14 @@ export function createAssistant() {
       if (!log.children.length) seed();
       voice.prepareSpeaker(); renderFoot(); refreshProjects(); refreshQueue(); el.querySelector('.assistant-input')?.focus();
     } else {
-      epoch++; busy = false; lastReply = ''; voice.stop(); waitingPerson = false; pendingQuestion = '';
+      epoch++; busy = false; lastReply = ''; waitingPerson = false; pendingQuestion = '';
+      voice.dismiss(t('Voice stopped when Ask closed.', 'Ask बंद होने पर आवाज़ बंद कर दी गई।'));
+      help.open = false; renderAudioButtons();
     }
   }
   renderHead(); renderScope(); renderFoot(); renderVoiceLabels();
   const launch = () => toggle();
-  const suspend = () => { if (voice.isActive()) voice.stop(); };
+  const suspend = () => voice.dismiss(t('Voice stopped when this tab was hidden.', 'टैब छिपने पर आवाज़ बंद कर दी गई।'));
   const visibility = () => { if (document.hidden) suspend(); };
   document.addEventListener('rp:assistant', launch);
   window.addEventListener('pagehide', suspend);

@@ -16,7 +16,7 @@ Everything below was verified against the code in this repository, not assumed.
 | Any analytics, telemetry, crash reporting? | None. |
 | Any scripts or fonts loaded from a third-party site? | No. Fonts and optional speech runtimes are served locally. |
 | Can other people on my Wi-Fi see it? | No, by default. The server binds to `127.0.0.1` only. |
-| What needs internet? | Initial dependency install and, if chosen, one-time Standard voice/mic setup (about 155 MB) and/or Studio speaker setup (about 100 MB for both languages), or a browser-managed language-pack download. Normal use needs no internet. |
+| What needs internet? | Initial dependency install. The normal Windows launcher also prepares missing offline mic/Standard files once (up to about 155 MB). `--no-voice` skips that step. Optional Studio speakers (about 100 MB) and browser-managed packs are separate downloads. Normal use needs no internet. |
 | Where is the actual data? | One file: `data/resource_planning.db` |
 
 ---
@@ -86,8 +86,7 @@ been fixed: the font files are now vendored in `public/fonts/` (100 KB, SIL Open
 Font License) and served from the app itself. Verified: the served HTML contains
 **zero** `https://` references.
 
-**Optional speech setup is not server runtime.** Only the operator's `npm run voice:setup` / `npm run voice:studio` (or their dedicated Windows launchers) download pinned runtime packages
-and speech models from npm/GitHub. The setup command never reads SQLite or audio.
+**Speech preparation is not server runtime.** Before starting the server, `start-windows.bat` invokes a separate setup process. It verifies the required English/Hindi microphone files, and Standard speaker files where Studio is not installed. Only missing/invalid files and missing runtimes need downloads from npm/GitHub. Runtimes use a pinned lockfile with install scripts disabled. A ready installation doesn't contact either service. Use `start-windows.bat --no-voice` or `npm start` to skip this preflight. Explicit `voice:setup` and `voice:studio` commands remain available. Setup never reads SQLite or microphone audio.
 The server has no speech install or audio-upload endpoint; `/speech/` serves an allowlist of
 local runtime and model files. In the browser, model data may be cached in site
 storage/IndexedDB. Microphone samples, synthesized PCM/WAVs and the synthesizer's virtual files are not saved by Ask. Studio inference is single-threaded WASM with same-origin model, runtime and tokenizer files only.
@@ -173,7 +172,7 @@ Node process, not a language model and not a cloud service.
 | Concern | Reality |
 |---|---|
 | Does it call an AI provider? | No. There is no API key, no SDK, no HTTP client for it. `server/agent.js` is plain string matching plus SQL against the local database. |
-| Does it send speech to a provider? | No. The optional Indian English/Hindi packs run Vosk and either Flite or the Studio neural model in browser workers. Only final transcribed text goes through the existing Ask command path; microphone samples never leave the browser. During command processing and read-back the app is not recording. Without optional files, native recognition requires `processLocally`, and native read-aloud requires a matching `localService` voice. No cloud fallback. OS dictation is controlled by the OS. |
+| Does it send speech to a provider? | No. The optional Indian English/Hindi packs run Vosk and either Flite or the Studio neural model in browser workers. Partial words are displayed transiently in the tab. Only final transcribed text goes through the existing Ask command path; microphone samples never leave the browser. During command processing and read-back the app is not recording. Without optional files, native recognition requires `processLocally`, and native read-aloud requires a matching `localService` voice. No cloud fallback. OS dictation is controlled by the OS. |
 | What is remembered when I switch languages? | Only the language, speaker mode and volume preferences are stored in browser local storage for this feature, not audio, transcripts or CRM drafts. Switching stops app voice and drops late microphone/read-aloud events. An open draft stays in memory and must be reviewed again before confirmation. |
 | Can it change records on its own? | No. Chat change requests are proposals for administrator approval. Explicitly opening the CRM form is a separate, authenticated editing workflow: dictation drafts values in memory. A separate review and confirmation submits the displayed changes with the current revision through the existing employee update path. |
 | Can it leak another project's data? | The assistant resolves only Giga Project Names from active placements in the caller’s access. Counts, lists, proposals and CRM all intersect the exact workbook name with assignment ACLs. A missing or ambiguous name never enables a broader search. CRM submit rechecks the placement, CRM/edit grants, editable fields and revision. |

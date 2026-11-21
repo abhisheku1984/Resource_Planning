@@ -1,51 +1,23 @@
 'use strict';
 const path = require('node:path');
-const fs = require('node:fs');
+const { runtimes, modelDir, packStatus } = require('../voice/catalog');
 const express = require('express');
 const assets = require('../voice/assets');
 
 // Read-only allowlist. Never expose node_modules, model staging files or a write/download API.
 function speechAssets(root = path.join(__dirname, '../voice')) {
   const router = express.Router();
-  const files = new Map();
   function serve(url, file) {
     file = path.join(root, file);
-    files.set(url, file);
     router.get(url, (req, res) => {
       res.sendFile(file, { maxAge: url.startsWith('/models/') ? '1d' : 0 }, (err) => {
         if (err && !res.headersSent) res.sendStatus(404);
       });
     });
   }
-  const vosk = 'node_modules/@lichess-org/vosk-browser/dist/';
-  const wasi = 'node_modules/@bjorn3/browser_wasi_shim/dist/';
-  serve('/vosk.worker.js', vosk + 'vosk.worker.js');
-  serve('/vosk.wasm', vosk + 'vosk.wasm');
-  serve('/flite.wasm', 'node_modules/@echogarden/flite-wasi/flite.wasm');
-  for (const name of ['debug', 'fd', 'fs_mem', 'fs_opfs', 'index', 'strace', 'wasi', 'wasi_defs']) serve(`/wasi/${name}.js`, `${wasi}${name}.js`);
-  const studioFiles = [];
-  for (const [dir, names] of [
-    ['ort', ['ort.wasm.min.mjs', 'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']],
-    ['tokens', ['studio_g2p.js', 'g2p.js', 'ipa_g2p.js']],
-  ]) {
-    const pkg = dir === 'ort' ? 'onnxruntime-web/dist/' : 'ninada/src/';
-    for (const name of names) {
-      const url = `/${dir}/${name}`;
-      serve(url, 'studio/node_modules/' + pkg + name); studioFiles.push(url);
-    }
-  }
-  for (const a of assets) serve('/models/' + a.file, '.cache/models/' + a.file);
-  router.get('/status', (req, res) => {
-    const packs = { en: {}, hi: {} };
-    const has = (url) => fs.existsSync(files.get(url));
-    const ready = { input: has('/vosk.wasm') && has('/vosk.worker.js'), output: has('/flite.wasm') && has('/wasi/index.js'),
-      studio: studioFiles.every(has) };
-    for (const a of assets) {
-      const url = '/models/' + a.file;
-      if (ready[a.kind] && fs.statSync(files.get(url), { throwIfNoEntry: false })?.size === a.bytes) packs[a.lang][a.kind] = '/speech' + url;
-    }
-    res.set('Cache-Control', 'no-store').json(packs);
-  });
+  for (const group of Object.values(runtimes)) for (const [url, file] of Object.entries(group)) serve(url, file);
+  for (const a of assets) serve('/models/' + a.file, path.join(modelDir, a.file));
+  router.get('/status', (req, res) => res.set('Cache-Control', 'no-store').json(packStatus(root)));
   // Missing runtime/data files must not receive the SPA's HTML fallback.
   router.use((req, res) => res.sendStatus(404));
   return router;

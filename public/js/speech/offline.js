@@ -1,13 +1,14 @@
 import { openOfflineInput } from './offline-input.js';
 import { levelSpeech } from './level.js';
 
-// Only the install command downloads files from the internet. A button click
+// Only setup on the host downloads files from the internet. A button click
 // reads availability on the app origin; it cannot install anything.
 async function packs(language) {
   try {
     const res = await fetch('/speech/status', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-    return res.ok ? (await res.json())[language] || {} : {};
-  } catch { return {}; }
+    const entry = res.ok && (await res.json())?.[language];
+    return entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : null;
+  } catch { return null; } // Unreachable/stale server is not evidence of a missing pack.
 }
 function play(modelUrl, text, done, { engine = 'standard', language = 'en', volume = 1, onStart } = {}) {
   const ctx = new AudioContext();

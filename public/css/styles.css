@@ -1203,9 +1203,11 @@ table.mini tr:last-child td { border-bottom: none; }
 .voice-actions .btn { height: auto; min-height: 34px; padding: 6px 8px; white-space: normal; line-height: 1.35; }
 .voice-actions .btn svg { width: 18px; height: 18px; }
 .voice-actions .btn:not(:disabled) svg { color: var(--brand-600); }
+.voice-feedback p:empty { display: none; }
+.voice-partial { overflow-wrap: anywhere; max-height: 3em; overflow-y: auto; color: var(--text-2); }
 .voice-feedback p + p:not(:empty) { margin-top: 3px; }
 .voice-help { grid-column: 1 / -1; max-height: 22vh; overflow-y: auto; line-height: 1.45; }
-.voice-help summary { cursor: pointer; font-weight: 600; }
+.voice-help summary { position: sticky; top: 0; background: var(--surface); cursor: pointer; font-weight: 600; }
 .voice-help p { margin: 5px 0; }
 .speaker-settings { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 5px 12px; margin: 6px 0; }
 .speaker-settings select { min-width: 0; width: 100%; }

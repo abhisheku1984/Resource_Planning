@@ -1036,7 +1036,7 @@ test('voice does not fall back to a cloud-only recognizer or require a mic for t
   window.SpeechRecognition = class { start() { started = true; } };
   try {
     const voice = createLocalVoice({ onCommand: () => assert.fail('must not capture audio'), onState: (s) => { state = s; } });
-    await voice.toggle(); assert.equal(started, false); assert.equal(state.active, false); assert.match(state.text, /npm run voice:setup/);
+    await voice.toggle(); assert.equal(started, false); assert.equal(state.active, false); assert.match(state.text, /cannot use the local microphone/);
   } finally { delete window.SpeechRecognition; delete window.isSecureContext; }
 });
 
@@ -1118,14 +1118,14 @@ test('both browser audio APIs absent: mic and speaker explain the limitation; ty
   });
   const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
   button(a.el, 'Start voice mode').click(); await settleClicks(); button(a.el, 'Test speaker').click();
-  assert.match(a.el.querySelector('#ask-mic-status').textContent, /npm run voice:setup/);
+  assert.match(a.el.querySelector('#ask-mic-status').textContent, /desktop Chrome or Edge/);
   assert.match(a.el.querySelector('#ask-speaker-status').textContent, /No local English read-aloud voice/); assert.deepEqual(messages, []);
   const input = a.el.querySelector('.assistant-input'); input.value = 'How many people?'; input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
   assert.deepEqual(messages, [{ message: 'How many people?', projectName: 'Summer Project', language: 'en' }]);
   assert.match(flatten(a.el.querySelector('.assistant-log')).join(' '), /3 people in Summer Project/); a.toggle(false);
 });
 
-test('unavailable English pack: show Windows dictation steps, accept explicitly sent text and read only with a local voice', async (t) => {
+test('unavailable English pack: keep the reason across reopen without a setup wall, accept typed text and use a local voice', async (t) => {
   const { createAssistant } = await import('../public/js/views/assistant.js');
   const { starts } = setupPacks(t, () => 'unavailable', () => assert.fail('no installable pack'));
   const spoken = [], messages = []; let local = false, cancelled = false;
@@ -1141,10 +1141,11 @@ test('unavailable English pack: show Windows dictation steps, accept explicitly 
   const a = createAssistant(); documentShim.body.replaceChildren(a.el); a.open(); await settleClicks();
   button(a.el, 'Start voice mode').click(); await settleClicks();
   const help = a.el.querySelector('.voice-help');
-  assert.ok(help.open && !help.classList.contains('hidden'));
-  assert.match(flatten(help).join(' '), /setup-voice-windows\.bat/); assert.match(flatten(help).join(' '), /Windows 11.*Voice access/);
-  assert.match(flatten(a.el).join(' '), /No local English speech pack is available/);
-  button(help, 'Focus message box').click(); const input = document.activeElement; assert.equal(input, a.el.querySelector('.assistant-input'));
+  assert.ok(!help.open); assert.doesNotMatch(flatten(help).join(' '), /npm|\.bat|dictation/i);
+  const issue = a.el.querySelector('#ask-mic-status').textContent; assert.match(issue, /No local English speech pack is available/);
+  help.open = true; a.toggle(false); a.open(); await settleClicks();
+  assert.ok(!help.open); assert.equal(a.el.querySelector('#ask-mic-status').textContent, issue);
+  const input = a.el.querySelector('.assistant-input');
   input.value = 'How many people?'; input.dispatchEvent({ type: 'input' }); assert.equal(messages.length, 0);
   input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
   assert.deepEqual(messages, [{ message: 'How many people?', projectName: 'Summer Project', language: 'en' }]);
@@ -1178,8 +1179,8 @@ test('Hindi without a local pack: typed Ask still works, read-aloud rejects Engl
   assert.deepEqual(probes, [], 'choosing Hindi alone must not start or install speech');
   button(a.el, 'बोलना शुरू करें').click(); await settleClicks();
   assert.deepEqual(probes, ['hi-IN', 'hi']); assert.match(flatten(a.el).join(' '), /हिन्दी स्पीच पैक उपलब्ध नहीं/);
-  assert.ok(a.el.querySelector('.voice-help').open); button(a.el, 'संदेश बॉक्स चुनें').click();
-  const input = document.activeElement; assert.equal(input.value, question, 'do not drop unsent text on switch');
+  assert.ok(!a.el.querySelector('.voice-help').open);
+  const input = a.el.querySelector('.assistant-input'); assert.equal(input.value, question, 'do not drop unsent text on switch');
   input.dispatchEvent({ type: 'keydown', key: 'Enter', isComposing: true }); assert.equal(messages.length, 0);
   input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} }); await settleClicks();
   assert.deepEqual(messages, [{ message: question, projectName: project, language: 'hi' }]);

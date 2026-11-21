@@ -90,21 +90,24 @@ async function turn(lang, file) {
       await volume.press('End'); assert.equal(await volume.inputValue(), '200');
     } else await ask.locator('#ask-speaker-mode').selectOption('standard');
     await ask.locator('.voice-help summary').click();
-    await click(l('Test speaker', 'स्पीकर जाँचें')); await page.waitForFunction(() => playbacks.length === 1, null, { timeout: 100_000 });
-    assert.deepEqual(await page.evaluate(() => playbacks[0]), []); await click(l('Stop playback', 'सुनना रोकें'));
+    // Cold mic: no speaker test, AudioContext warm-up or native language pack first.
+    assert.deepEqual(await page.evaluate(() => [tracks.length, playbacks.length]), [0, 0]);
     const [res] = await Promise.all([page.waitForResponse((r) => r.url() === base + '/api/agent/ask', { timeout: 60_000 }), click(l('Start voice mode', 'बोलना शुरू करें'))]);
     const request = res.request().postDataJSON(), answer = await res.json();
     assert.equal(request.language, lang); assert.equal(request.projectName, 'Giga One'); assert.equal(answer.kind, 'count', JSON.stringify(request));
     assert.equal(answer.projectName, request.projectName);
-    await page.waitForFunction(() => playbacks.length === 2 && tracks.length === 2, null, { timeout: 100_000 });
-    assert.deepEqual(await page.evaluate(() => playbacks[1]), ['ended']); await click(l('Stop voice', 'माइक बंद करें'));
+    await page.waitForFunction(() => playbacks.length === 1 && tracks.length === 2, null, { timeout: 100_000 });
+    assert.deepEqual(await page.evaluate(() => playbacks[0]), ['ended']); await click(l('Stop voice', 'माइक बंद करें'));
     assert.deepEqual(await page.evaluate(() => tracks.map((t) => t.readyState)), ['ended', 'ended']);
+    await click(l('Close assistant', 'सहायक बंद करें')); await page.locator('.assistant-launch').first().click();
+    await click(l('Test speaker', 'स्पीकर जाँचें')); await page.waitForFunction(() => playbacks.length === 2, null, { timeout: 100_000 });
+    assert.deepEqual(await page.evaluate(() => playbacks[1]), ['ended', 'ended']); await click(l('Stop playback', 'सुनना रोकें'));
     for (const { hz, peak } of await page.evaluate(() => levels)) {
       if (studio) assert.equal(hz, 24000, 'no silent fallback to the standard pack');
       assert.ok(peak > 0.1 && peak <= 0.891, `unexpected playback peak ${peak}`);
     }
     assert.deepEqual(external, []); assert.deepEqual(posts, ['/api/auth/login', '/api/agent/ask']); assert.deepEqual(errors, []);
-    console.log(`${lang}: “${request.message}” → “${answer.reply}” → spoken reply → mic resumed → stopped`);
+    console.log(`${lang}: “${request.message}” → “${answer.reply}” → spoken reply → mic resumed → stopped; standalone speaker did not open the mic`);
   } finally { await browser.close(); }
 }
 try {
