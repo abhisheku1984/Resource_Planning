@@ -42,24 +42,33 @@ export function createFilterBar({ onChange }) {
     onChange(plain);
   }
 
+  function closeMenu() {
+    openKey = null;
+    menu.classList.add('hidden');
+    menu.replaceChildren();
+  }
+
   function setValue(key, value) {
-    // "" clears this column; anything else becomes the single selection
+    // "" clears this column; anything else becomes the single selection.
+    // Choosing a value always dismisses the menu: leaving it open over the rows
+    // hides the very result the click was meant to show.
     if (!value) delete active[key];
     else active[key] = [value];
-    openKey = null;
+    closeMenu();
     paint();
     emit();
   }
 
   function clearKey(key) {
     delete active[key];
+    closeMenu();
     paint();
     emit();
   }
 
   function clearAll() {
     active = {};
-    openKey = null;
+    closeMenu();
     paint();
     emit();
   }
@@ -81,7 +90,7 @@ export function createFilterBar({ onChange }) {
 
   function paintMenu() {
     const facet = facets.find((f) => f.key === openKey);
-    if (!facet) { menu.classList.add('hidden'); return; }
+    if (!facet) { closeMenu(); return; }
     const term = (search[facet.key] || '').toLowerCase();
     const all = facet.values || [];
     const matching = term
@@ -139,9 +148,10 @@ export function createFilterBar({ onChange }) {
   }
 
   function toggleMenu(key) {
-    openKey = openKey === key ? null : key;
+    const next = openKey === key ? null : key;
+    openKey = next;
     if (openKey) paintMenu();
-    else menu.classList.add('hidden');
+    else closeMenu();
     paint();
   }
 
@@ -152,18 +162,21 @@ export function createFilterBar({ onChange }) {
     const t = e.target;
     if (menu.contains(t)) return;
     if (t && t.closest && t.closest('.facet-btn')) return;
-    openKey = null;
-    menu.classList.add('hidden');
+    closeMenu();
     paint();
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && openKey !== null) {
-      openKey = null;
-      menu.classList.add('hidden');
+      closeMenu();
       paint();
     }
   });
   window.addEventListener('resize', () => { if (openKey) paintMenu(); });
+  // the menu is pinned to the viewport, so any scroll would leave it floating
+  // over unrelated rows; close it instead
+  window.addEventListener('scroll', () => {
+    if (openKey !== null) { closeMenu(); paint(); }
+  }, true);
 
   /* ------------------------------------------------------------ the bar */
   function button(facet) {
@@ -232,7 +245,13 @@ export function createFilterBar({ onChange }) {
     );
 
     mount(el, head, row);
+    // the menu is a sibling of this bar, not a child, so it has to be dismissed
+    // explicitly whenever no dropdown is open
     if (openKey) paintMenu();
+    else if (!menu.classList.contains('hidden')) {
+      menu.classList.add('hidden');
+      menu.replaceChildren();
+    }
   }
 
   return {

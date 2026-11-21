@@ -572,13 +572,17 @@ test('the filter bar is five dropdowns, and picking a value narrows the rows', a
   // the shim does not aggregate text from children, so walk the tree
   const text = (node) => [node._text || '', ...node.children.map((c) => (c instanceof El ? text(c) : String(c._text ?? '')))].join(' ');
 
+  // the option count is the row count the table will show
+  assert.ok(text(bar.menu).includes('15'));
+
   // choosing a value is reported as a filter and the button shows it
   options[1].click();
   assert.deepEqual(seen.at(-1), { bench_category: ['Bench'] });
+  // Regression: the menu used to stay open over the rows after a pick, so the
+  // filtered result was hidden behind its own dropdown.
+  assert.ok(bar.menu.classList.contains('hidden'), 'the menu closes when a value is chosen');
+  assert.equal(bar.menu.children.length, 0, 'the closed menu is emptied, not left floating');
   assert.ok(text(bar.el).includes('Bench'), 'the button shows the chosen value');
-
-  // the option count is the row count the table will show
-  assert.ok(text(bar.menu).includes('15'));
 
   bar.clearAll();
   assert.deepEqual(seen.at(-1), {});
