@@ -284,9 +284,27 @@ function prepareEmployeeQuery(user, params, flag) {
   return { scope, columns, narrow, active, except };
 }
 
+const COUNT_FROM = `FROM assignments a JOIN employees e ON e.id = a.employee_id
+                    LEFT JOIN suppliers sup ON sup.id = a.supplier_id`;
+
 function countRows({ where, args }) {
-  return q.get(`SELECT COUNT(*) c FROM assignments a JOIN employees e ON e.id = a.employee_id
-                LEFT JOIN suppliers sup ON sup.id = a.supplier_id WHERE ${where}`, ...args).c;
+  return q.get(`SELECT COUNT(*) c ${COUNT_FROM} WHERE ${where}`, ...args).c;
+}
+
+// Directory cards summarize the exact working set used for the table, before
+// pagination. A review belongs to the view if either person in it matches;
+// counting reviews separately avoids multiplying placements or review tickets.
+function directorySummary(user, { where, args }) {
+  const reviews = user.isAdmin ? `(SELECT COUNT(*) FROM duplicate_reviews d WHERE d.status = 'pending'
+    AND (d.candidate_employee_id IN (SELECT employee_id FROM matching)
+      OR d.emp_code COLLATE NOCASE IN (SELECT emp_code FROM matching)))` : 'NULL';
+  return q.get(`WITH matching AS (
+                  SELECT a.id, a.employee_id, a.project_id, e.emp_code ${COUNT_FROM} WHERE ${where}
+                )
+                SELECT COUNT(*) AS placements, COUNT(DISTINCT m.employee_id) AS people,
+                       COUNT(DISTINCT m.project_id) AS hierarchyProjects,
+                       COUNT(DISTINCT g.project_name) AS gigaProjects, ${reviews} AS pendingReviews
+                  FROM matching m LEFT JOIN giga_assignments g ON g.assignment_id = m.id`, ...args);
 }
 
 function listEmployees(user, params = {}) {
@@ -298,8 +316,9 @@ function listEmployees(user, params = {}) {
   const sortExpr = SORTS[params.sort] || 'e.name COLLATE NOCASE';
   const dir = String(params.dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC';
 
-  // ---- phase 1: count + page of ids ----
-  const total = countRows(ctx.narrow);
+  // Other consumers of this table don't need the Directory's extra aggregates.
+  const summary = params.includeSummary === '1' ? directorySummary(user, ctx.narrow) : null;
+  const total = summary?.placements ?? countRows(ctx.narrow);
 
   const ids = q.all(
     `SELECT a.id FROM assignments a
@@ -321,6 +340,7 @@ function listEmployees(user, params = {}) {
     rows,
     columns: columns.map(publicColumn),
     total,
+    ...(summary && { summary }),
     page,
     pageSize,
     totalPages: Math.max(1, Math.ceil(total / pageSize)),
@@ -458,8 +478,8 @@ function facetsFor(ctx, total = countRows(ctx.narrow)) {
   for (const col of filterable) {
     const others = ctx.active.has(col.key) ? ctx.except(col.key) : null;
     const buckets = others ? collect(others, [col]) : shared;
-    const bucket = buckets.get(col.key) || buckets.get(col.id);
-    if (!bucket || !bucket.size) continue;
+    const bucket = buckets.get(col.key) || buckets.get(col.id) || new Map();
+    if (!bucket.size && !others) continue; // keep an active, zero-match selection clearable
     const values = [...bucket.entries()]
       .map(([value, count]) => ({ value, count }))
       .sort((a, b) => b.count - a.count || String(a.value).localeCompare(String(b.value)))

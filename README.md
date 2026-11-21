@@ -52,6 +52,26 @@ and intended only for disposable installations.
 
 Windows: after pulling the code, `start-windows.bat` can install missing dependencies and start the app. Use an **Administrator** login for Administration.
 
+### Employee Directory totals
+
+The cards above **Employee records** describe the current selection, across **all
+pages**. They update when you choose or clear a Giga project, combine filters,
+search, or change the hierarchy project. Clearing filters shows your authorized
+records, not necessarily the whole database.
+
+* **People in scope** counts distinct employees. **Placements** is the exact
+  Employee records count. One person with two matching placements counts as one
+  person and two records.
+* **Giga projects** counts distinct, nonblank workbook project names. The line
+  beneath it counts the hierarchy projects containing matching rows. One Giga
+  project can span several hierarchy projects.
+* **Pending reviews** counts open duplicate reviews involving matching people,
+  once per review. Only administrators can see the count.
+
+The Directory requests `GET /api/employees?includeSummary=1` with its usual query
+parameters. The summary and table share the same authorization and filter conditions;
+no second request, workbook or stored copy of the totals is needed.
+
 ### Checking the five filter dropdowns
 
 With the server running in one window, open a second one:
@@ -64,7 +84,8 @@ It signs in as the administrator, loads the Employee Directory the same way the
 browser does, and prints the values plus counts behind **Billing Status, Bench
 Category, BL Status, Offsite/Onsite** and **Giga Project Name**. Then it selects
 one value in each and confirms the row total becomes exactly the number the
-dropdown advertised. Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere.
+dropdown advertised. It also checks the Directory card totals in the same response.
+Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere.
 
 ### Tests
 

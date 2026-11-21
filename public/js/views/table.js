@@ -11,7 +11,7 @@ import { createFilterBar } from './filterbar.js';
 
 const STATUS_FIELDS = new Set(['status', 'training_status', 'completion_status', 'billing_status', 'allocation_status']);
 
-export function createTable({ onSelect, onSaved, compact = false, showScope = true, withFilters = true }) {
+export function createTable({ onSelect, onSaved, onSummary, compact = false, showScope = true, withFilters = true }) {
   const el = h('div', { class: 'card', style: { overflow: 'hidden' } });
 
   const q = {
@@ -107,9 +107,10 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   );
 
   const foot = h('div', { class: 'table-foot' });
+  const rowCount = h('span', { class: 'count-pill', id: 'row-count' }, '—');
   const head = h('div', { class: 'card-head' },
     h('div', null,
-      h('div', { class: 'card-title' }, 'Employee records', h('span', { class: 'count-pill', id: 'row-count' }, '—')),
+      h('div', { class: 'card-title' }, 'Employee records', rowCount),
       h('div', { class: 'card-sub' }, 'Click any editable cell to update it. Changes save automatically.'),
     ),
   );
@@ -128,14 +129,25 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   }
 
   /* ------------------------------------------------------------- loading */
+  function showCounts(result) {
+    rowCount.textContent = fmtNum(result?.total);
+    onSummary?.(result?.summary ?? null);
+  }
+
   async function load({ silent = false } = {}) {
-    if (controller) controller.abort();
+    controller?.abort();
     controller = new AbortController();
+    const { signal } = controller;
     loading = true;
-    if (!silent) renderLoading();
+    if (!silent) {
+      showCounts(null);
+      mount(foot);
+      renderLoading();
+    }
     const params = new URLSearchParams();
     params.set('page', q.page);
     params.set('pageSize', q.pageSize);
+    if (onSummary) params.set('includeSummary', '1');
     params.set('sort', q.sort);
     params.set('dir', q.dir);
     for (const [key, value] of Object.entries(currentView())) {
@@ -143,20 +155,20 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
       else if (value) params.set(key, value);
     }
     try {
-      const res = await api(`/employees?${params}`, { signal: controller.signal });
+      const res = await api(`/employees?${params}`, { signal });
+      if (signal.aborted) return; // a late response cannot replace newer rows or totals
       data = res;
-      // Never blank the dropdowns on a response that lacks facets: that is what
-      // left them permanently disabled. Only replace when there is something to
-      // show, and keep the last good values otherwise.
-      if (Array.isArray(res.facets) && (res.facets.length || state.user?.gigaAccess)) {
+      if (Array.isArray(res.facets)) {
         facets = res.facets;
         if (filterBar) filterBar.setFacets(facets, res.scope?.category?.name || res.scope?.project?.name || '');
       }
       loading = false;
+      showCounts(res);
       render();
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      if (signal.aborted || err.name === 'AbortError') return;
       loading = false;
+      showCounts(null);
       mount(bodyHost, h('div', { class: 'card-body' }, emptyState({
         title: 'Could not load records',
         message: err.message,
@@ -181,8 +193,6 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
   /* ------------------------------------------------------------- render */
   function render() {
     renderChips();
-    const countEl = el.querySelector('#row-count');
-    if (countEl) countEl.textContent = fmtNum(data.total);
 
     if (!data.rows.length) {
       mount(bodyHost, emptyState({
@@ -530,7 +540,7 @@ export function createTable({ onSelect, onSaved, compact = false, showScope = tr
       // rebuild just the value cells for accuracy
       const cells = tr.querySelectorAll('td');
       let idx = (showScope && !q.categoryId) ? 1 : 0;
-      for (const c of data.columns) {
+      for (const c of shownColumns()) {
         const fresh = cellFor(row, c);
         cells[idx].replaceChildren(fresh);
         idx++;

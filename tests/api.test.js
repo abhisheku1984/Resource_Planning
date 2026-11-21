@@ -1141,9 +1141,16 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
   const accessPath = `/users/${made.data.user.id}/access`;
   const token = await login(email, password), xyz = client(token);
   const ids = async (suffix = '') => {
-    const r = await xyz('GET', '/employees?pageSize=200' + suffix);
+    const r = await xyz('GET', '/employees?includeSummary=1&pageSize=200' + suffix);
     assert.equal(r.status, 200, JSON.stringify(r.data.error));
     assert.equal(r.data.total, r.data.rows.length);
+    assert.deepEqual(r.data.summary, {
+      placements: r.data.total,
+      people: new Set(r.data.rows.map((row) => row.employeeId)).size,
+      hierarchyProjects: new Set(r.data.rows.map((row) => row.projectId)).size,
+      gigaProjects: r.data.total ? 1 : 0,
+      pendingReviews: null, // the duplicate queue is admin-only
+    });
     return r.data.rows.map((row) => row.assignmentId).sort((a, b) => a-b);
   };
 
@@ -1284,4 +1291,56 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     assert.equal(q.get('SELECT count(*) c FROM user_giga_access WHERE user_id = ?', id).c, 0);
     assert.equal((await admin('GET', `/employees/${one.assignmentId}`)).status, 200);
   });
+});
+
+
+test('Directory totals follow the full filtered result, not bootstrap or the current page', async () => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const places = q.all(`SELECT c.id category_id, c.subproject_id, s.project_id FROM categories c
+                        JOIN subprojects s ON s.id = c.subproject_id ORDER BY c.id`);
+  const east = places[0], west = places.find((p) => p.project_id !== east.project_id);
+  const north = 'Directory North', south = 'Directory South';
+  const place = async (n, hierarchy, giga, billing) => {
+    const r = await admin('POST', '/employees', { ...hierarchy, emp_code: `DSYNC-${n}`, name: `Directory worker ${n}` });
+    assert.equal(r.status, 200);
+    for (const [key, value] of [['giga_project_name', giga], ['billing_status', billing]]) {
+      if (value) q.run('INSERT INTO assignment_values (assignment_id, field_id, value) SELECT ?, id, ? FROM fields WHERE key = ?',
+        r.data.assignmentId, value, key);
+    }
+    return r.data.employeeId;
+  };
+  const first = await place(1, east, north, 'Billable');
+  for (let i = 2; i <= 5; i++) await place(i, east, north, i === 2 ? 'Billable' : 'Shadow');
+  await place(1, west, north, 'Billable'); // same person, second matching placement
+  const sixth = await place(6, west, south, 'Billable');
+  await place(7, east, null, 'Billable'); // blank Giga still counts as a person/placement
+  const review = (candidate, incoming, status = 'pending') => q.run(
+    'INSERT INTO duplicate_reviews (candidate_employee_id, emp_code, status) VALUES (?, ?, ?)', candidate, incoming, status);
+  review(first, 'DSYNC-2'); // both sides match, still only one ticket
+  review(sixth, 'DSYNC-7');
+  review(null, 'dsync-3'); // incoming employee only
+  review(first, 'DSYNC-2', 'dismissed');
+
+  const query = async (filters = {}) => {
+    const params = new URLSearchParams({ includeSummary: '1', pageSize: '5', search: 'DSYNC-', ...filters });
+    const r = await admin('GET', `/employees?${params}`);
+    assert.equal(r.status, 200);
+    assert.equal(r.data.summary.placements, r.data.total, 'Placements and Employee records must agree');
+    return r.data;
+  };
+  const all = await query();
+  assert.deepEqual(all.summary, { people: 7, placements: 8, hierarchyProjects: 2, gigaProjects: 2, pendingReviews: 3 });
+  const filtered = await query({ f_giga_project_name: north });
+  assert.equal(filtered.rows.length, 5);
+  assert.deepEqual(filtered.summary, { people: 5, placements: 6, hierarchyProjects: 2, gigaProjects: 1, pendingReviews: 2 });
+  const secondPage = await query({ f_giga_project_name: north, page: '2' });
+  assert.equal(secondPage.rows.length, 1);
+  assert.deepEqual(secondPage.summary, filtered.summary);
+  const stacked = { f_giga_project_name: north, f_billing_status: 'Billable' };
+  assert.deepEqual((await query(stacked)).summary, { people: 2, placements: 3, hierarchyProjects: 2, gigaProjects: 1, pendingReviews: 1 });
+  assert.deepEqual((await query({ ...stacked, projectId: west.project_id })).summary,
+    { people: 1, placements: 1, hierarchyProjects: 1, gigaProjects: 1, pendingReviews: 1 });
+  assert.deepEqual((await query({ ...stacked, search: 'DSYNC-6' })).summary,
+    { people: 0, placements: 0, hierarchyProjects: 0, gigaProjects: 0, pendingReviews: 0 });
+  assert.deepEqual((await query()).summary, all.summary, 'clearing filters restores totals for the remaining search');
 });

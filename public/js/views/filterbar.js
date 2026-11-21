@@ -181,7 +181,7 @@ export function createFilterBar({ onChange }) {
   /* ------------------------------------------------------------ the bar */
   function button(facet) {
     const chosen = active[facet.key] || [];
-    const total = (facet.values || []).reduce((a, v) => a + v.count, 0);
+    const total = facet.allCount ?? (facet.values || []).reduce((a, v) => a + v.count, 0);
     const label = chosen.length ? chosen.join(', ') : 'All';
     const count = chosen.length
       ? (facet.values || [])
@@ -260,13 +260,9 @@ export function createFilterBar({ onChange }) {
     setFacets(next, label = '') {
       facets = next || [];
       scopeLabel = label;
-      const keys = new Set(facets.map((f) => f.key));
-      let pruned = false;
-      for (const k of Object.keys(active)) {
-        if (!keys.has(k)) { delete active[k]; pruned = true; }
-      }
+      // No options (for example, a search with zero matches) is a result,
+      // not a request to clear a user's filters. setScope handles scope resets.
       paint();
-      if (pruned) emit();
     },
     setActive(next) {
       active = {};

@@ -890,3 +890,57 @@ test('Data model renders a populated category, opens the field form and saves th
   const write = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/categories/4/columns' && opts.method === 'PUT');
   assert.equal(JSON.parse(write.arguments[1].body).fields[0].sort_order, 9);
 });
+
+test('Directory cards and row count switch together on filter, clear, failure and retry', async (t) => {
+  const { renderDirectory } = await import('../public/js/views/directory.js');
+  const all = { people: 12000, placements: 12000, gigaProjects: 3, hierarchyProjects: 6, pendingReviews: 8 };
+  const giga = { people: 966, placements: 967, gigaProjects: 1, hierarchyProjects: 2, pendingReviews: 1 };
+  core.state.user = { id: 1, isAdmin: true };
+  core.state.tree = [];
+  core.state.totals = { employees: 88888, assignments: 90000 }; // must not be shown or overwritten
+  const fallback = globalThis.fetch;
+  let failNext = false, holdNext = false, release;
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (!url.startsWith('/api/employees?')) return fallback(url, opts);
+    const params = new URL(url, 'http://localhost').searchParams;
+    const summary = params.has('f_giga_project_name[]') ? giga : all;
+    if (holdNext) { holdNext = false; await new Promise((resolve) => { release = resolve; }); } // ignores abort on purpose
+    if (failNext) { failNext = false; return jsonResponse({ error: 'Unavailable' }, 503); }
+    return jsonResponse({ total: summary.placements, summary: params.get('includeSummary') === '1' ? summary : null,
+      page: 1, pageSize: 25, totalPages: Math.ceil(summary.placements / 25), rows: workers.slice(0, 25), columns: [],
+      facets: [{ key: 'giga_project_name', label: 'Giga Project Name', allCount: 12000, values: [{ value: 'Giga One', count: 967 }] }],
+    });
+  });
+  const content = new El('div');
+  documentShim.body.replaceChildren(content);
+  const counts = () => [...content.querySelectorAll('.kpi-value'), content.querySelector('#row-count')].map((el) => flatten(el).join(''));
+  const selectGiga = () => {
+    content.querySelector('.facet-btn').click();
+    content.querySelectorAll('.facet-option').find((b) => flatten(b).includes('Giga One')).click();
+  };
+  const pending = ['—', '—', '—', '—', '—'];
+  const overall = ['12,000', '12,000', '3', '8', '12,000'];
+  const selected = ['966', '967', '1', '1', '967'];
+  renderDirectory(content, { setCrumbs() {} });
+  assert.deepEqual(counts(), pending);
+  await settleClicks();
+  assert.deepEqual(counts(), overall);
+  assert.ok(flatten(content.querySelector('.facet-btn-count')).includes('12,000'), 'All includes blank Giga names too');
+  holdNext = true;
+  selectGiga();
+  assert.deepEqual(counts(), pending, 'do not show global totals while filtering');
+  button(content, 'Clear 1').click();
+  await settleClicks();
+  release(); await settleClicks();
+  assert.deepEqual(counts(), overall, 'a late superseded response must not replace rows or cards');
+  selectGiga(); await settleClicks();
+  assert.deepEqual(counts(), selected);
+  assert.ok(flatten(content).includes('2 hierarchy projects in view'));
+  failNext = true;
+  content.querySelectorAll('button').find((b) => b.attrs['aria-label'] === 'Next page').click();
+  await settleClicks();
+  assert.deepEqual(counts(), pending, 'a failed load cannot advertise stale totals');
+  button(content, 'Try again').click(); await settleClicks();
+  assert.deepEqual(counts(), selected);
+  assert.deepEqual(core.state.totals, { employees: 88888, assignments: 90000 });
+});
