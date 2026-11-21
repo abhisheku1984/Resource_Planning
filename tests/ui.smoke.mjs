@@ -401,9 +401,10 @@ test('dashboard replaces a loading message with just the People and Projects sum
     ['People in scope', '60', '60 placements'], ['Projects', '1', '2 subprojects'],
   ]);
   const panels = content.querySelectorAll('.card-title').flatMap((title) => flatten(title));
-  for (const title of ['Employees by project', 'Workforce status', 'Needs attention', 'Supplier mix', 'Recent activity']) {
-    assert.ok(panels.includes(title), `keep the detail panel: ${title}`);
-  }
+  assert.deepEqual(panels, ['Employees by project', 'Workforce status', 'Supplier mix', 'Quick actions']);
+  assert.equal(content.querySelector('.timeline'), null);
+  assert.ok(!flatten(content).includes('EMP-01001'), 'do not render exception records even if the server includes them');
+  assert.equal(calls.at(-1), 'GET /api/dashboard?summaryOnly=1');
 });
 
 test('dashboard load errors replace the loading message without leaving blank tiles', async (t) => {

@@ -58,7 +58,7 @@ Windows: double-click **`start-windows.bat`**. It installs missing app dependenc
 
 ### Employee Directory
 
-The Directory opens directly to **Employee records** and the filters. The table's row count is the number of matching placements across all pages. Clearing filters stays within your authorized projects. The Dashboard shows people and project totals. Duplicate reviews are available in Data Hub.
+The Directory opens directly to **Employee records** and the filters. The table's row count is the number of matching placements across all pages. Clearing filters stays within your authorized projects. The Dashboard shows people and project totals, workforce charts, and quick actions. Use the Audit Trail for change history and Data Hub for duplicate reviews.
 
 ### Checking the five filter dropdowns
 
@@ -396,7 +396,7 @@ and past attribution remain. You cannot delete yourself or the last active admin
 | --- | --- | --- |
 | `POST` | `/api/auth/login`, `/api/auth/logout` | Session tokens (scrypt hashes) |
 | `GET` | `/api/bootstrap` | User, tree, field catalogue, suppliers, totals |
-| `GET` | `/api/dashboard` | Aggregates for the dashboard |
+| `GET` | `/api/dashboard` | The dashboard uses `?summaryOnly=1` for scoped totals and charts, without individual employee or activity lists. The full API response is still available without the parameter. |
 | `GET` | `/api/employees` | Dynamic table: scope, search, filter, sort, paginate |
 | `GET` | `/api/employees/:id` | One record with its category's columns |
 | `PATCH` | `/api/employees/:id` | Validated update with optimistic concurrency |

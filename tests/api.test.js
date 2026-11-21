@@ -1291,6 +1291,11 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     const dash = (await xyz('GET', '/dashboard')).data;
     for (const key of ['byProject','byStatus','bySupplier','byCategory']) assert.equal(dash[key].reduce((n,r) => n+r.c,0), 2, key);
     assert.ok(dash.attention.every((r) => expected.includes(r.assignment_id)));
+    const summary = await xyz('GET', '/dashboard?summaryOnly=1');
+    assert.equal(summary.status, 200);
+    assert.deepEqual(summary.data, {
+      totals: dash.totals, byProject: dash.byProject, byStatus: dash.byStatus, bySupplier: dash.bySupplier,
+    }, 'the dashboard gets the same scoped counts without any employee or audit feed');
     assert.equal((await xyz('GET', `/categories/${sibling.category_id}/columns`)).status, 403);
   });
 

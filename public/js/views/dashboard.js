@@ -1,7 +1,4 @@
-import {
-  h, mount, icon, api, state, fmtNum, fmtRelative, spinner, emptyState,
-  statusBadge,
-} from '../core.js';
+import { h, mount, icon, api, state, fmtNum, spinner, emptyState } from '../core.js';
 
 const PIE_COLORS = ['#1f5fbf', '#0f9d8b', '#a86300', '#7c4dbe', '#b42318', '#4f92ec', '#8494a9'];
 
@@ -24,7 +21,7 @@ export async function renderDashboard(content) {
   ));
 
   try {
-    const data = await api('/dashboard');
+    const data = await api('/dashboard?summaryOnly=1');
     if (!host.isConnected) return; // the user navigated away or refreshed
     state.dashboard = data;
     paint(host, data);
@@ -104,74 +101,16 @@ function paint(host, data) {
     ),
   );
 
-  const attentionCard = h('div', { class: 'card' },
-    cardHead('Needs attention', 'Records with exceptions or missing data'),
-    h('div', { class: 'card-body flush' },
-      (data.attention || []).length
-        ? h('div', null,
-          ...data.attention.map((a) => h('button', {
-            class: 'list-item',
-            style: { borderRadius: '0', borderBottom: '1px solid var(--line)', padding: '10px 16px' },
-            onclick: () => { location.hash = `#/workspace?project=${a.project_id || ''}`; },
-          },
-            h('div', { class: 'grow', style: { minWidth: '0' } },
-              h('div', { class: 'row', style: { gap: '7px' } },
-                h('span', { style: { fontWeight: '600', fontSize: '12.5px' } }, a.name),
-                h('span', { class: 'mono subtle', style: { fontSize: '11px' } }, a.emp_code),
-              ),
-              h('div', { class: 'subtle', style: { fontSize: '11.5px' } }, `${a.project_name} · ${a.category_name}`),
-            ),
-            statusBadge(a.status),
-          )),
-        )
-        : emptyState({ title: 'All clear', message: 'No exceptions detected in your projects.', iconName: 'checkCircle' }),
+  const quickActions = h('div', { class: 'card' },
+    cardHead('Quick actions'),
+    h('div', { class: 'card-body col', style: { gap: '8px' } },
+      h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('workspace') }, icon('layers', 15), 'Browse projects & subprojects'),
+      h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('datahub') }, icon('download', 15), 'Generate Excel export'),
+      h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('directory') }, icon('contact', 15), 'Open contact CRM'),
     ),
   );
 
-  const activityCard = h('div', { class: 'card' },
-    cardHead('Recent activity', 'Latest changes from supervisors', h('button', {
-      class: 'btn btn-ghost btn-xs', onclick: () => window.__rp.go('audit'),
-    }, 'View all', icon('chevronRight', 13))),
-    h('div', { class: 'card-body' },
-      (data.activity || []).length
-        ? h('div', { class: 'timeline' },
-          ...data.activity.slice(0, 8).map((a) => h('div', { class: 'tl-item' },
-            h('div', { class: 'tl-dot' }, icon(a.action === 'create' ? 'plus' : 'edit', 11)),
-            h('div', { class: 'tl-body' },
-              h('div', { class: 'tl-line1' },
-                h('span', { style: { fontWeight: '600' } }, a.actor_name || 'System'),
-                ' updated ',
-                a.field_key ? h('span', { class: 'tl-field' }, humanField(a.field_key)) : 'a record',
-                a.ref ? h('span', { class: 'subtle' }, ` · ${a.ref}`) : null,
-              ),
-              h('div', { class: 'tl-meta' },
-                a.old_value ? h('span', null, h('span', { class: 'tl-old' }, trunc(a.old_value)), ' → ', h('span', { class: 'tl-new' }, trunc(a.new_value))) : trunc(a.new_value || ''),
-                ' · ', fmtRelative(a.at),
-              ),
-            ),
-          )),
-        )
-        : emptyState({ title: 'No recent activity', iconName: 'history' }),
-    ),
-  );
-
-  mount(host,
-    kpis,
-    h('div', { class: 'grid grid-dash', style: { marginBottom: '14px' } }, projectCard, statusCard),
-    h('div', { class: 'grid grid-dash' },
-      h('div', { class: 'col', style: { gap: '14px' } }, attentionCard, supplierCard),
-      h('div', { class: 'col', style: { gap: '14px' } }, activityCard,
-        h('div', { class: 'card' },
-          cardHead('Quick actions'),
-          h('div', { class: 'card-body col', style: { gap: '8px' } },
-            h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('workspace') }, icon('layers', 15), 'Browse projects & subprojects'),
-            h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('datahub') }, icon('download', 15), 'Generate Excel export'),
-            h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('directory') }, icon('contact', 15), 'Open contact CRM'),
-          ),
-        ),
-      ),
-    ),
-  );
+  mount(host, kpis, h('div', { class: 'grid grid-dash' }, projectCard, statusCard, supplierCard, quickActions));
 }
 
 /* ------------------------------------------------------------------ pieces */
@@ -179,16 +118,13 @@ function greeting() {
   const hr = new Date().getHours();
   return hr < 12 ? 'morning' : hr < 17 ? 'afternoon' : 'evening';
 }
-const trunc = (s) => { const t = String(s || ''); return t.length > 32 ? `${t.slice(0, 30)}…` : t; };
-const humanField = (k) => k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
-function cardHead(title, sub, extra) {
+function cardHead(title, sub) {
   return h('div', { class: 'card-head' },
     h('div', null,
       h('div', { class: 'card-title' }, title),
       sub ? h('div', { class: 'card-sub' }, sub) : null,
     ),
-    extra || null,
   );
 }
 

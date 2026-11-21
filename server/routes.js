@@ -116,6 +116,9 @@ router.get('/dashboard', requireAuth, wrap((req, res) => {
     `SELECT ifnull(sup.name, 'Unassigned') name, COUNT(*) c
        FROM assignments a LEFT JOIN suppliers sup ON sup.id = a.supplier_id
       WHERE a.active = 1 AND ${acl.sql} GROUP BY sup.id ORDER BY c DESC LIMIT 8`, ...acl.args);
+  const summary = { totals: totals(req.user), byProject, byStatus: statusCounts(req.user), bySupplier };
+  // The overview only needs counts. Other callers can still request the full dashboard response.
+  if (req.query.summaryOnly === '1') return res.json(summary);
   const byCategory = q.all(
     `SELECT c.name, COUNT(*) c FROM assignments a JOIN categories c ON a.category_id = c.id
       WHERE a.active = 1 AND ${acl.sql} GROUP BY c.id ORDER BY c DESC LIMIT 10`, ...acl.args);
@@ -130,7 +133,7 @@ router.get('/dashboard', requireAuth, wrap((req, res) => {
   const canAudit = auth.can(req.user, 'audit.view');
   const trend = canAudit ? q.all(`SELECT substr(at, 1, 10) day, COUNT(*) c FROM audit_log l
                        WHERE at >= date('now', '-13 day') AND ${audit.sql} GROUP BY day ORDER BY day`, ...audit.args) : [];
-  res.json({ totals: totals(req.user), byProject, byStatus: statusCounts(req.user), bySupplier, byCategory,
+  res.json({ ...summary, byCategory,
     activity: canAudit ? recentActivity(req.user, {limit: 12}) : [], attention, trend });
 }));
 
