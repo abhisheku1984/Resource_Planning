@@ -94,36 +94,49 @@ const PROJECTS = [
     ] },
 ];
 
+const ACCOUNTS = ['Northwind Bank', 'Helios Retail', 'Vertex Insurance', 'Cobalt Telecom',
+  'Meridian Health', 'Aurora Energy', 'Summit Logistics', 'Lakeside Media'];
+const VERTICALS = ['BFSI', 'Retail & CPG', 'Healthcare', 'Manufacturing', 'Technology', 'Communications'];
+const CAPABILITY = ['Data', 'Advisory', 'Tech', 'Support'];
+const MANAGEMENT_LEVEL = ['1', '2', '3', '4A', '4B', '4C', '4D', '5A', '5B'];
+const SERVICE_STATUS = ['Located', 'Growth Training Development', 'Internal Project', 'Maternity',
+  'Operation Challenge', 'Project Role', 'IT Deployment', 'RGFTE', 'Supervise', 'Support'];
+
 const CATEGORY_DEFS = {
   'Delivery Status': {
-    show: ['emp_code', 'name', 'bench_category', 'allocation_status', 'allocation_percentage',
-      'allocation_start_date', 'allocation_end_date', 'supplier', 'designation', 'remarks'],
-    filterable: ['bench_category', 'allocation_status', 'allocation_percentage', 'work_location', 'grade'],
+    show: ['emp_code', 'first_name', 'last_name', 'account', 'account_name', 'status', 'bench_category',
+      'allocation_percentage', 'allocation_start_date', 'allocation_end_date', 'block_status'],
+    filterable: ['bench_category', 'status', 'allocation_percentage', 'account', 'block_status'],
   },
   'Billing & Allocation': {
-    show: ['emp_code', 'name', 'bench_category', 'allocation_percentage', 'billing_status', 'rate_card',
-      'allocation_start_date', 'allocation_end_date', 'supplier', 'effective_date'],
-    filterable: ['billing_status', 'bench_category', 'allocation_status'],
+    show: ['emp_code', 'first_name', 'last_name', 'account', 'build_status', 'billing_status',
+      'allocation_percentage', 'billing_start_date', 'billing_end_date', 'revised_allocation'],
+    filterable: ['billing_status', 'build_status', 'bench_category', 'account'],
   },
   'Training Cohort': {
-    show: ['emp_code', 'name', 'training_status', 'certification_status', 'primary_skill',
-      'joining_date', 'completion_status', 'supplier', 'remarks'],
-    filterable: ['training_status', 'primary_skill', 'skill_category'],
+    show: ['emp_code', 'first_name', 'last_name', 'capability', 'job_profile_family', 'management_level',
+      'doj', 'country', 'bench_aging_category', 'bench_aging'],
+    filterable: ['capability', 'management_level', 'bench_aging_category', 'country'],
   },
 };
 
 /** Bench category drives everything downstream, so make it coherent. */
+/**
+ * Bench category drives the row Status column from the workbook:
+ *   Allocated / Leadership / Not Available / Unbilled
+ * and `onBench` decides whether bench-aging fields are populated.
+ */
 function allocationProfile() {
   const roll = R();
-  if (roll < 0.52) return { bench: 'Allocated', allocStatus: 'Allocated', pct: pick([100, 100, 100, 80, 90]) };
-  if (roll < 0.60) return { bench: 'PID Allocated', allocStatus: 'Reserved', pct: pick([100, 50, 0]) };
-  if (roll < 0.72) return { bench: 'Bench', allocStatus: 'Unallocated', pct: 0 };
-  if (roll < 0.80) return { bench: 'Available', allocStatus: 'Unallocated', pct: 0 };
-  if (roll < 0.86) return { bench: 'Not Available', allocStatus: 'Unallocated', pct: 0 };
-  if (roll < 0.92) return { bench: 'Shadow', allocStatus: 'Allocated', pct: pick([0, 25, 50]) };
-  if (roll < 0.96) return { bench: 'Partially Allocated', allocStatus: 'Partially Allocated', pct: pick([25, 40, 50, 60, 75]) };
-  if (roll < 0.99) return { bench: 'Rolling Off', allocStatus: 'Rolling Off', pct: pick([50, 75, 100]) };
-  return { bench: 'Onboarding', allocStatus: 'Reserved', pct: 0 };
+  if (roll < 0.52) return { bench: 'Allocated', rowStatus: 'Allocated', pct: pick([100, 100, 100, 80, 90]) };
+  if (roll < 0.60) return { bench: 'PID Allocated', rowStatus: 'Allocated', pct: pick([100, 50, 0]) };
+  if (roll < 0.72) return { bench: 'Bench', rowStatus: 'Unbilled', pct: 0, onBench: true };
+  if (roll < 0.80) return { bench: 'Available', rowStatus: 'Unbilled', pct: 0, onBench: true };
+  if (roll < 0.86) return { bench: 'Not Available', rowStatus: 'Not Available', pct: 0 };
+  if (roll < 0.92) return { bench: 'Shadow', rowStatus: 'Unbilled', pct: pick([0, 25, 50]), onBench: true };
+  if (roll < 0.96) return { bench: 'Partially Allocated', rowStatus: 'Allocated', pct: pick([25, 40, 50, 60, 75]) };
+  if (roll < 0.99) return { bench: 'Rolling Off', rowStatus: 'Allocated', pct: pick([50, 75, 100]) };
+  return { bench: 'Onboarding', rowStatus: 'Leadership', pct: 0 };
 }
 
 /* --------------------------------------------------------------- generator */
@@ -274,14 +287,11 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
         const code = `EMP-${String(empSeq++).padStart(5, '0')}`;
         const join = addDays(TODAY, -int(60, 2200));
         const r = q.run(
-          `INSERT INTO employees (emp_code, name, email, phone, designation, created_at, updated_at, created_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          code, full,
+          `INSERT INTO employees (emp_code, name, first_name, last_name, email, phone, created_at, updated_at, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          code, full, first, last,
           `${first.toLowerCase()}.${last.toLowerCase()}${empSeq}@example.com`,
           `+91 ${int(70, 99)}${int(10000000, 99999999)}`,
-          pick(['Software Engineer', 'Senior Software Engineer', 'Technical Lead', 'Data Engineer',
-            'Senior Data Engineer', 'QA Analyst', 'Cloud Engineer', 'Business Analyst',
-            'Scrum Master', 'Solution Architect', 'Associate', 'Principal Engineer']),
           iso(join), iso(addDays(TODAY, -int(0, 30))), admin.id
         );
         const empId = Number(r.lastInsertRowid);
@@ -293,7 +303,7 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
           `INSERT INTO assignments (employee_id, project_id, subproject_id, category_id, supplier_id, status, remarks, created_at, updated_at, updated_by)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           empId, plate.projectId, plate.subprojectId, plate.categoryId, supplierId,
-          profile.bench === 'Not Available' ? 'On Leave' : profile.bench === 'Onboarding' ? 'Training' : 'Active',
+          profile.rowStatus,
           null, iso(join), iso(addDays(TODAY, -int(0, 45))), admin.id
         );
         const aid = Number(ar.lastInsertRowid);
@@ -309,98 +319,78 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
           : 'No Block';
 
         const vals = {
+          // ---- allocation ----
           bench_category: profile.bench,
-          allocation_status: profile.allocStatus,
           allocation_percentage: String(profile.pct),
+          revised_allocation: String(chance(0.4) ? profile.pct : int(0, 100)),
           allocation_start_date: startDate ? iso(startDate) : null,
           allocation_end_date: endDate ? iso(endDate) : null,
+          last_week_end_date: iso(addDays(TODAY, -((TODAY.getDay() + 6) % 7) - 7)),
+          status: profile.rowStatus,
+          service_status: pick(SERVICE_STATUS),
+          billing_status: pick(['Billable', 'Billable', 'Non-Billable', 'Shadow', 'T&M', 'Fixed Price']),
+          build_status: pick(['Billed', 'Billed', 'Partially Billed', 'Unbilled', 'Not Available']),
 
-          allocation_plan: ['Bench', 'Available', 'Rolling Off', 'Onboarding'].includes(profile.bench)
-            ? pick([`Target: ${pick(['Nexus phase 2', 'Horizon Finance', 'Orbit Wave 4', 'Zenith L2', 'Internal platform'])}`,
-              'Awaiting client confirmation', 'Interview in progress', 'Skillset refresh first', ''])
-            : null,
-          pid: chance(0.6) ? `PID-${int(10000, 99999)}` : null,
-          opid: chance(0.45) ? `OPID-${int(1000, 9999)}` : null,
-          project_role: chance(0.7) ? pick(['Developer', 'Lead', 'Analyst', 'Tester', 'Architect', 'Consultant']) : null,
-          eta_available: eta ? iso(eta) : null,
-          follow_up_notes: chance(0.22) ? pick([
-            'Available for immediate deployment after release.',
-            'Needs 2 weeks handover before roll-off.',
-            'Client requested extension for one quarter.',
-            'Pending security clearance — cannot be allocated yet.',
-            'Discussed upskilling plan with the supervisor.',
-            'Rate renegotiation in progress with the vendor.',
-          ]) : null,
-          critical_flag: chance(0.14) ? 'Yes' : 'No',
-          risk_flag: pick(['Low', 'Low', 'Low', 'Medium', 'Medium', 'High', 'Not assessed'],
-          ),
-          // Block status follows bench category: someone on the bench is by
-          // definition not blocked, which keeps the two columns consistent.
+          // ---- account & delivery ----
+          account: pick(ACCOUNTS),
+          account_name: pick(ACCOUNTS),
+          account_manual: chance(0.3) ? pick(ACCOUNTS) : null,
+          account_owner: `${pick(FIRST)} ${pick(LAST)}`,
+          vertical: pick(VERTICALS),
+          vertical_manual: chance(0.25) ? pick(VERTICALS) : null,
+          unit_manual: chance(0.25) ? pick(['Unit A', 'Unit B', 'Unit C']) : null,
+          ae: `${pick(FIRST)} ${pick(LAST)}`,
+          vp_mapping: `${pick(FIRST)} ${pick(LAST)}`,
+          source: pick(['As per RAR', 'As per System']),
+          offsite_onsite: pick(['Offsite', 'Offsite', 'Offsite-Onsite', 'Onsite']),
+
+          // ---- bench ----
+          bench_aging: String(profile.onBench ? int(1, 180) : 0),
+          bench_aging_category: profile.onBench
+            ? pick(['0-30 days', '31-60 days', '61-90 days', '90+ days']) : null,
+          bench_aging_comment: profile.onBench && chance(0.35)
+            ? pick(['Awaiting release confirmation', 'Skillset under review', 'Client decision pending']) : null,
+          bench_subcategory: profile.onBench ? pick(['Core Bench', 'Skill Bench', 'Training Bench']) : null,
+          bl_status: pick(['BL-1', 'BL-1', 'BL-2', 'BL-3']),
+          bench_later_issue_date: chance(0.2) ? iso(addDays(TODAY, -int(1, 60))) : null,
+          bench_later_end_date: chance(0.15) ? iso(addDays(TODAY, int(1, 90))) : null,
+
+          // ---- PID and demand ----
+          pid_aging_weeks: String(int(0, 26)),
+          pid_segment: pick(['Segment A', 'Segment B', 'Segment C']),
+          pid_awaited_account: blocked === 'No Block' ? null : pick(ACCOUNTS),
+          pid_awaited_blocked_date: blocked === 'No Block' ? null : iso(addDays(TODAY, -int(1, 45))),
+          opp_id: `OPP-${int(100000, 999999)}`,
+          demand_number: chance(0.6) ? `DEM-${int(10000, 99999)}` : null,
+          giga_project_name: chance(0.25) ? pick(['Giga One', 'Giga Two', 'Giga Three']) : null,
+          ard_date: chance(0.3) ? iso(addDays(TODAY, int(-30, 120))) : null,
+          interviewed_by: chance(0.3) ? `${pick(FIRST)} ${pick(LAST)}` : null,
+          role_of_month: chance(0.35) ? pick(['Developer', 'Lead', 'Analyst', 'Tester', 'Architect']) : null,
+          role_of_responses: chance(0.2) ? pick(['Shortlisted', 'On hold', 'Interview scheduled', 'Rejected']) : null,
+
+          // ---- leadership input ----
+          leader_input_last_week: chance(0.2) ? pick(['Deploy to Atlas phase 2', 'Keep on current account', 'Move to bench pool']) : null,
+          leader_input_this_week: chance(0.2) ? pick(['Confirm by Friday', 'No update', 'Escalated to VP']) : null,
+          leader_input_pid_account: chance(0.25) ? pick(ACCOUNTS) : null,
+          detail_comments: chance(0.25) ? pick(['Handover in progress', 'Client asked for extension', 'Rate revision pending']) : null,
+
+          // ---- billing window ----
+          billing_start_date: chance(0.6) ? iso(addDays(TODAY, -int(30, 400))) : null,
+          billing_end_date: chance(0.2) ? iso(addDays(TODAY, int(1, 200))) : null,
+
+          // ---- block ----
           block_status: blocked,
-          block_reason: blocked === 'No Block' ? null
-            : pick(['Client holding for phase 2', 'Rate card under negotiation',
-              'Security clearance pending', 'Key resource - sign-off required']),
 
-          grade: pick(['L1', 'L2', 'L2', 'L3', 'L3', 'L4', 'L4', 'L5', 'M1', 'M2']),
-          department: pick(['Engineering', 'Data & Analytics', 'Quality Engineering', 'Cloud & Infrastructure',
-            'Product', 'Business Analysis', 'DevOps', 'Design', 'Project Management']),
-          business_unit: pick(['BFSI', 'Retail & CPG', 'Healthcare', 'Manufacturing', 'Technology', 'Internal']),
-          reporting_manager: `${pick(FIRST)} ${pick(LAST)}`,
-          du_head: `${pick(FIRST)} ${pick(LAST)}`,
-          hr_business_partner: `${pick(FIRST)} ${pick(LAST)}`,
-          cost_center: `CC-${int(1000, 9999)}`,
-          employee_type: pick(['Full Time', 'Full Time', 'Full Time', 'Contract', 'Contract', 'Intern', 'Consultant']),
-          employment_status: pick(['Active', 'Active', 'Active', 'Active', 'Notice Period', 'On Leave']),
-
-          joining_date: iso(join),
-          confirmation_date: iso(addDays(join, 180)),
-          total_experience_years: String(int(1, 18)),
-          relevant_experience_years: String(int(1, 14)),
-          tenure_months: String(Math.max(1, Math.round((TODAY - join) / 2592000000))),
-
-          work_location: pick(['Hyderabad', 'Bengaluru', 'Chennai', 'Pune', 'Noida', 'Mumbai', 'Kolkata', 'Coimbatore', 'Kochi', 'Remote']),
-          work_mode: pick(['Offshore', 'Offshore', 'Offshore', 'Onsite', 'Hybrid', 'Remote']),
+          // ---- profile & organisation ----
+          capability: pick(CAPABILITY),
+          job_profile_family: pick(['Engineering', 'Data & Analytics', 'Quality', 'Cloud', 'Functional']),
+          management_level: pick(MANAGEMENT_LEVEL),
+          doj: iso(join),
           country: pick(['India', 'India', 'India', 'India', 'United States', 'United Kingdom', 'Singapore']),
-          city: pick(['Hyderabad', 'Bengaluru', 'Chennai', 'Pune', 'Noida', 'Mumbai']),
-          shift: pick(['General', 'General', 'Morning', 'Evening', 'Night', 'Rotational']),
-          seat_number: chance(0.6) ? `F${int(1, 12)}-${int(100, 999)}` : null,
-
-          primary_skill: pick(['Java', 'Spring Boot', 'Microservices', 'Python', 'Data Engineering', 'Spark',
-            'Airflow', 'React', 'Angular', 'Node.js', '.NET', 'Salesforce', 'SAP', 'Oracle', 'Terraform',
-            'AWS', 'Azure', 'Kubernetes', 'Selenium', 'Performance Testing', 'Business Analysis']),
-          secondary_skill: chance(0.5) ? pick(['SQL', 'Kafka', 'Docker', 'Jenkins', 'GraphQL', 'Tableau', 'Power BI']) : null,
-          skill_category: pick(['Application Development', 'Data & Analytics', 'Cloud', 'Quality Engineering', 'ERP / CRM', 'DevOps', 'Functional']),
-          certification: chance(0.4) ? pick(['AWS Solutions Architect', 'Azure Administrator', 'CKA', 'Scrum Master', 'ISTQB', 'Salesforce Admin']) : null,
-          certification_status: pick(['Certified', 'In Progress', 'Not Started', 'Expired', 'Not Started']),
-          training_status: pick(['Completed', 'Completed', 'In Progress', 'Not Started', 'Not Started', 'Waived']),
-          qualification: pick(['B.Tech', 'B.E.', 'B.Sc', 'MCA', 'M.Tech', 'MBA', 'Diploma']),
-
-          billing_status: profile.pct > 0
-            ? pick(['Billable', 'Billable', 'Billable', 'T&M', 'Fixed Price', 'Shadow'])
-            : 'Non-Billable',
-          rate_card: profile.pct > 0 ? String(int(180, 950)) : null,
-          currency: 'USD',
-          po_number: chance(0.55) ? `PO-${int(2024, 2026)}-${int(1000, 9999)}` : null,
-          invoice_status: profile.pct > 0 ? pick(['Invoiced', 'Invoiced', 'Pending', 'N/A']) : 'N/A',
-          margin_percentage: String(int(12, 42)),
-          effective_date: startDate ? iso(startDate) : iso(addDays(TODAY, -int(30, 200))),
-
-          project_manager: `${pick(FIRST)} ${pick(LAST)}`,
-          client_name: pick(CLIENTS),
-          engagement_type: pick(['T&M', 'Fixed Price', 'Managed Services', 'Staff Augmentation']),
-          sow_reference: `SOW-${int(100, 999)}`,
-          work_package: pick(['WP1 Core', 'WP2 Integration', 'WP3 Migration', 'WP4 Testing', 'WP5 Support']),
-          phase: pick(['Discovery', 'Design', 'Build', 'Build', 'Test', 'UAT', 'Hypercare', 'Steady State']),
-
-          background_check: pick(['Cleared', 'Cleared', 'Cleared', 'Pending', 'Not Initiated']),
-          nda_signed: chance(0.9) ? 'Yes' : 'No',
-          asset_id: `AST-${int(100000, 999999)}`,
-          access_approval: pick(['Approved', 'Approved', 'Pending', 'Revoked']),
-          timesheet_compliance: pick(['Compliant', 'Compliant', 'Compliant', 'Missing', 'Waived']),
-          leave_balance: String(int(0, 28)),
-          performance_rating: pick(['5', '4', '4', '3', '3', '3', '2', '1']),
-          skill_track: pick(['Java', 'Data Engineering', 'Cloud', 'QA', 'Business Analysis', 'DevOps']),
-          completion_status: pick(['Pending', 'Partial', 'Completed', 'Completed']),
+          manager_id: `EMP-${String(int(1001, 12000)).padStart(5, '0')}`,
+          manager_name: `${pick(FIRST)} ${pick(LAST)}`,
+          cost_center_id: `CC-${int(1000, 9999)}`,
+          cost_center_name: pick(['Delivery', 'Platform Engineering', 'Data Practice', 'Quality Engineering', 'Support']),
         };
 
         for (const [key, value] of Object.entries(vals)) {
@@ -504,7 +494,7 @@ async function writeWorkbook(file) {
 
   const rows = q.all(
     `SELECT a.id, p.name pname, s.name sname, c.name cname,
-            e.emp_code, e.name, e.designation, e.email, e.phone, a.status, a.remarks, sup.name supplier
+            e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone, a.status, a.remarks, sup.name supplier
        FROM assignments a
        JOIN employees e ON e.id = a.employee_id
        JOIN projects p ON p.id = a.project_id
@@ -528,7 +518,8 @@ async function writeWorkbook(file) {
       switch (f.key) {
         case 'emp_code': line.push(r.emp_code); break;
         case 'name': line.push(r.name); break;
-        case 'designation': line.push(r.designation); break;
+        case 'first_name': line.push(r.first_name); break;
+        case 'last_name': line.push(r.last_name); break;
         case 'email': line.push(r.email); break;
         case 'phone': line.push(r.phone); break;
         case 'status': line.push(r.status); break;

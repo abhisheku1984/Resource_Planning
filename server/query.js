@@ -26,7 +26,8 @@ const schema = require('./schema');
 const MAPPED = {
   emp_code: { source: 'e', column: 'emp_code', sql: 'e.emp_code' },
   name: { source: 'e', column: 'name', sql: 'e.name' },
-  designation: { source: 'e', column: 'designation', sql: 'e.designation' },
+  first_name: { source: 'e', column: 'first_name', sql: 'e.first_name' },
+  last_name: { source: 'e', column: 'last_name', sql: 'e.last_name' },
   email: { source: 'e', column: 'email', sql: 'e.email' },
   phone: { source: 'e', column: 'phone', sql: 'e.phone' },
   status: { source: 'a', column: 'status', sql: 'a.status', alias: 'employee_status', valuesKey: 'employment_status' },
@@ -35,12 +36,13 @@ const MAPPED = {
 };
 
 /** Columns shown when no category is selected. Keep this short and useful. */
-const DEFAULT_KEYS = ['emp_code', 'name', 'designation', 'supplier', 'status', 'bench_category', 'allocation_percentage', 'remarks'];
+const DEFAULT_KEYS = ['emp_code', 'first_name', 'last_name', 'status', 'bench_category',
+  'allocation_percentage', 'account', 'account_name'];
 
 const BASE_SELECT = `
   SELECT a.id AS assignment_id, a.project_id, a.subproject_id, a.category_id, a.supplier_id,
          a.status AS employee_status, a.remarks, a.updated_at AS assignment_updated_at, a.rev AS assignment_rev,
-         e.id AS employee_id, e.emp_code, e.name, e.email, e.phone, e.designation,
+         e.id AS employee_id, e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone,
          e.updated_at AS employee_updated_at,
          p.name AS project_name, p.code AS project_code,
          s.name AS subproject_name, c.name AS category_name,
@@ -231,7 +233,7 @@ function buildWhere({ scope, allowed, filters, search, columns, params = {} }) {
   if (term) {
     const like = `%${term.toLowerCase()}%`;
     const mappedSearch = ['e.emp_code', 'e.name', 'ifnull(e.email, \'\')', 'ifnull(e.phone, \'\')',
-      'ifnull(e.designation, \'\')', 'ifnull(sup.name, \'\')', 'ifnull(a.remarks, \'\')'];
+      'ifnull(sup.name, \'\')', 'ifnull(a.remarks, \'\')'];
     // only search text-ish value columns that are actually in view
     const textFields = columns
       .filter((c) => !MAPPED[c.key] && ['text', 'email', 'tel', 'select'].includes(c.type))
@@ -253,7 +255,8 @@ function buildWhere({ scope, allowed, filters, search, columns, params = {} }) {
 const SORTS = {
   emp_code: 'e.emp_code',
   name: 'e.name COLLATE NOCASE',
-  designation: 'e.designation COLLATE NOCASE',
+  first_name: 'e.first_name COLLATE NOCASE',
+  last_name: 'e.last_name COLLATE NOCASE',
   supplier: 'sup.name COLLATE NOCASE',
   status: 'a.status',
   project: 'p.name',
@@ -357,9 +360,11 @@ function hydrate(ids, columns, scope) {
       if (m) {
         out[c.key] = c.key === 'emp_code' ? r.emp_code
           : c.key === 'name' ? r.name
+          : c.key === 'first_name' ? r.first_name
+          : c.key === 'last_name' ? r.last_name
           : c.key === 'email' ? r.email
           : c.key === 'phone' ? r.phone
-          : c.key === 'designation' ? r.designation
+
           : c.key === 'status' ? r.employee_status
           : c.key === 'supplier' ? r.supplier
           : c.key === 'remarks' ? r.remarks
@@ -465,7 +470,7 @@ function facetsFor(scope, columns) {
 /** One record with every field (used by the CRM panel and the submit form). */
 function getAssignment(id) {
   const meta = q.get(
-    `SELECT a.*, e.emp_code, e.name, e.email, e.phone, e.designation, e.id AS employee_id
+    `SELECT a.*, e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone, e.id AS employee_id
        FROM assignments a JOIN employees e ON e.id = a.employee_id WHERE a.id = ?`,
     Number(id)
   );
@@ -481,9 +486,11 @@ function getAssignment(id) {
     if (m) {
       values[f.key] = f.key === 'emp_code' ? meta.emp_code
         : f.key === 'name' ? meta.name
+        : f.key === 'first_name' ? meta.first_name
+        : f.key === 'last_name' ? meta.last_name
         : f.key === 'email' ? meta.email
         : f.key === 'phone' ? meta.phone
-        : f.key === 'designation' ? meta.designation
+
         : f.key === 'status' ? meta.status
         : f.key === 'remarks' ? meta.remarks
         : f.key === 'supplier' ? (meta.supplier_id ? q.get('SELECT name FROM suppliers WHERE id = ?', meta.supplier_id)?.name : null)

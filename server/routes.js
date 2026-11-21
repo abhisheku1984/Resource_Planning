@@ -548,7 +548,7 @@ router.get('/people', requireAuth, wrap((req, res) => {
   const ph = ids.map(() => '?').join(',');
   const like = `%${term}%`;
   const rows = q.all(
-    `SELECT DISTINCT e.id, e.emp_code, e.name, e.email, e.phone, e.designation,
+    `SELECT DISTINCT e.id, e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone,
             (SELECT COUNT(*) FROM assignments a2 WHERE a2.employee_id = e.id AND a2.active = 1 AND a2.project_id IN (${ph})) placements
        FROM employees e
        JOIN assignments a ON a.employee_id = e.id AND a.active = 1

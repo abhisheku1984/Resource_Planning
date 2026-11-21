@@ -5,7 +5,7 @@ const schema = require('./schema');
 
 /**
  * Employee records live in two places:
- *  - identity (emp_code, name, designation, email, phone) -> employees table
+ *  - identity (emp_code, first/last name, email, phone) -> employees table
  *  - the rest of the configurable columns                  -> assignment values
  *
  * Every "row" on an employee table is an *assignment*: a person placed in a
@@ -16,7 +16,8 @@ const schema = require('./schema');
 const MAPPED = {
   emp_code: { table: 'e', column: 'emp_code' },
   name: { table: 'e', column: 'name' },
-  designation: { table: 'e', column: 'designation' },
+  first_name: { table: 'e', column: 'first_name' },
+  last_name: { table: 'e', column: 'last_name' },
   email: { table: 'e', column: 'email' },
   phone: { table: 'e', column: 'phone' },
   status: { table: 'a', column: 'status' },
@@ -53,7 +54,7 @@ function buildRowQuery({ projectId, subprojectId, categoryId }) {
     : null;
   // With no category selected we show a compact, cross-category default set
   // instead of every configurable field (which would make the table unusable).
-  const DEFAULT_KEYS = ['emp_code', 'name', 'designation', 'supplier', 'status', 'remarks'];
+  const DEFAULT_KEYS = ['emp_code', 'first_name', 'last_name', 'supplier', 'status', 'remarks'];
   const columns = categoryIdForColumns
     ? schema.columnsForCategory(categoryIdForColumns)
     : schema.listFields()
@@ -75,7 +76,7 @@ function buildRowQuery({ projectId, subprojectId, categoryId }) {
     'e.name',
     'e.email',
     'e.phone',
-    'e.designation',
+    'e.first_name', 'e.last_name',
     'a.status',
     'a.remarks',
     'a.updated_by',
@@ -166,7 +167,7 @@ function listEmployees(user, params = {}) {
       'lower(e.name) LIKE ?',
       'ifnull(lower(e.email), \'\') LIKE ?',
       'ifnull(lower(e.phone), \'\') LIKE ?',
-      'ifnull(lower(e.designation), \'\') LIKE ?',
+      'ifnull(lower(e.first_name || \' \' || e.last_name), \'\') LIKE ?',
       'ifnull(lower(sup.name), \'\') LIKE ?',
       'ifnull(lower(p.name), \'\') LIKE ?',
       'ifnull(lower(s.name), \'\') LIKE ?',
@@ -275,7 +276,8 @@ function normalizeRow(r, columns, dynamic) {
         : c.key === 'name' ? r.name
         : c.key === 'email' ? r.email
         : c.key === 'phone' ? r.phone
-        : c.key === 'designation' ? r.designation
+        : c.key === 'first_name' ? r.first_name
+        : c.key === 'last_name' ? r.last_name
         : c.key === 'status' ? r.status
         : c.key === 'supplier' ? r.supplier
         : c.key === 'remarks' ? r.remarks
@@ -291,7 +293,7 @@ function normalizeRow(r, columns, dynamic) {
 /** Read one assignment with full context (used by the CRM panel). */
 function getAssignment(id) {
   const meta = q.get(
-    `SELECT a.*, e.emp_code, e.name, e.email, e.phone, e.designation, e.id AS employee_id
+    `SELECT a.*, e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone, e.id AS employee_id
        FROM assignments a JOIN employees e ON e.id = a.employee_id WHERE a.id = ?`,
     id
   );
@@ -307,7 +309,8 @@ function getAssignment(id) {
         : f.key === 'name' ? meta.name
         : f.key === 'email' ? meta.email
         : f.key === 'phone' ? meta.phone
-        : f.key === 'designation' ? meta.designation
+        : f.key === 'first_name' ? meta.first_name
+        : f.key === 'last_name' ? meta.last_name
         : f.key === 'status' ? meta.status
         : f.key === 'remarks' ? meta.remarks
         : f.key === 'supplier' ? (meta.supplier_id ? q.get('SELECT name FROM suppliers WHERE id = ?', meta.supplier_id)?.name : null)
@@ -336,7 +339,7 @@ function getAssignment(id) {
   };
 }
 
-const EDITABLE_CORE = new Set(['name', 'designation', 'email', 'phone']);
+const EDITABLE_CORE = new Set(['first_name', 'last_name', 'email', 'phone']);
 
 /**
  * Apply a set of field changes to an assignment.
@@ -619,9 +622,13 @@ function findCandidates({ emp_code, name, email, phone }) {
  * Uncertain matches are queued in duplicate_reviews instead of silently creating.
  */
 function createPerson(user, payload) {
-  const { emp_code, name, project_id, subproject_id, category_id } = payload;
+  const { emp_code, project_id, subproject_id, category_id } = payload;
+  // accept either a single display name or the workbook's first/last pair
+  const first = payload.first_name ? String(payload.first_name).trim() : '';
+  const last = payload.last_name ? String(payload.last_name).trim() : '';
+  const name = String(payload.name || `${first} ${last}`.trim()).trim();
   if (!emp_code || !String(emp_code).trim()) throw Object.assign(new Error('Employee ID is required.'), { status: 422 });
-  if (!name || !String(name).trim()) throw Object.assign(new Error('Employee Name is required.'), { status: 422 });
+  if (!name) throw Object.assign(new Error('First Name and Last Name are required.'), { status: 422 });
   assertProjectAccess(user, project_id, 'can_edit');
   const sub = q.get('SELECT * FROM subprojects WHERE id = ?', Number(subproject_id));
   if (!sub || sub.project_id !== Number(project_id)) throw Object.assign(new Error('Subproject does not belong to the selected project.'), { status: 422 });
@@ -637,13 +644,14 @@ function createPerson(user, payload) {
     let created = false;
     if (!employee) {
       const res = q.run(
-        `INSERT INTO employees (emp_code, name, email, phone, designation, created_by, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO employees (emp_code, name, first_name, last_name, email, phone, created_by, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         String(emp_code).trim(),
-        String(name).trim(),
+        name,
+        first || name.split(' ')[0],
+        last || name.split(' ').slice(1).join(' ') || null,
         payload.email || null,
         payload.phone || null,
-        payload.designation || null,
         user.id,
         user.id
       );

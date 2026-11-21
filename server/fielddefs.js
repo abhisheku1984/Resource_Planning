@@ -1,13 +1,15 @@
 'use strict';
 /**
- * The field catalogue for a real HR resource-management workbook.
+ * The field catalogue - YOUR column headers.
  *
- * ~75 columns, grouped the way an HR team actually maintains them. Groups drive
- * the "Show columns" picker so a supervisor is not scrolling a 75-item list.
+ * These are the 65 headers from the HR master workbook, in the order they appear
+ * there, with the abbreviations expanded so they read properly on screen. The
+ * importer matches on header text, so your real file will import without any
+ * column mapping as long as the header names match the `label` values here.
  *
- * The 8 columns marked `filterable: true` are the facets the leadership team
- * slices by (bench category, allocation, skill, location…). Everything else is
- * available through the column picker but kept out of the way by default.
+ *   filterable -> shown as a facet chip
+ *   submit     -> captured by the supervisor's Update panel (and the assistant)
+ *   editable:false -> read-only in the UI; true only for what supervisors own
  */
 
 const BENCH_CATEGORIES = [
@@ -31,158 +33,141 @@ const ALLOCATION_STATUS = ['Allocated', 'Partially Allocated', 'Unallocated', 'R
  */
 const BLOCK_STATUS = ['No Block', 'Soft Block', 'Hard Block'];
 
+/** Values seen in the HR workbook. Free text is allowed where the list is open. */
+const BILLING_STATUS = ['Billed', 'Partially Billed', 'Unbilled', 'Not Available'];
+const MANAGEMENT_LEVEL = ['1', '2', '3', '4A', '4B', '4C', '4D', '5A', '5B'];
+const CAPABILITY = ['Data', 'Advisory', 'Tech', 'Support'];
+const ROW_STATUS = ['Allocated', 'Leadership', 'Not Available', 'Unbilled'];
+const SERVICE_STATUS = ['Located', 'Growth Training Development', 'Internal Project', 'Maternity',
+  'Operation Challenge', 'Project Role', 'IT Deployment', 'RGFTE', 'Supervise', 'Support'];
+const SOURCE = ['As per RAR', 'As per System'];
+
+/**
+ * Identity. These are the only columns stored on the employees table itself;
+ * everything else lives per-assignment in the value table.
+ *
+ * First Name + Last Name are kept apart because that is how the workbook stores
+ * them. The business key is Employee ID, never a name.
+ */
 const CORE = [
-  { key: 'emp_code', label: 'Employee ID', type: 'text', core: true, system: true, group: 'Identity', help: 'Unique business key — used for imports and duplicate detection.' },
-  { key: 'name', label: 'Employee Name', type: 'text', core: true, system: true, group: 'Identity' },
-  { key: 'designation', label: 'Designation', type: 'text', core: true, group: 'Identity' },
+  { key: 'emp_code', label: 'Employee ID', type: 'text', core: true, system: true, group: 'Identity',
+    help: 'The business key. Imports match on this, so names never create duplicates.' },
+  { key: 'first_name', label: 'First Name', type: 'text', core: true, system: true, group: 'Identity' },
+  { key: 'last_name', label: 'Last Name', type: 'text', core: true, system: true, group: 'Identity' },
   { key: 'email', label: 'Email Address', type: 'email', core: true, group: 'Contact' },
   { key: 'phone', label: 'Contact Number', type: 'tel', core: true, group: 'Contact' },
-  { key: 'status', label: 'Current Status', type: 'select', group: 'Assignment',
-    options: ['Active', 'On Leave', 'Training', 'Billing Hold', 'Released', 'Completed', 'Resigned'] },
   { key: 'supplier', label: 'Supplier', type: 'select', group: 'Supplier', options: 'SUPPLIERS' },
   { key: 'remarks', label: 'Remarks', type: 'textarea', group: 'Notes' },
 ];
 
 /**
- * `filterable` → shown as a facet chip.
- * `submit`     → captured by the supervisor's "Update record" submit form.
+ * Everything else, in workbook order. `mirror` means the value is also held on
+ * the assignment row (project, status) so the list and its filters stay fast.
  */
 const IMPORTED = [
-  // ---------------- Core allocation (the supervisor's working set) ----------
-  { key: 'bench_category', label: 'Bench Category', type: 'select', group: 'Allocation',
-    options: BENCH_CATEGORIES, filterable: true, submit: true,
-    help: 'Allocated / PID Allocated / Bench / Available / Not Available and similar.' },
-  { key: 'allocation_status', label: 'Allocation Status', type: 'select', group: 'Allocation',
-    options: ALLOCATION_STATUS, filterable: true, submit: true },
-  { key: 'allocation_percentage', label: 'Allocation %', type: 'number', group: 'Allocation', filterable: true, submit: true },
-  { key: 'allocation_start_date', label: 'Allocation Start Date', type: 'date', group: 'Allocation', filterable: true, submit: true },
-  { key: 'allocation_end_date', label: 'Allocation End Date', type: 'date', group: 'Allocation', filterable: true },
-
-  // ---------------- Supervisor submit fields (their actual job) -------------
-  { key: 'allocation_plan', label: 'Allocation Plan / Next Project', type: 'text', group: 'Supervisor Update',
-    submit: true, help: 'If the person is not allocated, where are they going next?' },
-  { key: 'pid', label: 'PID', type: 'text', group: 'Supervisor Update', filterable: true, submit: true },
-  { key: 'opid', label: 'OPID', type: 'text', group: 'Supervisor Update', submit: true },
-  { key: 'project_role', label: 'Role on Project', type: 'text', group: 'Supervisor Update', submit: true },
-  { key: 'eta_available', label: 'ETA / Availability Date', type: 'date', group: 'Supervisor Update', submit: true },
-  { key: 'follow_up_notes', label: 'Supervisor Notes', type: 'textarea', group: 'Supervisor Update', submit: true },
-  { key: 'critical_flag', label: 'Critical Skill Flag', type: 'select', group: 'Supervisor Update',
-    options: ['Yes', 'No'], submit: true },
-  { key: 'risk_flag', label: 'Attrition Risk', type: 'select', group: 'Supervisor Update',
-    options: ['High', 'Medium', 'Low', 'Not assessed'], filterable: true, submit: true },
-  { key: 'block_status', label: 'Block Status', type: 'select', group: 'Supervisor Update',
-    options: BLOCK_STATUS, filterable: true, submit: true,
-    help: 'Hard Block = cannot move without client sign-off. Soft Block = can move with notice.' },
-  { key: 'block_reason', label: 'Block Reason / Account', type: 'text', group: 'Supervisor Update',
-    submit: true, help: 'Why the person is blocked, or which account holds them.' },
-
-  // ---------------- Grade & organisation --------------------------------
-  { key: 'grade', label: 'Grade / Band', type: 'select', group: 'Organisation',
-    options: ['L1', 'L2', 'L3', 'L4', 'L5', 'M1', 'M2', 'M3'], filterable: true },
-  { key: 'department', label: 'Department', type: 'select', group: 'Organisation',
-    options: ['Engineering', 'Data & Analytics', 'Quality Engineering', 'Cloud & Infrastructure',
-      'Product', 'Business Analysis', 'DevOps', 'Design', 'Project Management'] },
-  { key: 'sub_department', label: 'Sub Department', type: 'text', group: 'Organisation' },
-  { key: 'business_unit', label: 'Business Unit', type: 'select', group: 'Organisation',
-    options: ['BFSI', 'Retail & CPG', 'Healthcare', 'Manufacturing', 'Technology', 'Internal'] },
-  { key: 'reporting_manager', label: 'Reporting Manager', type: 'text', group: 'Organisation' },
-  { key: 'du_head', label: 'DU Head', type: 'text', group: 'Organisation' },
-  { key: 'hr_business_partner', label: 'HR Business Partner', type: 'text', group: 'Organisation' },
-  { key: 'cost_center', label: 'Cost Center', type: 'text', group: 'Organisation' },
-  { key: 'employee_type', label: 'Employee Type', type: 'select', group: 'Employment',
-    options: ['Full Time', 'Contract', 'Intern', 'Consultant', 'Subcontractor'] },
-  { key: 'employment_status', label: 'Employment Status', type: 'select', group: 'Employment',
-    options: ['Active', 'Notice Period', 'On Leave', 'Exited'] },
-
-  // ---------------- Dates & tenure --------------------------------------
-  { key: 'joining_date', label: 'Joining Date', type: 'date', group: 'Employment' },
-  { key: 'confirmation_date', label: 'Confirmation Date', type: 'date', group: 'Employment' },
-  { key: 'last_working_date', label: 'Last Working Date', type: 'date', group: 'Employment' },
-  { key: 'total_experience_years', label: 'Total Experience (Years)', type: 'number', group: 'Employment' },
-  { key: 'relevant_experience_years', label: 'Relevant Experience (Years)', type: 'number', group: 'Employment' },
-  { key: 'tenure_months', label: 'Tenure (Months)', type: 'number', group: 'Employment' },
-
-  // ---------------- Location -------------------------------------------
-  { key: 'work_location', label: 'Work Location', type: 'select', group: 'Location',
-    options: ['Hyderabad', 'Bengaluru', 'Chennai', 'Pune', 'Noida', 'Mumbai', 'Kolkata', 'Coimbatore', 'Kochi', 'Remote'],
-    filterable: true },
-  { key: 'work_mode', label: 'Work Mode', type: 'select', group: 'Location',
-    options: ['Onsite', 'Offshore', 'Hybrid', 'Remote'] },
+  // ---------------- 1-12: who the person is ------------------------------
+  { key: 'capability', label: 'Capability', type: 'select', group: 'Profile',
+    options: CAPABILITY, filterable: true, help: 'Data / Advisory / Tech / Support.' },
+  { key: 'revised_allocation', label: 'Revised Allocation', type: 'number', group: 'Allocation' },
+  { key: 'build_status', label: 'Build Status', type: 'select', group: 'Billing',
+    options: BILLING_STATUS, filterable: true },
+  { key: 'job_profile_family', label: 'Job Profile Family', type: 'text', group: 'Profile' },
+  { key: 'management_level', label: 'Management Level', type: 'select', group: 'Profile',
+    options: MANAGEMENT_LEVEL, filterable: true },
+  { key: 'doj', label: 'DOJ', type: 'date', group: 'Profile', help: 'Date of joining.' },
   { key: 'country', label: 'Country', type: 'select', group: 'Location',
     options: ['India', 'United States', 'United Kingdom', 'Singapore', 'UAE', 'Germany'] },
-  { key: 'city', label: 'City', type: 'text', group: 'Location' },
-  { key: 'visa_status', label: 'Visa Status', type: 'text', group: 'Location' },
-  { key: 'seat_number', label: 'Seat / Desk', type: 'text', group: 'Location' },
-  { key: 'shift', label: 'Shift', type: 'select', group: 'Location',
-    options: ['General', 'Morning', 'Evening', 'Night', 'Rotational'] },
+  { key: 'manager_id', label: 'Manager ID', type: 'text', group: 'Organisation' },
+  { key: 'manager_name', label: 'Manager Name', type: 'text', group: 'Organisation' },
+  { key: 'cost_center_id', label: 'Cost Center ID', type: 'text', group: 'Organisation' },
+  { key: 'cost_center_name', label: 'Cost Center Name', type: 'text', group: 'Organisation' },
 
-  // ---------------- Skills ---------------------------------------------
-  { key: 'primary_skill', label: 'Primary Skill', type: 'select', group: 'Skills',
-    options: ['Java', 'Spring Boot', 'Microservices', 'Python', 'Data Engineering', 'Spark', 'Airflow',
-      'React', 'Angular', 'Node.js', '.NET', 'Salesforce', 'SAP', 'Oracle', 'Terraform', 'AWS', 'Azure',
-      'Kubernetes', 'Selenium', 'Performance Testing', 'Business Analysis'],
-    filterable: true },
-  { key: 'secondary_skill', label: 'Secondary Skill', type: 'text', group: 'Skills' },
-  { key: 'skill_category', label: 'Skill Category', type: 'select', group: 'Skills',
-    options: ['Application Development', 'Data & Analytics', 'Cloud', 'Quality Engineering',
-      'ERP / CRM', 'DevOps', 'Functional'] },
-  { key: 'certification', label: 'Certification', type: 'text', group: 'Skills' },
-  { key: 'certification_status', label: 'Certification Status', type: 'select', group: 'Skills',
-    options: ['Certified', 'In Progress', 'Not Started', 'Expired'] },
-  { key: 'training_status', label: 'Training Status', type: 'select', group: 'Skills',
-    options: ['Not Started', 'In Progress', 'Completed', 'Failed', 'Waived'] },
-  { key: 'university', label: 'University / Institute', type: 'text', group: 'Skills' },
-  { key: 'qualification', label: 'Highest Qualification', type: 'select', group: 'Skills',
-    options: ['B.Tech', 'B.E.', 'B.Sc', 'MCA', 'M.Tech', 'MBA', 'Diploma'] },
+  // ---------------- 13-20: where the person is allocated -----------------
+  { key: 'pmi_project_name', label: 'PMI Project Name', type: 'text', group: 'Allocation' },
+  { key: 'project_id_ext', label: 'Project ID', type: 'text', group: 'Allocation', filterable: true },
+  { key: 'allocation_start_date', label: 'Allocation Start Date', type: 'date', group: 'Allocation', filterable: true },
+  { key: 'allocation_end_date', label: 'Allocation Ended Date', type: 'date', group: 'Allocation', filterable: true },
+  { key: 'last_week_end_date', label: 'Last Week End Date', type: 'date', group: 'Allocation' },
+  { key: 'allocation_percentage', label: 'Allocation Percentage', type: 'number', group: 'Allocation',
+    filterable: true, submit: true, help: '0-100.' },
 
-  // ---------------- Commercial -----------------------------------------
-  { key: 'billing_status', label: 'Billing Status', type: 'select', group: 'Commercial',
-    options: ['Billable', 'Non-Billable', 'Shadow', 'T&M', 'Fixed Price'], filterable: true },
-  { key: 'rate_card', label: 'Rate Card (USD/day)', type: 'number', group: 'Commercial' },
-  { key: 'currency', label: 'Currency', type: 'select', group: 'Commercial', options: ['USD', 'USD', 'USD', 'EUR'] },
-  { key: 'billing_entity', label: 'Billing Entity', type: 'text', group: 'Commercial' },
-  { key: 'po_number', label: 'PO Number', type: 'text', group: 'Commercial' },
-  { key: 'invoice_status', label: 'Invoice Status', type: 'select', group: 'Commercial',
-    options: ['Invoiced', 'Pending', 'N/A', 'Disputed'] },
-  { key: 'margin_percentage', label: 'Margin %', type: 'number', group: 'Commercial' },
-  { key: 'effective_date', label: 'Effective Date', type: 'date', group: 'Commercial' },
+  // ---------------- 21-32: account, status, bench ------------------------
+  { key: 'account', label: 'Account', type: 'text', group: 'Account', filterable: true },
+  { key: 'vertical', label: 'Vertical', type: 'text', group: 'Account', filterable: true },
+  { key: 'status', label: 'Status', type: 'select', group: 'Allocation', mirror: 'a.status',
+    options: ROW_STATUS, filterable: true, submit: true,
+    help: 'Allocated / Leadership / Not Available / Unbilled.' },
+  { key: 'service_status', label: 'Service Status', type: 'select', group: 'Allocation',
+    options: SERVICE_STATUS, submit: true },
+  { key: 'source', label: 'Source', type: 'select', group: 'Account', options: SOURCE },
+  { key: 'account_manual', label: 'Account Manual', type: 'text', group: 'Account' },
+  { key: 'bench_aging', label: 'Bench Aging', type: 'number', group: 'Bench', help: 'Age on the bench, in days.' },
+  { key: 'bench_aging_comment', label: 'Bench Aging Comment', type: 'textarea', group: 'Bench' },
+  { key: 'bench_aging_category', label: 'Bench Aging Category', type: 'select', group: 'Bench',
+    options: ['0-30 days', '31-60 days', '61-90 days', '90+ days'], filterable: true },
+  { key: 'bl_status', label: 'BL Status', type: 'text', group: 'Bench' },
+  { key: 'bench_later_issue_date', label: 'Bench Later Issue Date', type: 'date', group: 'Bench' },
+  { key: 'bench_later_end_date', label: 'Bench Later End Date', type: 'date', group: 'Bench' },
 
-  // ---------------- Project context ------------------------------------
-  { key: 'project_code_ext', label: 'Project Code (Ext.)', type: 'text', group: 'Project Context' },
-  { key: 'project_manager', label: 'Project Manager', type: 'text', group: 'Project Context' },
-  { key: 'client_name', label: 'Client Name', type: 'text', group: 'Project Context' },
-  { key: 'engagement_type', label: 'Engagement Type', type: 'select', group: 'Project Context',
-    options: ['T&M', 'Fixed Price', 'Managed Services', 'Staff Augmentation', 'Internal'] },
-  { key: 'sow_reference', label: 'SOW Reference', type: 'text', group: 'Project Context' },
-  { key: 'work_package', label: 'Work Package', type: 'text', group: 'Project Context' },
-  { key: 'phase', label: 'Project Phase', type: 'select', group: 'Project Context',
-    options: ['Discovery', 'Design', 'Build', 'Test', 'UAT', 'Hypercare', 'Steady State'] },
+  // ---------------- 33-41: manual overlays -------------------------------
+  { key: 'offsite_onsite', label: 'Offsite / Onsite', type: 'select', group: 'Location',
+    options: ['Offsite', 'Onsite', 'Offsite-Onsite'], filterable: true },
+  { key: 'vertical_manual', label: 'Vertical Manual', type: 'text', group: 'Account' },
+  { key: 'unit_manual', label: 'Unit Manual', type: 'text', group: 'Account' },
+  { key: 'ae', label: 'AE', type: 'text', group: 'Account' },
+  { key: 'vp_mapping', label: 'VP Mapping', type: 'text', group: 'Account' },
+  { key: 'billing_status', label: 'Billing Status', type: 'select', group: 'Billing',
+    options: ['Billable', 'Non-Billable', 'Shadow', 'T&M', 'Fixed Price'], filterable: true, submit: true },
+  { key: 'bench_category', label: 'Bench Category', type: 'select', group: 'Bench',
+    options: BENCH_CATEGORIES, filterable: true, submit: true },
+  { key: 'bench_subcategory', label: 'Bench Subcategory', type: 'text', group: 'Bench' },
 
-  // ---------------- Compliance -----------------------------------------
-  { key: 'background_check', label: 'Background Verification', type: 'select', group: 'Compliance',
-    options: ['Cleared', 'Pending', 'Not Initiated', 'Flagged'] },
-  { key: 'nda_signed', label: 'NDA Signed', type: 'select', group: 'Compliance', options: ['Yes', 'No'] },
-  { key: 'asset_id', label: 'Asset ID', type: 'text', group: 'Compliance' },
-  { key: 'access_approval', label: 'Access Approval', type: 'select', group: 'Compliance',
-    options: ['Approved', 'Pending', 'Revoked'] },
-  { key: 'timesheet_compliance', label: 'Timesheet Compliance', type: 'select', group: 'Compliance',
-    options: ['Compliant', 'Missing', 'Waived'] },
-  { key: 'leave_balance', label: 'Leave Balance (Days)', type: 'number', group: 'Compliance' },
-  { key: 'performance_rating', label: 'Performance Rating', type: 'select', group: 'Compliance',
-    options: ['5', '4', '3', '2', '1'] },
-  { key: 'last_updated_source', label: 'Last Updated Source', type: 'text', group: 'Notes' },
+  // ---------------- 44-53: leadership input, PID, opp --------------------
+  { key: 'pid_aging_weeks', label: 'PID Aging in Weeks', type: 'number', group: 'PID' },
+  { key: 'pid_segment', label: 'PID Segment', type: 'text', group: 'PID' },
+  { key: 'leader_input_last_week', label: 'Leader Input Last Week', type: 'textarea', group: 'Leadership' },
+  { key: 'leader_input_this_week', label: 'Leader Input This Week', type: 'textarea', group: 'Leadership' },
+  { key: 'leader_input_pid_account', label: 'Leader Input PID Account Awaited Name', type: 'text', group: 'Leadership' },
+  { key: 'billing_start_date', label: 'Billing Start Date', type: 'date', group: 'Billing', submit: true },
+  { key: 'billing_end_date', label: 'Billing Ended Date', type: 'date', group: 'Billing' },
+  { key: 'pid_awaited_account', label: 'PID Awaited Account', type: 'text', group: 'PID', submit: true,
+    help: 'Along with the blocked date, per the workbook.' },
+  { key: 'pid_awaited_blocked_date', label: 'PID Awaited Blocked Date', type: 'date', group: 'PID', submit: true },
+  { key: 'opp_id', label: 'Opp ID', type: 'text', group: 'Demand', submit: true },
+
+  // ---------------- 54-65: ownership, demand, close out ----------------
+  { key: 'account_owner', label: 'Account Owner', type: 'text', group: 'Account' },
+  { key: 'allocation_closure_eta', label: 'Allocation Closure ETA', type: 'date', group: 'Allocation', submit: true },
+  { key: 'role_of_month', label: 'Role of Month', type: 'text', group: 'Demand', submit: true },
+  { key: 'role_of_responses', label: 'Role of Responses', type: 'textarea', group: 'Demand', submit: true },
+  { key: 'detail_comments', label: 'Detail Comments', type: 'textarea', group: 'Notes', submit: true },
+  { key: 'block_status', label: 'Hard Block / Soft Block', type: 'select', group: 'Block',
+    options: BLOCK_STATUS, filterable: true, submit: true,
+    help: 'Hard Block = cannot move without client sign-off. Soft Block = can move with notice.' },
+  { key: 'account_name', label: 'Account Name', type: 'text', group: 'Account', filterable: true },
+  { key: 'interviewed_by', label: 'Interviewed By', type: 'text', group: 'Demand' },
+  { key: 'demand_number', label: 'Demand Number', type: 'text', group: 'Demand', submit: true },
+  { key: 'giga_project_name', label: 'Giga Project Name', type: 'text', group: 'Demand' },
+  { key: 'ard_date', label: 'ARD Date', type: 'date', group: 'Demand', submit: true },
 ];
 
-/** Seeded columns the application has always had; kept for compatibility. */
+/**
+ * Two columns appear twice in the workbook (Account, Billing Status, Allocation
+ * Percentage). Excel cannot hold two columns with the same header on import, so
+ * the second occurrence from each pair is stored under its own key below and the
+ * importer maps it explicitly.
+ */
 const LEGACY = [
-  { key: 'completion_status', label: 'Completion Status', type: 'select', group: 'Skills',
-    options: ['Pending', 'Partial', 'Completed', 'Dropped'] },
-  { key: 'allocation_status_legacy', label: 'Allocation Status (Legacy)', type: 'select', group: 'Allocation',
-    options: ['Allocated', 'Partially Allocated', 'Bench', 'Rolling Off'] },
-  { key: 'skill_track', label: 'Skill Track', type: 'select', group: 'Skills',
-    options: ['Java', 'Data Engineering', 'Cloud', 'QA', 'Business Analysis', 'DevOps'] },
+  { key: 'account_secondary', label: 'Account (2nd column)', type: 'text', group: 'Account' },
+  { key: 'billing_status_secondary', label: 'Billing Status (2nd column)', type: 'select', group: 'Billing',
+    options: ['Billable', 'Non-Billable', 'Shadow', 'T&M', 'Fixed Price'] },
+  { key: 'allocation_percentage_secondary', label: 'Allocation Percentage (2nd column)', type: 'number', group: 'Allocation' },
 ];
 
 const ALL = [...CORE, ...IMPORTED, ...LEGACY];
 
-module.exports = { BENCH_CATEGORIES, ALLOCATION_STATUS, BLOCK_STATUS, CORE, IMPORTED, LEGACY, ALL };
+module.exports = {
+  BENCH_CATEGORIES, ALLOCATION_STATUS, BLOCK_STATUS,
+  BILLING_STATUS, MANAGEMENT_LEVEL, CAPABILITY, ROW_STATUS, SERVICE_STATUS, SOURCE,
+  CORE, IMPORTED, LEGACY, ALL,
+};

@@ -13,12 +13,12 @@ const BASE_HEADERS = [
   { key: 'category.code', label: 'Category Code', width: 14 },
   { key: 'category.name', label: 'Category', width: 22 },
   { key: 'emp_code', label: 'Employee ID', width: 15 },
-  { key: 'name', label: 'Employee Name', width: 24 },
-  { key: 'designation', label: 'Designation', width: 20 },
+  { key: 'first_name', label: 'First Name', width: 18 },
+  { key: 'last_name', label: 'Last Name', width: 18 },
   { key: 'email', label: 'Email Address', width: 28 },
   { key: 'phone', label: 'Contact Number', width: 18 },
   { key: 'supplier', label: 'Supplier', width: 22 },
-  { key: 'status', label: 'Current Status', width: 16 },
+  { key: 'status', label: 'Status', width: 18 },
   { key: 'remarks', label: 'Remarks', width: 34 },
   { key: 'updated_at', label: 'Last Updated', width: 20 },
   { key: 'updated_by', label: 'Last Updated By', width: 20 },
@@ -46,7 +46,7 @@ function collectRows(user, scope = {}) {
 
   const rows = q.all(
     `SELECT a.id, a.status, a.remarks, a.updated_at, a.supplier_id,
-            e.emp_code, e.name, e.email, e.phone, e.designation,
+            e.emp_code, e.name, e.first_name, e.last_name, e.email, e.phone,
             p.code AS pcode, p.name AS pname,
             s.code AS scode, s.name AS sname,
             c.code AS ccode, c.name AS cname,
@@ -90,7 +90,8 @@ function collectRows(user, scope = {}) {
       category: { code: r.ccode, name: r.cname },
       emp_code: r.emp_code,
       name: r.name,
-      designation: r.designation,
+      first_name: r.first_name,
+      last_name: r.last_name,
       email: r.email,
       phone: r.phone,
       supplier: r.supplier,
@@ -360,14 +361,18 @@ function applyRow(user, rec, { force, report }) {
         `Import row ${rec._row}: matched ${fuzzy.match}`
       );
     }
+    const first = String(rec.values.first_name || '').trim();
+    const last = String(rec.values.last_name || '').trim();
+    const display = String(rec.identity.name || `${first} ${last}`.trim() || rec.identity.emp_code);
     const res = q.run(
-      `INSERT INTO employees (emp_code, name, email, phone, designation, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO employees (emp_code, name, first_name, last_name, email, phone, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       String(rec.identity.emp_code).trim(),
-      rec.identity.name ? String(rec.identity.name).trim() : String(rec.identity.emp_code),
+      display,
+      first || display.split(' ')[0],
+      last || display.split(' ').slice(1).join(' ') || null,
       rec.identity.email || null,
       rec.identity.phone || null,
-      rec.values.designation || null,
       user.id, user.id
     );
     employee = q.get('SELECT * FROM employees WHERE id = ?', Number(res.lastInsertRowid));
@@ -376,8 +381,13 @@ function applyRow(user, rec, { force, report }) {
     record({ entity: 'employee', entityId: employee.id, ref: employee.emp_code, action: 'create', newValue: employee.name, actor: user, meta: { via: 'import', filename: rec._filename } });
   } else {
     const updates = {};
-    for (const k of ['name', 'email', 'phone', 'designation']) {
+    for (const k of ['first_name', 'last_name', 'email', 'phone']) {
       if (rec.values[k] !== undefined && String(rec.values[k]) !== String(employee[k] ?? '')) updates[k] = rec.values[k];
+    }
+    if (updates.first_name !== undefined || updates.last_name !== undefined) {
+      const f = updates.first_name !== undefined ? updates.first_name : employee.first_name;
+      const l = updates.last_name !== undefined ? updates.last_name : employee.last_name;
+      updates.name = `${f || ''} ${l || ''}`.trim();
     }
     if (Object.keys(updates).length) {
       const sets = Object.keys(updates).map((k) => `${k} = ?`).join(', ');
@@ -424,7 +434,7 @@ function applyRow(user, rec, { force, report }) {
 
   // Custom (non-mapped) fields
   for (const [key, raw] of Object.entries(rec.values)) {
-    if (['emp_code', 'name', 'email', 'phone', 'designation', 'status', 'remarks', 'supplier'].includes(key)) continue;
+    if (['emp_code', 'name', 'first_name', 'last_name', 'email', 'phone', 'status', 'remarks', 'supplier'].includes(key)) continue;
     const f = fieldsByKey.get(key);
     if (!f) continue;
     const lock = q.get('SELECT * FROM field_overrides WHERE assignment_id = ? AND field_id = ? AND locked = 1', assignment.id, f.id);

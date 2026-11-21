@@ -133,7 +133,9 @@ CREATE TABLE IF NOT EXISTS category_fields (
 CREATE TABLE IF NOT EXISTS employees (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   emp_code    TEXT NOT NULL UNIQUE,        -- configured business key
-  name        TEXT NOT NULL,
+  name        TEXT NOT NULL,              -- display name; kept as "First Last" for search and sorting
+  first_name  TEXT,                       -- the workbook keeps these separate
+  last_name   TEXT,
   email       TEXT,
   phone       TEXT,
   designation TEXT,
@@ -304,6 +306,13 @@ function migrate() {
   add('fields', 'group_name', 'group_name TEXT');
   add('fields', 'imported', 'imported INTEGER NOT NULL DEFAULT 0');
   add('employees', 'name_source', "name_source TEXT DEFAULT 'manual'");
+  add('employees', 'first_name', 'first_name TEXT');
+  add('employees', 'last_name', 'last_name TEXT');
+  // backfill the split columns from the display name for existing rows
+  db.exec(`UPDATE employees SET
+             first_name = substr(name, 1, instr(name || ' ', ' ') - 1),
+             last_name  = ltrim(substr(name, instr(name || ' ', ' ') + 1))
+           WHERE first_name IS NULL`);
   // Optimistic-concurrency token. A timestamp is only second-precise, so two
   // saves inside the same second would compare equal and silently clobber.
   add('assignments', 'rev', 'rev INTEGER NOT NULL DEFAULT 1');

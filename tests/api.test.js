@@ -148,12 +148,16 @@ test('scenario 3 + 4: different categories expose different dynamic columns', as
   const bCols = (await api('GET', `/employees?categoryId=${billing.id}`)).data.columns.map((c) => c.key);
   const dCols = (await api('GET', `/employees?categoryId=${delivery.id}`)).data.columns.map((c) => c.key);
 
-  assert.ok(tCols.includes('training_status') && tCols.includes('completion_status') && tCols.includes('joining_date'));
-  assert.ok(!tCols.includes('billing_status'));
-  assert.ok(bCols.includes('billing_status') && bCols.includes('allocation_status') && bCols.includes('effective_date'));
-  assert.ok(!bCols.includes('training_status'));
+  // the catalogue is now the real HR workbook, so the layouts name its columns
+  assert.ok(tCols.includes('service_status') && tCols.includes('doj') && tCols.includes('capability'));
+  // submit fields are resolvable in every category by design, so compare on a
+  // column that is neither a facet nor a supervisor field
+  assert.ok(!tCols.includes('bench_subcategory'));
+  assert.ok(bCols.includes('billing_status') && bCols.includes('build_status') && bCols.includes('billing_start_date'));
+  assert.ok(!bCols.includes('giga_project_name'));
   assert.notDeepEqual(tCols, bCols);
   assert.ok(dCols.includes('status'));
+  assert.ok(dCols.includes('block_status'), 'Delivery Status tracks hard/soft block');
 
   // editability is per category
   const tDetail = await api('GET', `/categories/${training.id}/columns`);
@@ -206,17 +210,17 @@ test('scenario 6 + 9: CRM autosave persists and surfaces in the employee table',
 
   // simulated CRM autosave: several fields in one transaction
   const saved = await api('PATCH', `/employees/${row.assignmentId}`, {
-    changes: { phone: '+91 90000 12345', training_status: 'Completed', remarks: 'CRM autosave check' },
+    changes: { phone: '+91 90000 12345', service_status: 'Support', remarks: 'CRM autosave check' },
     rev: row.rev,
     reason: 'CRM autosave',
   });
   assert.equal(saved.status, 200);
-  assert.equal(saved.data.record.values.training_status, 'Completed');
+  assert.equal(saved.data.record.values.service_status, 'Support');
 
   // the employee table immediately reflects the new values
   const table = await api('GET', `/employees?categoryId=${category.id}&search=CRM autosave check`);
   assert.equal(table.data.total, 1);
-  assert.equal(table.data.rows[0].values.training_status, 'Completed');
+  assert.equal(table.data.rows[0].values.service_status, 'Support');
   assert.equal(table.data.rows[0].updatedBy, 'Priya Nair');
 
   // the contact change is stored on the person record
@@ -327,7 +331,7 @@ test('scenario 10 + 11: exports contain fresh data and imports preserve supervis
   // supervisor makes a manual edit -> the field becomes protected
   const marker = `supervisor-edit-${Date.now()}`;
   const saved = await api('PATCH', `/employees/${row.assignmentId}`, {
-    changes: { remarks: marker, training_status: 'Failed' },
+    changes: { remarks: marker, service_status: 'Support' },
     rev: row.rev,
   });
   assert.equal(saved.status, 200);
@@ -366,11 +370,11 @@ test('scenario 10 + 11: exports contain fresh data and imports preserve supervis
   const impSheet = impWb.getWorksheet('Employees');
   const hdrs = [];
   impSheet.getRow(1).eachCell((c, i) => hdrs[i] = String(c.value));
-  const trainCol = hdrs.indexOf('Training Status');
+  const trainCol = hdrs.indexOf('Service Status');
   impSheet.eachRow((r, i) => {
     if (i === 1) return;
     if (String(r.getCell(hdrs.indexOf('Employee ID')).value) === row.values.emp_code) {
-      r.getCell(trainCol).value = 'Completed';      // would overwrite a protected field
+      r.getCell(trainCol).value = 'Maternity';      // would overwrite a protected field
       r.getCell(hdrs.indexOf('Remarks')).value = marker; // unchanged
     }
   });
@@ -386,7 +390,7 @@ test('scenario 10 + 11: exports contain fresh data and imports preserve supervis
   assert.ok(importResult.data.result.protected >= 1, 'protected fields must be reported, not overwritten');
 
   const after = await importer('GET', `/employees/${row.assignmentId}`);
-  assert.equal(after.data.record.values.training_status, 'Failed', 'supervisor edit must survive a daily upload');
+  assert.equal(after.data.record.values.service_status, 'Support', 'supervisor edit must survive a daily upload');
   assert.equal(after.data.record.values.remarks, marker);
 
   // no duplicate employees were created by the import
@@ -477,14 +481,14 @@ test('per-category column configuration round-trips and validates required field
 test('server-side sort, search, filter and pagination', async () => {
   const api = client(await login('admin@resourceplanning.io', 'Admin@12345'));
 
-  const p1 = await api('GET', '/employees?page=1&pageSize=5&sort=name&dir=asc');
-  const p2 = await api('GET', '/employees?page=2&pageSize=5&sort=name&dir=asc');
+  const p1 = await api('GET', '/employees?page=1&pageSize=5&sort=emp_code&dir=asc');
+  const p2 = await api('GET', '/employees?page=2&pageSize=5&sort=emp_code&dir=asc');
   assert.equal(p1.data.rows.length, 5);
   assert.equal(new Set([...p1.data.rows, ...p2.data.rows].map((r) => r.assignmentId)).size, 10);
   assert.ok(p1.data.totalPages > 1);
 
-  const desc = await api('GET', '/employees?pageSize=5&sort=name&dir=desc');
-  assert.notEqual(desc.data.rows[0].values.name, p1.data.rows[0].values.name);
+  const desc = await api('GET', '/employees?pageSize=5&sort=emp_code&dir=desc');
+  assert.notEqual(desc.data.rows[0].values.emp_code, p1.data.rows[0].values.emp_code);
 
   // assignment status is a mapped column, filtered with the f_ prefix
   const st = p1.data.rows[0].values.status;
@@ -492,8 +496,10 @@ test('server-side sort, search, filter and pagination', async () => {
   assert.ok(filtered.data.total >= 1);
   assert.ok(filtered.data.rows.every((r) => r.values.status === st));
 
-  const searched = await api('GET', `/employees?search=${encodeURIComponent('EMP-01001')}&pageSize=100`);
+  const firstCode = p1.data.rows[0].values.emp_code;
+  const searched = await api('GET', `/employees?search=${encodeURIComponent(firstCode)}&pageSize=100`);
   assert.ok(searched.data.total >= 1);
+  assert.ok(searched.data.rows.some((r) => r.values.emp_code === firstCode));
 });
 
 test('concurrent updates never corrupt the database (transactional writes)', async () => {
@@ -540,9 +546,10 @@ test('every category exposes the full supervisor submit field set', async () => 
   const row = (await api('GET', '/employees?pageSize=1')).data.rows[0];
   const rec = await api('GET', `/employees/${row.assignmentId}`);
   const keys = rec.data.record.columns.filter((c) => c.submitField).map((c) => c.key);
-  for (const k of ['allocation_plan', 'pid', 'opid', 'project_role', 'eta_available',
-    'follow_up_notes', 'critical_flag', 'risk_flag', 'bench_category',
-    'allocation_status', 'allocation_percentage', 'allocation_start_date']) {
+  for (const k of ['bench_category', 'block_status', 'status', 'allocation_percentage',
+    'billing_status', 'billing_start_date', 'pid_awaited_account', 'pid_awaited_blocked_date',
+    'opp_id', 'allocation_closure_eta', 'demand_number', 'ard_date',
+    'role_of_month', 'role_of_responses', 'detail_comments', 'service_status']) {
     assert.ok(keys.includes(k), `submit field ${k} must be configurable`);
   }
 });
@@ -553,20 +560,20 @@ test('supervisor submit writes every changed field in one transaction', async ()
   const before = (await api('GET', `/employees/${row.assignmentId}`)).data.record;
 
   const res = await api('POST', `/employees/${row.assignmentId}/submit`, {
-    changes: { pid: 'PID-4242', opid: 'OPID-77', eta_available: '2026-12-15', risk_flag: 'High' },
+    changes: { opp_id: 'OPP-424242', pid_awaited_account: 'Northwind Bank', ard_date: '2026-12-15', block_status: 'Hard Block' },
     rev: before.rev,
   });
   assert.equal(res.status, 200);
-  assert.deepEqual(res.data.changed.sort(), ['eta_available', 'opid', 'pid', 'risk_flag']);
-  assert.equal(res.data.record.values.pid, 'PID-4242');
+  assert.deepEqual(res.data.changed.sort(), ['ard_date', 'block_status', 'opp_id', 'pid_awaited_account']);
+  assert.equal(res.data.record.values.opp_id, 'OPP-424242');
 
   // the saved values are what the table and the export read
   const after = (await api('GET', `/employees/${row.assignmentId}`)).data.record;
-  assert.equal(after.values.opid, 'OPID-77');
+  assert.equal(after.values.block_status, 'Hard Block');
 
   // a submit against the old revision is rejected instead of silently clobbering
   const stale = await api('POST', `/employees/${row.assignmentId}/submit`, {
-    changes: { pid: 'PID-0000' }, rev: before.rev,
+    changes: { opp_id: 'OPP-000000' }, rev: before.rev,
   });
   assert.equal(stale.status, 409);
   assert.equal(stale.data.code, 'STALE');
@@ -578,13 +585,13 @@ test('access control on submit: read-only grants and other projects are refused'
   const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
   const row = (await admin('GET', '/employees?pageSize=1')).data.rows[0];
 
-  const readOnly = await viewer('POST', `/employees/${row.assignmentId}/submit`, { changes: { pid: 'X' } });
+  const readOnly = await viewer('POST', `/employees/${row.assignmentId}/submit`, { changes: { opp_id: 'X' } });
   assert.equal(readOnly.status, 403);
 
   const intruder = client(await login('arun.pillai@resourceplanning.io'));
   const foreign = await intruder('GET', `/employees/${row.assignmentId}`);
   assert.equal(foreign.status, 403);
-  const foreignSubmit = await intruder('POST', `/employees/${row.assignmentId}/submit`, { changes: { pid: 'X' } });
+  const foreignSubmit = await intruder('POST', `/employees/${row.assignmentId}/submit`, { changes: { opp_id: 'X' } });
   assert.equal(foreignSubmit.status, 403);
 });
 
@@ -619,8 +626,10 @@ test('assistant refuses to report on a project the user cannot see', () => {
 test('assistant never writes: it only raises a proposal an admin must approve', async () => {
   const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
   const sup = client(await login('priya.nair@resourceplanning.io'));
-  const row = (await sup('GET', '/employees?pageSize=1')).data.rows[0];
   const field = q.get("SELECT id FROM fields WHERE key='block_status'");
+  // pick someone who is not already hard blocked, so the request is a real change
+  const row = (await sup('GET', '/employees?pageSize=200')).data.rows.find((r) => r.values.block_status !== 'Hard Block');
+  assert.ok(row, 'the test seed must contain a person who is not hard blocked');
   const before = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', row.assignmentId, field.id);
 
   const res = await sup('POST', '/agent/ask', { message: `set ${row.values.emp_code} to hard block` });

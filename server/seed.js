@@ -132,9 +132,11 @@ const SUPPLIERS = [
 
 const BENCH_CATEGORIES = ['Allocated', 'Bench', 'PID Allocated', 'Available', 'Not Available',
   'Shadow', 'Partially Allocated', 'Rolling Off', 'Onboarding'];
-const FILTER_KEYS = ['bench_category', 'primary_skill', 'allocation_status', 'allocation_start_date',
-  'allocation_end_date', 'pid', 'risk_flag', 'grade', 'work_location', 'skill_category'];
+const FILTER_KEYS = ['bench_category', 'status', 'allocation_percentage', 'account', 'block_status',
+  'billing_status', 'build_status', 'capability', 'management_level', 'bench_aging_category',
+  'vertical', 'account_name', 'country'];
 const SUBMIT_KEYS = fielddefs.SUBMIT_KEYS || fielddefs.ALL.filter((f) => f.submit).map((f) => f.key);
+const ACCOUNTS = ['Northwind Bank', 'Helios Retail', 'Vertex Insurance', 'Cobalt Telecom'];
 const SKILLS = ['Java', 'Salesforce', 'SAP', 'Data Engineering', 'Testing', 'DevOps', 'Oracle Fusion', 'UI/UX'];
 
 const USERS = [
@@ -157,20 +159,20 @@ const STATUSES = ['Active', 'Active', 'Active', 'Active', 'On Leave', 'Training'
 function layoutFor(name) {
   if (name === 'Training Cohort') {
     return {
-      show: ['emp_code', 'name', 'supplier', 'training_status', 'joining_date', 'completion_status', 'skill_track', 'remarks'],
+      show: ['emp_code', 'first_name', 'last_name', 'supplier', 'service_status', 'doj', 'capability', 'remarks'],
       readonly: ['emp_code', 'name'],
-      required: ['training_status'],
+      required: ['service_status'],
     };
   }
   if (name === 'Billing & Allocation') {
     return {
-      show: ['emp_code', 'name', 'supplier', 'billing_status', 'allocation_status', 'effective_date', 'status', 'remarks'],
+      show: ['emp_code', 'first_name', 'last_name', 'supplier', 'billing_status', 'build_status', 'billing_start_date', 'status', 'remarks'],
       readonly: ['emp_code', 'name'],
       required: ['billing_status'],
     };
   }
   return {
-    show: ['emp_code', 'name', 'supplier', 'status', 'designation', 'email', 'phone', 'remarks'],
+    show: ['emp_code', 'first_name', 'last_name', 'supplier', 'status', 'email', 'phone', 'remarks'],
     readonly: ['emp_code'],
     required: ['status'],
   };
@@ -315,14 +317,14 @@ function run({ reset = false, quiet = false } = {}) {
       const code = `EMP-${String(empSeq++).padStart(5, '0')}`;
       const email = `${first.toLowerCase()}.${last.toLowerCase()}${i}@example.com`;
       const phone = `+91 ${int(70, 99)}${int(10000000, 99999999)}`;
-      const designation = pick(DESIGNATIONS);
+
       const createdAt = `2026-0${int(1, 9)}-${String(int(10, 28)).padStart(2, '0')}`;
       const r = q.run(
-        `INSERT INTO employees (emp_code, name, email, phone, designation, created_at, updated_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        code, full, email, phone, designation, createdAt, createdAt, admin.id
+        `INSERT INTO employees (emp_code, name, first_name, last_name, email, phone, created_at, updated_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        code, full, first, last, email, phone, createdAt, createdAt, admin.id
       );
-      employees.push({ id: Number(r.lastInsertRowid), code, name: full, email, phone, designation });
+      employees.push({ id: Number(r.lastInsertRowid), code, name: full, first_name: first, last_name: last, email, phone });
     }
 
     // scatter employees across every category
@@ -385,9 +387,12 @@ function run({ reset = false, quiet = false } = {}) {
       );
       const aid = Number(r.lastInsertRowid);
 
+      const written = new Set();
       const setValue = (key, value) => {
         const f = fieldByKey.get(key);
         if (!f || value === null || value === undefined || value === '') return;
+        if (written.has(f.id)) return;   // one value per field per assignment
+        written.add(f.id);
         q.run(
           `INSERT INTO assignment_values (assignment_id, field_id, value, source, updated_at, updated_by)
            VALUES (?, ?, ?, 'seed', datetime('now'), ?)`,
@@ -401,21 +406,26 @@ function run({ reset = false, quiet = false } = {}) {
       setValue('allocation_percentage', pick([0, 25, 50, 50, 75, 100, 100]));
       setValue('allocation_start_date', `2026-${String(int(1, 11)).padStart(2, '0')}-01`);
       setValue('allocation_end_date', `2027-${String(int(1, 6)).padStart(2, '0')}-28`);
-      setValue('primary_skill', pick(SKILLS));
-      setValue('grade', pick(['L1', 'L2', 'L3', 'L4', 'L5']));
-      setValue('work_location', pick(['Hyderabad', 'Pune', 'Bengaluru', 'Chennai', 'Remote']));
+      setValue('account', pick(ACCOUNTS));
+      setValue('account_name', pick(ACCOUNTS));
+      setValue('block_status', pick(['No Block', 'No Block', 'Soft Block', 'Hard Block']));
+      setValue('capability', pick(['Data', 'Advisory', 'Tech', 'Support']));
+      setValue('management_level', pick(['1', '2', '3', '4A', '4B', '5B']));
+      setValue('build_status', pick(['Billed', 'Partially Billed', 'Unbilled', 'Not Available']));
+      setValue('bench_aging_category', pick(['0-30 days', '31-60 days', '61-90 days', '90+ days']));
+      setValue('billing_status', pick(['Billable', 'Non-Billable', 'Shadow', 'T&M', 'Fixed Price']));
 
+      // category-specific extras, using the workbook's own columns
       if (placement.catName === 'Training Cohort') {
-        setValue('training_status', pick(['Not Started', 'In Progress', 'Completed', 'Completed', 'Failed']));
-        setValue('joining_date', `2026-0${int(1, 9)}-${String(int(1, 28)).padStart(2, '0')}`);
-        setValue('completion_status', pick(['Pending', 'Partial', 'Completed']));
-        setValue('skill_track', pick(TRACKS));
+        setValue('service_status', pick(['Growth Training Development', 'Internal Project', 'Maternity']));
+        setValue('doj', `2026-0${int(1, 9)}-${String(int(1, 28)).padStart(2, '0')}`);
+        setValue('capability', pick(['Data', 'Advisory', 'Tech', 'Support']));
       } else if (placement.catName === 'Billing & Allocation') {
-        setValue('billing_status', pick(['Billable', 'Billable', 'Non-Billable', 'Shadow', 'T&M']));
-        setValue('allocation_status', pick(['Allocated', 'Partially Allocated', 'Bench']));
-        setValue('effective_date', `2026-${String(int(9, 12)).padStart(2, '0')}-01`);
+        setValue('build_status', pick(['Billed', 'Billed', 'Partially Billed', 'Unbilled']));
+        setValue('billing_start_date', `2026-${String(int(9, 12)).padStart(2, '0')}-01`);
+        setValue('revised_allocation', String(int(0, 100)));
       } else {
-        setValue('skill_track', pick(TRACKS));
+        setValue('job_profile_family', pick(['Engineering', 'Data & Analytics', 'Quality', 'Cloud']));
       }
     }
 
@@ -425,12 +435,12 @@ function run({ reset = false, quiet = false } = {}) {
         WHERE a.status = 'Active' ORDER BY a.id LIMIT 1`
     );
     if (sample) {
-      const f = fieldByKey.get('training_status');
+      const f = fieldByKey.get('block_status');
       const existing = q.get('SELECT value FROM assignment_values WHERE assignment_id = ? AND field_id = ?', sample.id, f.id);
       q.run(
         `INSERT INTO assignment_values (assignment_id, field_id, value, source, updated_at, updated_by)
-         VALUES (?, ?, 'Completed', 'manual', datetime('now'), ?)
-         ON CONFLICT(assignment_id, field_id) DO UPDATE SET value = 'Completed', source = 'manual', updated_at = datetime('now')`,
+         VALUES (?, ?, 'Soft Block', 'manual', datetime('now'), ?)
+         ON CONFLICT(assignment_id, field_id) DO UPDATE SET value = 'Soft Block', source = 'manual', updated_at = datetime('now')`,
         sample.id, f.id, userIds.get('priya.nair@resourceplanning.io')
       );
       q.run(
@@ -441,7 +451,7 @@ function run({ reset = false, quiet = false } = {}) {
       );
       record({
         entity: 'assignment', entityId: sample.id, ref: sample.emp_code, action: 'update',
-        fieldKey: 'training_status', oldValue: existing?.value ?? null, newValue: 'Completed',
+        fieldKey: 'block_status', oldValue: existing?.value ?? null, newValue: 'Soft Block',
         actor: { id: userIds.get('priya.nair@resourceplanning.io'), name: 'Priya Nair' },
         meta: { reason: 'CRM edit' },
       });
@@ -490,7 +500,7 @@ function run({ reset = false, quiet = false } = {}) {
       const day = 19 - (i % 12);
       record({
         entity: 'assignment', entityId: r.id, ref: r.emp_code, action: 'update',
-        fieldKey: pick(['status', 'remarks', 'training_status', 'billing_status']),
+        fieldKey: pick(['status', 'remarks', 'build_status', 'billing_status']),
         oldValue: 'Active', newValue: pick(['Training', 'On Leave', 'Completed', 'Billable', 'Allocated']),
         actor,
       });
