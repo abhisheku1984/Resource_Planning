@@ -54,7 +54,7 @@ dropdown advertised. Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere
 ### Tests
 
 ```bash
-npm test          # 35 integration + UI smoke tests
+npm test          # 41 integration + UI smoke tests
 ```
 
 ## The assistant (in-app, offline, propose-only)
@@ -133,12 +133,23 @@ configured with Training Status + Joining Date + Completion Status looks nothing
 like one configured with Billing Status + Allocation Status + Effective Date.
 Hidden columns are never serialised, so they cannot leak through the API.
 
-### Embedded CRM
+### The Update panel (supervisor CRM)
 
-The panel is part of the workspace layout, not a separate screen. It supports
-search, add, edit, placement switching and per-field history. Autosave is
-debounced (900 ms) and reports `Unsaved → Saving… → Saved`; on failure it shows
-`Not saved` with an explicit retry, and the pending values stay in the form.
+Clicking a row opens **Update**: the person's *Employee ID* and name at the top,
+then one ordered list of the columns a supervisor owns — **Leader Input Last
+Week** through **Giga Project Name**, per the workbook. Not the whole 68-field
+record. Fill anything, press **Submit**, and the fields are written in a single
+transaction, audited with the supervisor's name.
+
+The column list is a setting (`crm_fields`), editable in
+*Administration → CRM panel*: add, remove and reorder without a code change.
+Submit needs no Excel round trip — see *Excel synchronisation* for how the next
+export shows the change.
+
+The separate CRM panel stays for people management (contact details, new
+joiners, placements and per-field history). It autosaves with a 900 ms debounce
+and reports `Unsaved → Saving… → Saved`; on failure it shows `Not saved` with an
+explicit retry, and the pending values stay in the form.
 
 ### Duplicate prevention
 
@@ -151,6 +162,12 @@ matches alone are always queued — never auto-merged.
 
 * `GET /api/export?projectId=&subprojectId=&categoryId=&supplierId=` streams a
   workbook with `Employees` and `Summary` sheets built from the live database.
+  The supervisor columns come first, in the same order the Update panel shows
+  them; beside each one the report adds **`<column> — Updated By`** and
+  **`<column> — Updated At`**, plus a single **Last Supervisor Update** line, so
+  an administrator can see who changed what and when without asking. The
+  importer recognises and skips those derived columns, so the report can be
+  re-uploaded safely.
 * `POST /api/import` upserts a daily dataset **by employee ID** inside one
   transaction. Fields a supervisor edited by hand are recorded in
   `field_overrides`; the import reports them as `protected` and leaves them
