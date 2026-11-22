@@ -1,11 +1,9 @@
 /* =========================================================================
    The assistant panel.
    Project-scoped reporting and proposals, plus an explicitly opened CRM form.
-   All app requests are same-origin; recognition and read-back are on-device.
+   Text conversations in English or Hindi; all requests are same-origin.
    ========================================================================= */
 import { h, mount, icon, api, state, toast, fmtRelative } from '../core.js';
-
-import { createLocalVoice, speakerSettings } from '../voice.js';
 import { createAssistantCrm } from './assistant-crm.js';
 
 const LANGUAGE_KEY = 'rp.askLanguage';
@@ -20,100 +18,35 @@ export function createAssistant() {
   const queueHost = h('div', { class: 'assistant-queue' });
   const scopeHost = h('div', { class: 'assistant-scope' });
   const crmHost = h('section', { class: 'assistant-crm', 'aria-label': 'Employee CRM form' });
-  let lastReply = '', suggestions = null, hasTurns = false;
-  const langTitle = 'Voice language / भाषा';
+  let suggestions = null, hasTurns = false;
+  const langTitle = 'Chat language / भाषा';
   const languageButtons = ['en', 'hi'].map((lang) => h('button', { type: 'button', class: 'btn btn-xs', lang,
     onclick: () => changeLanguage(lang) }, lang === 'hi' ? 'हिन्दी' : 'English'));
-  const languageBar = h('div', { class: 'voice-language', role: 'group', 'aria-label': langTitle },
+  const languageBar = h('div', { class: 'assistant-language', role: 'group', 'aria-label': langTitle },
     h('span', { class: 'field-label' }, langTitle), ...languageButtons);
-  const voiceText = h('p', { id: 'ask-mic-status', class: 'subtle', role: 'status' },
-    t('Microphone off.', 'माइक बंद है।'));
-  const partialText = h('p', { class: 'voice-partial', 'aria-live': 'off', dir: 'auto' });
-  const openTab = window.self !== window.top ? h('a', { href: location.href, target: '_blank', rel: 'noopener noreferrer', class: 'hidden' }) : null;
-  const playbackText = h('p', { id: 'ask-speaker-status', class: 'subtle', role: 'status' });
-  const micLabel = h('span'), speakerLabel = h('span');
-  function audioButton(glyph, label, description, onclick) {
-    const image = icon(glyph, 18); image?.setAttribute('aria-hidden', 'true');
-    return h('button', { type: 'button', class: 'btn btn-sm', 'aria-describedby': description, onclick }, image, label);
-  }
-  const voiceBtn = audioButton('mic', micLabel, 'ask-mic-status', () => voice.toggle());
-  const readBtn = audioButton('speaker', speakerLabel, 'ask-speaker-status', () => voice.togglePlayback(lastReply));
-  const audioActions = h('div', { class: 'voice-actions' }, voiceBtn, readBtn);
-  const help = h('details', { class: 'voice-help' });
-  const getSpeaker = () => speakerSettings(localStorage.getItem('rp.speakerMode'), localStorage.getItem('rp.speakerVolume'));
-  function speakerControls() {
-    const { mode, volume } = getSpeaker();
-    const select = h('select', { class: 'select', id: 'ask-speaker-mode', onchange: () => localStorage.setItem('rp.speakerMode', select.value) },
-      ...[['auto', t('Auto (Studio if installed)', 'स्वतः (इंस्टॉल होने पर स्टूडियो)')], ['studio', t('Studio · neural voice', 'स्टूडियो · न्यूरल आवाज़')],
-        ['standard', t('Standard · faster', 'स्टैंडर्ड · तेज़')], ['device', t('Local device voice', 'डिवाइस की स्थानीय आवाज़')]]
-        .map(([value, label]) => h('option', { value }, label)));
-    select.value = mode;
-    const pct = Math.round(volume * 100), amount = h('output', { for: 'ask-speaker-volume' }, pct + '%');
-    const slider = h('input', { type: 'range', id: 'ask-speaker-volume', min: '0', max: '200', step: '1', oninput() {
-      localStorage.setItem('rp.speakerVolume', slider.value); amount.textContent = slider.value + '%';
-      slider.setAttribute('aria-valuetext', amount.textContent);
-    } });
-    slider.value = String(pct); slider.setAttribute('aria-valuetext', pct + '%');
-    return h('div', { class: 'speaker-settings' }, h('label', { for: select.id }, t('Voice', 'आवाज़')), select,
-      h('label', { for: slider.id }, t('Volume', 'वॉल्यूम')), h('div', { class: 'speaker-volume' }, slider, amount));
-  }
-  let mic = { active: false, action: 'start' }, playing = false;
-  function renderAudioButtons() {
-    // Update the captions, not the buttons/icons: keep keyboard focus on Stop.
-    micLabel.textContent = ({ stop: t('Stop voice', 'माइक बंद करें'), install: t('Install English speech pack', 'हिन्दी स्पीच पैक इंस्टॉल करें'),
-      retry: t('Check again', 'फिर जाँचें') })[mic.action] || t('Start voice mode', 'बोलना शुरू करें');
-    speakerLabel.textContent = playing ? t('Stop playback', 'सुनना रोकें') : mic.active ? t('Auto read-aloud', 'स्वतः वाचन')
-      : lastReply ? t('Read last reply', 'पिछला जवाब सुनें') : t('Test speaker', 'स्पीकर जाँचें');
-    voiceBtn.disabled = playing; voiceBtn.setAttribute('aria-pressed', String(mic.active));
-    readBtn.disabled = mic.active; readBtn.setAttribute('aria-pressed', String(playing));
-    voiceBtn.title = playing ? t('Stop playback first to use the microphone.', 'माइक का उपयोग करने से पहले आवाज़ रोकें।') : micLabel.textContent;
-    readBtn.title = mic.active ? t('Voice mode reads replies automatically when a local voice is available.', 'स्थानीय आवाज़ उपलब्ध होने पर वॉइस मोड जवाब अपने आप पढ़ता है।') : speakerLabel.textContent;
-  }
-  function renderVoiceLabels() {
-    languageButtons.forEach((b) => b.setAttribute('aria-pressed', String(language === b.getAttribute('lang'))));
-    renderAudioButtons();
-    if (openTab) openTab.textContent = t('Open Ask in its own tab', 'Ask को अलग टैब में खोलें');
-    mount(help, h('summary', null, t('Speaker settings', 'स्पीकर सेटिंग')), speakerControls(),
-      h('p', { class: 'subtle' }, t('Volume above 100% boosts Studio and Standard voices on the next reply.', '100% से ऊपर का वॉल्यूम अगले जवाब में स्टूडियो और स्टैंडर्ड आवाज़ों को बढ़ाता है।')));
-  }
-  const voice = createLocalVoice({ language, getSpeaker, onCommand: send,
-    onPartial(text) {
-      const preview = text ? t(`Hearing: ${text}`, `सुनाई दे रहा है: ${text}`) : '';
-      if (partialText.textContent !== preview) partialText.textContent = preview;
-    },
-    onState(state) {
-      mic = state; playing = false; voiceText.textContent = state.text; playbackText.textContent = '';
-      renderAudioButtons();
-      openTab?.classList.toggle('hidden', !state.help);
-    },
-    onPlayback(state) {
-      playing = state.playing; playbackText.textContent = state.text; renderAudioButtons();
-    },
-  });
-  const crm = createAssistantCrm(crmHost, send, () => language);
-  const feedback = h('div', { class: 'voice-feedback' }, voiceText, partialText, playbackText, openTab);
-  mount(el, head, scopeHost, queueHost, crmHost, log,
-    h('div', { class: 'assistant-voice' }, languageBar, audioActions, feedback, help), foot);
+  const crm = createAssistantCrm(crmHost, send, () => language, () => addSuggestions(crm.suggestions()));
+  mount(el, head, scopeHost, queueHost, crmHost, log, languageBar, foot);
 
   let open = false, busy = false;
   let proposals = [], names = [], selected = null;
-  let epoch = 0, pendingQuestion = '', waitingPerson = false;
+  let pendingGuide = null, lastReport = null;
+  let epoch = 0, pendingQuestion = '', pendingAmbiguous = false, waitingPerson = false;
 
   function changeLanguage(next) {
     if (next === language || crm.isSaving()) return;
-    ++epoch; busy = false; lastReply = ''; pendingQuestion = ''; waitingPerson = false;
+    ++epoch; busy = waitingPerson = pendingAmbiguous = false; pendingQuestion = ''; pendingGuide = lastReport = null;
     language = next; localStorage.setItem(LANGUAGE_KEY, next); el.setAttribute('lang', next);
-    voice.setLanguage(next); help.open = false; renderVoiceLabels();
     crm.changeLanguage(); renderHead(); renderScope(); renderFoot();
     if (!hasTurns) seed();
     else if (crm.isOpen()) {
-      log.appendChild(bubble('agent', t('CRM is still open. Say “list fields” or “review changes”.', 'CRM खुला है। “फ़ील्ड बताएं” या “बदलाव की समीक्षा करें” कहें।')));
+      log.appendChild(bubble('agent', t('CRM is still open. Type “list fields” or “review changes”.', 'CRM खुला है। “फ़ील्ड बताएं” या “बदलाव की समीक्षा करें” लिखें।')));
       addSuggestions(t(['List fields', 'Review changes'], ['फ़ील्ड बताएं', 'बदलाव की समीक्षा करें']));
     } else addSuggestions(examples());
     log.scrollTop = log.scrollHeight; refreshProjects(); refreshQueue();
   }
 
   function renderHead() {
+    languageButtons.forEach((b) => b.setAttribute('aria-pressed', String(language === b.getAttribute('lang'))));
     const pending = proposals.filter((p) => p.status === 'pending').length;
     mount(head,
       h('div', { class: 'row', style: { gap: '8px', minWidth: '0' } },
@@ -220,7 +153,7 @@ export function createAssistant() {
 
   function setProject(name) {
     if (selected !== name) {
-      selected = name; waitingPerson = false; proposals = []; mount(queueHost); renderHead(); refreshQueue();
+      selected = name; waitingPerson = false; pendingGuide = lastReport = null; proposals = []; mount(queueHost); renderHead(); refreshQueue();
     }
     renderScope();
   }
@@ -229,9 +162,9 @@ export function createAssistant() {
     const picker = h('select', { class: 'select', 'aria-label': t('Giga Project Name', 'गीगा प्रोजेक्ट का नाम'), disabled: busy || crm.isOpen(),
       onchange: (e) => {
         setProject(e.target.value || null);
-        if (pendingQuestion && selected) { const ask = pendingQuestion; pendingQuestion = ''; send(ask); }
+        if (pendingQuestion && selected) { const ask = pendingQuestion; pendingQuestion = ''; send(ask, pendingAmbiguous); }
       },
-    }, h('option', { value: '' }, t('Say or select a project', 'प्रोजेक्ट का नाम बोलें या चुनें')), ...names.map((name) => h('option', { value: name }, name)));
+    }, h('option', { value: '' }, t('Type or select a project', 'प्रोजेक्ट का नाम लिखें या चुनें')), ...names.map((name) => h('option', { value: name }, name)));
     picker.value = selected || '';
     mount(scopeHost, h('label', null, h('span', { class: 'field-label' }, t('Giga Project Name', 'गीगा प्रोजेक्ट का नाम')), picker));
   }
@@ -253,16 +186,16 @@ export function createAssistant() {
       log.appendChild(suggestions);
     }
   }
-  const ask = (message, projectName) => api('/agent/ask', { method: 'POST', body: { message, projectName, language } });
-  async function send(text) {
-    const id = epoch;
-    const reply = await respond(text);
-    if (id === epoch && open && reply) { lastReply = reply; renderAudioButtons(); }
-    return reply;
+  const ask = (message, projectName, guideChoice, picked) => api('/agent/ask', { method: 'POST',
+    body: { message, projectName, language, ...(guideChoice && { guideChoice }), ...(picked && { projectPicked: true }) } });
+  const newRequest = (msg) => names.includes(msg) || /^(?:open|show|select|switch|use|how|who|list|count|break|set|change|for|in|update|edit|help|please|can you|add|record)\b/i.test(msg) ||
+    /(?:कितने|कितनी|कौन|विवरण|सूची|चुनें|खोलें|खोलो|खोलिए|अपडेट करें|दर्ज करें|बदलें)/u.test(msg);
+  function localReply(reply, items = []) {
+    log.appendChild(bubble('agent', reply)); addSuggestions(items);
   }
-  async function respond(text) {
+  async function send(text, picked = false) {
     const message = String(text || '').trim();
-    if (!message || !open || busy || crm.isSaving()) return '';
+    if (!message || !open || busy || crm.isSaving()) return;
     const id = epoch;
     hasTurns = true; busy = true; addSuggestions([]); renderScope(); log.appendChild(bubble('user', message));
     const thinking = bubble('agent', t('Checking…', 'जाँच जारी है…')); log.appendChild(thinking);
@@ -270,41 +203,81 @@ export function createAssistant() {
     try {
       if (crm.isOpen()) {
         const reply = await crm.command(message);
-        if (id !== epoch) return '';
+        if (id !== epoch) return;
         log.appendChild(bubble('agent', reply));
-        if (crm.reviewReady()) addSuggestions(t(['Confirm save', 'Discard changes'], ['सहेजने की पुष्टि करें', 'बदलाव रद्द करें']));
-        return reply;
+        addSuggestions(crm.isOpen() ? crm.suggestions() : examples());
+        return;
       }
-      const lookup = waitingPerson && !names.includes(message) && !/^(open|show|select|switch|use|how|who|list|count|break|set)\b/i.test(message) &&
-        !(language === 'hi' && /(?:कितने|कितनी|कौन|विवरण|सूची|चुनें|खोलें|खोलो|खोलिए)/u.test(message));
-      let res = await ask(lookup ? t('Open CRM for ' + message, message + ' का सीआरएम खोलें') : message, selected);
-      if (id !== epoch) return '';
+      let original = message, choice;
+      if ((pendingGuide || pendingQuestion || waitingPerson) && /^(?:cancel|never mind|discard changes|रद्द करें|बदलाव रद्द करें)[.!।]?$/iu.test(message)) {
+        pendingGuide = null; pendingQuestion = ''; waitingPerson = false;
+        return localReply(t('Update cancelled. No record was changed.', 'अनुरोध रद्द हुआ। कोई रिकॉर्ड नहीं बदला।'), examples());
+      }
+      if (pendingGuide && pendingGuide.projectName === selected && !newRequest(message)) {
+        original = pendingGuide.message;
+        if (pendingGuide.step === 'placement') {
+          const match = message.replace(/[०-९]/g, (d) => String('०१२३४५६७८९'.indexOf(d)))
+            .match(/^(?:(?:placement|प्लेसमेंट)\s*#?\s*)?(\d+)[.!।]?$/iu);
+          const ordinal = [['first', 'पहला', 'पहली'], ['second', 'दूसरा', 'दूसरी'], ['third', 'तीसरा', 'तीसरी']]
+            .findIndex((terms) => terms.includes(message.toLowerCase().replace(/^the | one$| वाला$/g, '').trim()));
+          const placementId = match ? Number(match[1]) : pendingGuide.ids[ordinal];
+          if (!pendingGuide.ids.includes(placementId)) return localReply(
+            t('Choose one of the offered placement numbers, or cancel.', 'दिखाए गए प्लेसमेंट नंबरों में से एक चुनें या रद्द करें।'), pendingGuide.suggestions);
+          choice = { person: pendingGuide.person, placementId };
+        } else choice = { person: message };
+      } else if (waitingPerson && !newRequest(message)) original = t('Open CRM for ' + message, message + ' का सीआरएम खोलें');
+      else if (lastReport?.project === selected && /^(?:who are they|show (?:me )?their names|list them|उनके नाम (?:बताएं|दिखाएं))[?.!।]*$/iu.test(message)) {
+        // A follow-up is a fresh authorized query, not a replay of cached rows.
+        original = 'List people' + (lastReport.value ? ' ' + (lastReport.field === 'bl_status' ? '' : lastReport.field.replaceAll('_', ' ') + ' ') + lastReport.value : '');
+      }
+      const choosing = !!pendingQuestion && (!newRequest(message) || names.includes(message) || /^(?:select|switch to|use)\s|चुनें[।!]?$/iu.test(message));
+      if (choosing && !newRequest(message)) original = t('Select ' + message, message + ' चुनें');
+      pendingGuide = lastReport = null;
+      let res = await ask(original, selected, choice, picked);
+      if (id !== epoch) return;
       if (res.kind === 'project' && pendingQuestion) {
-        res = await ask(pendingQuestion, res.projectName);
-        if (id !== epoch) return '';
+        original = pendingQuestion; pendingQuestion = ''; res = await ask(original, res.projectName, null, pendingAmbiguous);
+        if (id !== epoch) return;
       }
-      pendingQuestion = res.kind === 'choose_project' ? message : '';
+      const retryProject = choosing && pendingQuestion && ['choose_project', 'denied'].includes(res.kind);
+      if (!retryProject) pendingQuestion = res.kind === 'choose_project' ? original : '';
+      pendingAmbiguous = !!res.ambiguousProject || !!(retryProject && pendingAmbiguous);
       if (res.projectName) {
         if (!names.includes(res.projectName)) names.push(res.projectName);
         setProject(res.projectName);
       } else if (res.kind === 'denied') { setProject(null); refreshProjects(); }
-      waitingPerson = res.kind === 'crm_lookup';
-      if (res.crm) crm.show(res.crm);
+      waitingPerson = res.kind === 'crm_lookup' && !res.guide;
+      if (['person', 'placement'].includes(res.guide?.step)) {
+        pendingGuide = { ...res.guide, message: original, projectName: res.projectName,
+          ids: (res.table?.rows || []).map((r) => r[0]), suggestions: res.suggestions };
+      }
+      if (res.crm) {
+        const next = await crm.show(res.crm, res.guide);
+        if (id !== epoch) return;
+        if (next) res.reply = crm.isReviewed() || !crm.isOpen() ? next : res.reply + ' ' + next;
+      }
       log.appendChild(bubble('agent', res.reply));
+      if (['count', 'list', 'breakdown'].includes(res.kind) && res.data?.project) {
+        if (res.kind !== 'breakdown') lastReport = res.data;
+        log.appendChild(h('div', { class: 'ask-source' }, t('Source: workbook placements', 'स्रोत: वर्कबुक प्लेसमेंट'), ' · ', res.data.project,
+          ' · ', t('distinct people', 'अलग-अलग कर्मचारी')));
+      }
+      if (res.kind === 'howto') log.appendChild(h('div', { class: 'ask-source' }, t('Source: app guide', 'स्रोत: ऐप सहायता'), ' · ', res.source));
       const table = dataTable(res.table);
       if (table) log.appendChild(h('div', { class: 'msg agent' }, h('div', { class: 'msg-body wide' }, table)));
       if (res.proposal) {
         log.appendChild(h('div', { class: 'msg agent' }, h('div', { class: 'msg-body wide' }, proposalCard(res.proposal))));
         await refreshQueue();
-        if (id !== epoch) return '';
+        if (id !== epoch) return;
       }
-      if (!crm.isOpen() && !waitingPerson) addSuggestions(res.suggestions);
-      const readTable = res.kind === 'list' || res.kind === 'crm_lookup' || res.kind === 'breakdown';
-      return res.reply + (readTable && res.table?.rows?.length ? ' ' + res.table.rows.slice(0, 8).map((r) => r.join(', ')).join('; ') : '');
+      if (crm.isOpen()) addSuggestions(crm.suggestions());
+      else if (!waitingPerson) addSuggestions([...(res.kind === 'count' && res.data ? [t('Show their names', 'उनके नाम दिखाएं')] : []),
+        ...(res.suggestions || []), ...(pendingGuide || pendingQuestion ? [t('Cancel', 'रद्द करें')]
+          : ['count', 'list', 'breakdown', 'help', 'project'].includes(res.kind) ? [t('Update an employee', 'कर्मचारी अपडेट करें')] : [])]);
     } catch (err) {
-      if (id !== epoch) return '';
+      if (id !== epoch) return;
       const reply = t('Request not completed. ', 'अनुरोध पूरा नहीं हुआ। ') + err.message;
-      log.appendChild(bubble('agent', reply)); return reply;
+      log.appendChild(bubble('agent', reply));
     } finally {
       thinking.remove();
       if (id === epoch) { busy = false; renderScope(); log.scrollTop = log.scrollHeight; }
@@ -312,9 +285,9 @@ export function createAssistant() {
   }
 
   function renderFoot() {
-    const submit = () => { if (!busy && input.value.trim()) { send(input.value); input.value = ''; } };
+    const submit = () => { if (open && !busy && !crm.isSaving() && input.value.trim()) { send(input.value); input.value = ''; } };
     const input = h('textarea', { class: 'assistant-input', rows: 1, lang: language, 'aria-label': t('Ask or enter a CRM command', 'सवाल या CRM निर्देश लिखें'),
-      placeholder: t('Ask about a project or say “open CRM”', 'प्रोजेक्ट पर सवाल पूछें या “सीआरएम खोलें” कहें'),
+      placeholder: t('Ask a question or describe an employee update', 'प्रोजेक्ट पर सवाल पूछें या कर्मचारी में बदलाव बताएं'),
       // Enter can accept a Hindi IME composition without sending the message.
       onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); submit(); } },
     });
@@ -322,12 +295,12 @@ export function createAssistant() {
     mount(foot, input, h('button', { class: 'btn btn-primary btn-icon', 'aria-label': t('Send message', 'संदेश भेजें'), onclick: submit }, icon('arrowRight', 15)));
   }
   function examples() {
-    return t(['How many are on bench?', 'Break down bench category', 'Who is on bench?', 'Open CRM'],
-      ['बेंच पर कितने लोग हैं?', 'बेंच श्रेणी का विवरण दिखाएँ', 'बेंच पर कौन है?', 'सीआरएम खोलें']);
+    return t(['Update an employee', 'How many are on bench?', 'Break down bench category', 'Who is on bench?', 'What can you do?', 'Open CRM'],
+      ['कर्मचारी अपडेट करें', 'बेंच पर कितने लोग हैं?', 'बेंच श्रेणी का विवरण दिखाएँ', 'बेंच पर कौन है?', 'मदद', 'सीआरएम खोलें']);
   }
   function seed() {
-    mount(log, bubble('agent', t('Name the workbook project you want to ask about. I can report on its people or open CRM for an employee. In voice mode, say “open CRM”, dictate fields, then review and confirm before saving.',
-      'वर्कबुक का प्रोजेक्ट चुनें या उसका नाम बोलें। उसके कर्मचारियों के बारे में पूछें या “सीआरएम खोलें” कहें। CRM में बोलकर फ़ील्ड भरें, फिर सहेजने से पहले बदलाव की समीक्षा और पुष्टि करें।')));
+    mount(log, bubble('agent', t('Choose a workbook project. Ask about its people, or tell me what to update: “Update the interview note for” followed by an employee ID. I’ll ask for anything missing and show the changes before saving.',
+      'वर्कबुक का प्रोजेक्ट चुनें। कर्मचारियों के बारे में पूछें या “कर्मचारी अपडेट करें” लिखें। मैं ज़रूरी जानकारी पूछूँगा और सहेजने से पहले बदलाव दिखाऊँगा।')));
     addSuggestions(examples());
   }
   function toggle(next) {
@@ -336,16 +309,17 @@ export function createAssistant() {
     document.querySelectorAll('.assistant-launch').forEach((b) => b.classList.toggle('active', open));
     if (open) {
       if (!log.children.length) seed();
-      voice.prepareSpeaker(); renderFoot(); refreshProjects(); refreshQueue(); el.querySelector('.assistant-input')?.focus();
-    } else {
-      epoch++; busy = false; lastReply = ''; waitingPerson = false; pendingQuestion = '';
-      voice.dismiss(t('Voice stopped when Ask closed.', 'Ask बंद होने पर आवाज़ बंद कर दी गई।'));
-      help.open = false; renderAudioButtons();
-    }
+      else if (crm.isOpen()) addSuggestions(crm.suggestions());
+      renderFoot(); refreshProjects(); refreshQueue(); el.querySelector('.assistant-input')?.focus();
+    } else suspend();
   }
-  renderHead(); renderScope(); renderFoot(); renderVoiceLabels();
+  renderHead(); renderScope(); renderFoot();
   const launch = () => toggle();
-  const suspend = () => voice.dismiss(t('Voice stopped when this tab was hidden.', 'टैब छिपने पर आवाज़ बंद कर दी गई।'));
+  // Closing Ask or hiding the tab still invalidates a pending reply/review.
+  function suspend() {
+    ++epoch; busy = waitingPerson = pendingAmbiguous = false;
+    pendingGuide = lastReport = null; pendingQuestion = ''; crm.suspend(); renderScope();
+  }
   const visibility = () => { if (document.hidden) suspend(); };
   document.addEventListener('rp:assistant', launch);
   window.addEventListener('pagehide', suspend);

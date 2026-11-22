@@ -9,7 +9,9 @@ const query = require('./query');
 const agent = require('./agent');
 const { checkCrmSubmit } = require('./assistant-crm');
 const agentstore = require('./agentstore');
+const guideReview = require('./guide-review');
 const excel = require('./excel');
+const rosterCycle = require('./roster-cycle');
 const { record, auditScope, recentActivity } = require('./audit');
 
 const router = express.Router();
@@ -115,6 +117,9 @@ router.get('/dashboard', requireAuth, wrap((req, res) => {
     `SELECT ifnull(sup.name, 'Unassigned') name, COUNT(*) c
        FROM assignments a LEFT JOIN suppliers sup ON sup.id = a.supplier_id
       WHERE a.active = 1 AND ${acl.sql} GROUP BY sup.id ORDER BY c DESC LIMIT 8`, ...acl.args);
+  const summary = { totals: totals(req.user), byProject, byStatus: statusCounts(req.user), bySupplier };
+  // The overview only needs counts. Other callers can still request the full dashboard response.
+  if (req.query.summaryOnly === '1') return res.json(summary);
   const byCategory = q.all(
     `SELECT c.name, COUNT(*) c FROM assignments a JOIN categories c ON a.category_id = c.id
       WHERE a.active = 1 AND ${acl.sql} GROUP BY c.id ORDER BY c DESC LIMIT 10`, ...acl.args);
@@ -129,7 +134,7 @@ router.get('/dashboard', requireAuth, wrap((req, res) => {
   const canAudit = auth.can(req.user, 'audit.view');
   const trend = canAudit ? q.all(`SELECT substr(at, 1, 10) day, COUNT(*) c FROM audit_log l
                        WHERE at >= date('now', '-13 day') AND ${audit.sql} GROUP BY day ORDER BY day`, ...audit.args) : [];
-  res.json({ totals: totals(req.user), byProject, byStatus: statusCounts(req.user), bySupplier, byCategory,
+  res.json({ ...summary, byCategory,
     activity: canAudit ? recentActivity(req.user, {limit: 12}) : [], attention, trend });
 }));
 
@@ -407,22 +412,24 @@ router.get('/employees/facets', requireAuth, wrap((req, res) => {
  * single transaction, then returns the authoritative row so the table and the
  * export both reflect it immediately.
  */
-router.post('/employees/:id/submit', requireAuth, wrap((req, res) => {
+function submitEmployee(req, res, guided = false) {
   if (!auth.can(req.user, 'employee.edit') && !req.user.isAdmin) {
     return res.status(403).json({ error: 'You do not have permission to update employee records.' });
   }
   const id = Number(req.params.id);
-  if (Object.hasOwn(req.body, 'crmProjectName')) checkCrmSubmit(req.user, id, req.body);
+  const body = req.body || {};
+  const changes = guided ? guideReview.consume(req.user, req.token, id, body) : body.changes || {};
+  if (!guided && Object.hasOwn(body, 'crmProjectName')) checkCrmSubmit(req.user, id, body);
   const before = query.getAssignment(req.user, id, 'can_edit');
   if (!before) return res.status(404).json({ error: 'Employee record not found.' });
 
-  emp.updateAssignment(req.user, id, req.body.changes || {}, {
-    expectedRev: req.body.rev || null,
-    reason: req.body.reason || 'Supervisor submit',
+  emp.updateAssignment(req.user, id, changes, {
+    expectedRev: body.rev || null,
+    reason: guided ? 'Confirmed guided CRM update' : body.reason || 'Supervisor submit',
   });
   const after = query.getAssignment(req.user, id);
 
-  const changedKeys = Object.keys(req.body.changes || {}).filter((k) => {
+  const changedKeys = Object.keys(changes).filter((k) => {
     const a = before.values[k];
     const b = after.values[k];
     return String(a ?? '') !== String(b ?? '');
@@ -436,7 +443,12 @@ router.post('/employees/:id/submit', requireAuth, wrap((req, res) => {
       ? `Saved ${changedKeys.length} field${changedKeys.length === 1 ? '' : 's'}. The next Excel export will include these values.`
       : 'No changes to save.',
   });
+}
+router.post('/employees/:id/submit', requireAuth, wrap((req, res) => submitEmployee(req, res)));
+router.post('/agent/crm/:id/review', requireAuth, requireCap('employee.edit'), wrap((req, res) => {
+  res.json(guideReview.issue(req.user, req.token, Number(req.params.id), req.body || {}));
 }));
+router.post('/agent/crm/:id/confirm', requireAuth, requireCap('employee.edit'), wrap((req, res) => submitEmployee(req, res, true)));
 
 router.get('/employees/:id', requireAuth, wrap((req, res) => {
   const data = query.getAssignment(req.user, Number(req.params.id));
@@ -529,6 +541,7 @@ router.post('/duplicates/:id/resolve', requireAuth, requireAdmin, wrap((req, res
   const id = Number(req.params.id);
   const review = q.get('SELECT * FROM duplicate_reviews WHERE id = ?', id);
   if (!review) return res.status(404).json({ error: 'Review not found.' });
+  if (review.status !== 'pending') return res.status(409).json({ error: 'This review is no longer pending.' });
   const { action } = req.body || {}; // link | create | dismiss
   if (!['link', 'create', 'dismiss'].includes(action)) {
     return res.status(422).json({ error: 'Choose an action: link, create or dismiss.' });
@@ -571,7 +584,13 @@ router.post('/agent/ask', requireAuth, wrap((req, res) => {
   const language = req.body?.language ?? 'en';
   if (!['en', 'hi'].includes(language)) return res.status(422).json({ error: 'Choose English or Hindi.' });
   if (message.length > 1000) return res.status(422).json({ error: language === 'hi' ? 'सवाल 1,000 अक्षरों तक रखें।' : 'Keep your question under 1,000 characters.' });
-  const plan = agent.understand(req.user, message, req.body?.projectName, language);
+  const choice = req.body?.guideChoice;
+  if (choice != null && (typeof choice !== 'object' || Array.isArray(choice) ||
+      typeof choice.person !== 'string' || choice.person.length > 200 ||
+      (choice.placementId != null && (!Number.isSafeInteger(choice.placementId) || choice.placementId < 1)))) {
+    return res.status(422).json({ error: 'Invalid employee or placement choice.' });
+  }
+  const plan = agent.understand(req.user, message, req.body?.projectName, language, choice, req.body?.projectPicked === true);
   let proposal = null;
   if (plan.proposal) {
     // raising a proposal needs the ability to edit at all; approving it is admin-only
@@ -586,6 +605,9 @@ router.post('/agent/ask', requireAuth, wrap((req, res) => {
     understood: !!plan.understood,
     projectName: plan.projectName || null,
     crm: plan.crm || null,
+    ...(plan.guide && { guide: plan.guide }),
+    ...(plan.ambiguousProject && { ambiguousProject: true }),
+    ...(plan.source && { source: plan.source }),
     kind: plan.kind || 'answer',
     table: plan.table || null,
     data: plan.data || null,
@@ -652,7 +674,12 @@ router.get('/export', requireAuth, requireCap('export.data'), wrap(async (req, r
   if (scope.subprojectId) parts.push(`subproject-${scope.subprojectId}`);
   if (scope.categoryId) parts.push(`category-${scope.categoryId}`);
   if (scope.supplierId) parts.push(`supplier-${scope.supplierId}`);
-  parts.push(new Date().toISOString().slice(0, 10));
+  if (req.query.forReplacement === '1') {
+    if (!req.user.isAdmin || req.user.gigaAccess) throw access.denied('Administrator access required.');
+    if (Object.keys(scope).length) throw access.invalid('Export the complete unfiltered roster before replacing it.');
+    res.setHeader('X-Roster-Receipt', rosterCycle.startExport(req.user));
+    parts.push('before-replacement', new Date().toISOString().replace(/[:.]/g, '-'));
+  } else parts.push(new Date().toISOString().slice(0, 10));
   await excel.streamWorkbook(res, req.user, scope, `${parts.join('-')}.xlsx`);
   record({ entity: 'export', entityId: null, ref: parts.join('-'), action: 'export', actor: req.user, meta: scope });
 }));
@@ -660,9 +687,10 @@ router.get('/export', requireAuth, requireCap('export.data'), wrap(async (req, r
 // ---------------------------------------------------------------------------
 // import & synchronization
 // ---------------------------------------------------------------------------
-router.post('/import', requireAuth, requireCap('import.data'), wrap(async (req, res) => {
+const importRoute = replace => wrap(async (req, res) => {
   const { filename, content, force, dryRun, projectId, subprojectId, categoryId } = req.body || {};
   if (!content) return res.status(422).json({ error: 'Choose an Excel (.xlsx) file to upload.' });
+  if (replace && !/\.xlsx$/i.test(filename || '')) throw access.invalid('Choose a complete .xlsx workbook.');
   const buffer = Buffer.from(String(content).split(',').pop(), 'base64');
   // Your HR master workbook carries no Project / Subproject / Category column.
   // The chosen placement (or the database's single category) files the people.
@@ -671,9 +699,12 @@ router.post('/import', requireAuth, requireCap('import.data'), wrap(async (req, 
     : null;
   const result = await excel.importWorkbook(req.user, buffer, {
     filename: filename || 'upload.xlsx', force: !!force, dryRun: !!dryRun, defaultPlacement,
+    replace: replace ? { receipt: req.body.receipt, confirmation: req.body.confirmation } : null,
   });
   res.json({ result });
-}));
+});
+router.post('/import', requireAuth, requireCap('import.data'), importRoute(false));
+router.post('/import/replace', requireAuth, requireAdmin, importRoute(true));
 
 // the file you fill in: your own 65 headers plus the 3 placement columns
 router.get('/import/template', requireAuth, requireCap('import.data'), wrap(async (req, res) => {
@@ -760,13 +791,38 @@ function writeUserAccess(id, { projects, capabilities, gigaProjectName }) {
   }
 }
 
+function accountName(value) {
+  const name = typeof value === 'string' ? value.trim() : '';
+  if (!name) throw access.invalid('Enter a display name for this account.');
+  if (name.length > 160) throw access.invalid('The display name must be 160 characters or fewer.');
+  return name;
+}
+
+function accountForEdit(id) {
+  const user = q.get('SELECT id, email, role, name FROM users WHERE id = ?', id);
+  if (!user) throw Object.assign(new Error('User not found.'), { status: 404 });
+  return user;
+}
+
+// Call inside the edit transaction: a failed grant change must also roll back
+// the rename and its audit entry. The email and session identity never change.
+function renameAccount(user, value, actor) {
+  const name = accountName(value);
+  if (name !== user.name) {
+    q.run('UPDATE users SET name = ? WHERE id = ?', name, user.id);
+    record({ entity: 'user', entityId: user.id, ref: user.email, action: 'update', fieldKey: 'name',
+      oldValue: user.name, newValue: name, actor });
+  }
+  return name;
+}
+
 router.post('/users', requireAuth, requireAdmin, wrap((req, res) => {
   const body = req.body || {};
   const email = String(body.email || '').trim();
-  const name = String(body.name || '').trim();
+  const name = accountName(body.name);
   const role = body.role === 'admin' ? 'admin' : 'supervisor';
   if (role === 'admin' && body.gigaProjectName !== undefined) throw access.invalid('Administrator accounts cannot be restricted to a Giga project.');
-  if (!email || !name) return res.status(422).json({ error: 'Name and email are required.' });
+  if (!email) throw access.invalid('Email is required.');
   if (typeof body.password !== 'string' || body.password.length < 8) return res.status(422).json({ error: 'Use a password of at least 8 characters.' });
   const user = tx(() => {
     if (q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email)) {
@@ -810,38 +866,50 @@ router.delete('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
 }));
 
 router.patch('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
-  const id = Number(req.params.id);
-  const before = q.get('SELECT * FROM users WHERE id = ?', id);
-  if (!before) return res.status(404).json({ error: 'User not found.' });
-  const allowed = ['name', 'role', 'title', 'active'];
-  const sets = []; const args = [];
-  for (const k of allowed) {
-    if (req.body[k] === undefined) continue;
-    sets.push(`${k} = ?`); args.push(req.body[k]);
-  }
-  if (req.body.password) {
-    if (String(req.body.password).length < 8) return res.status(422).json({ error: 'Use a password of at least 8 characters.' });
-    sets.push('password_hash = ?'); args.push(auth.hashPassword(String(req.body.password)));
-  }
-  if (sets.length) q.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, ...args, id);
-  record({ entity: 'user', entityId: id, ref: before.email, action: 'update', actor: req.user });
-  res.json({ user: q.get('SELECT id, email, name, role, title, active FROM users WHERE id = ?', id) });
+  const id = Number(req.params.id), body = req.body || {};
+  const user = tx(() => {
+    const target = accountForEdit(id);
+    if (Object.hasOwn(body, 'name')) renameAccount(target, body.name, req.user);
+    const sets = [], args = [];
+    for (const k of ['role', 'title', 'active']) {
+      if (body[k] === undefined) continue;
+      sets.push(`${k} = ?`); args.push(body[k]);
+    }
+    if (body.password) {
+      if (String(body.password).length < 8) throw access.invalid('Use a password of at least 8 characters.');
+      sets.push('password_hash = ?'); args.push(auth.hashPassword(String(body.password)));
+    }
+    if (sets.length) {
+      q.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, ...args, id);
+      record({ entity: 'user', entityId: id, ref: target.email, action: 'update', actor: req.user });
+    }
+    return q.get('SELECT id, email, name, role, title, active FROM users WHERE id = ?', id);
+  });
+  res.json({ user });
 }));
 
 router.put('/users/:id/access', requireAuth, requireAdmin, wrap((req, res) => {
-  const id = Number(req.params.id);
-  const target = q.get('SELECT role, email FROM users WHERE id = ?', id);
-  if (!target) return res.status(404).json({ error: 'User not found.' });
-  if (target.role === 'admin' && req.body?.gigaProjectName !== undefined) throw access.invalid('Administrators have full access.');
-  tx(() => {
-    const before = access.gigaGrant(id);
-    writeUserAccess(id, req.body || {});
-    const after = access.gigaGrant(id);
-    const label = (grant) => grant ? grant.name || 'No project access' : 'Hierarchy grants';
-    record({ entity: 'user', entityId: id, ref: target.email, action: 'update', fieldKey: 'access',
-      oldValue: label(before), newValue: label(after), actor: req.user });
+  const id = Number(req.params.id), body = req.body || {};
+  const user = tx(() => {
+    const target = accountForEdit(id);
+    const grantKeys = ['projects', 'capabilities', 'gigaProjectName'];
+    const editGrants = grantKeys.some((k) => Object.hasOwn(body, k));
+    if (Object.keys(body).some((k) => k !== 'name' && !grantKeys.includes(k))) {
+      throw access.invalid('Only the display name and access settings can be changed here.');
+    }
+    if (editGrants && target.role === 'admin') throw access.invalid('Administrators have full access. Only the display name can be changed here.');
+    const name = Object.hasOwn(body, 'name') ? renameAccount(target, body.name, req.user) : target.name;
+    if (editGrants) {
+      const before = access.gigaGrant(id);
+      writeUserAccess(id, body);
+      const after = access.gigaGrant(id);
+      const label = (grant) => grant ? grant.name || 'No project access' : 'Hierarchy grants';
+      record({ entity: 'user', entityId: id, ref: target.email, action: 'update', fieldKey: 'access',
+        oldValue: label(before), newValue: label(after), actor: req.user });
+    }
+    return { id, name };
   });
-  res.json({ ok: true });
+  res.json({ ok: true, user });
 }));
 
 // ---------------------------------------------------------------------------

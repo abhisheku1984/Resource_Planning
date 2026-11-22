@@ -6,7 +6,8 @@ const schema = require('./schema');
 const fielddefs = require('./fielddefs');
 const emp = require('./employees');
 const { prepareEmployeeQuery } = require('./query');
-const { denied } = require('./access');
+const { denied, invalid } = require('./access');
+const rosterCycle = require('./roster-cycle');
 
 const BASE_HEADERS = [
   { key: 'project.code', label: 'Project Code', width: 14 },
@@ -280,10 +281,11 @@ function resolveDefaultPlacement() {
   return { projectId: proj.id, subprojectId: cat.subproject_id, categoryId: cat.id };
 }
 
-async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = false, dryRun = false, defaultPlacement = null } = {}) {
+async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = false, dryRun = false, defaultPlacement = null, replace = null } = {}) {
   if (user.gigaAccess) throw denied('Master workbook imports are not permitted for Giga-scoped users.');
+  const permit = replace && rosterCycle.authorize(user, replace, buffer, defaultPlacement, dryRun);
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer);
+  try { await wb.xlsx.load(buffer); } catch { throw invalid('This file could not be read as an Excel .xlsx workbook.'); }
   const sheet = wb.getWorksheet('Employees') || wb.worksheets[0];
   if (!sheet) throw Object.assign(new Error('The workbook contains no worksheets.'), { status: 422 });
 
@@ -335,6 +337,15 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
 
   const report = { created: 0, updated: 0, protected: 0, flagged: 0, rows: [], errors: [], dryRun };
   const parsed = [];
+  if (permit) {
+    // A merge may ignore extra headers, but silently dropping a misspelled
+    // field in the new master would discard yesterday's data. Export stamps
+    // are intentionally read-only (the other derived columns were skipped above).
+    const unknown = labels.filter((label, col) => label && !specials[label] && !colField.has(col)
+      && !['last_updated', 'last_updated_by'].includes(label));
+    if (unknown.length) report.errors.push({ row: 1, message: `Unrecognised headers: ${unknown.join(', ')}. Use the import template or the full export.` });
+    if (![...colField.values()].some(f => f.key === 'emp_code')) report.errors.push({ row: 1, message: 'The Employee ID column is required.' });
+  }
 
   for (let r = 2; r <= sheet.rowCount; r++) {
     const row = sheet.getRow(r);
@@ -352,7 +363,11 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
         else v = String(v);
       }
       if (v === undefined || v === '') return;
-      if (specials[label]) { rec.meta[specials[label]] = String(v).trim(); return; }
+      if (specials[label]) {
+        const text = String(v ?? '').trim();
+        if (text) rec.meta[specials[label]] = text;
+        return;
+      }
       const f = colField.get(col);
       // a repeated header's second copy is kept separately, never overwriting
       if (f) rec.values[f.key] = v;
@@ -361,7 +376,7 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
     rec.identity.name = rec.values.name;
     rec.identity.email = rec.values.email;
     rec.identity.phone = rec.values.phone;
-    if (!rec.identity.emp_code) {
+    if (!String(rec.identity.emp_code ?? '').trim()) {
       report.errors.push({ row: r, message: 'Missing Employee ID — row skipped.' });
       continue;
     }
@@ -369,12 +384,25 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
   }
 
   const run = () => {
+    if (permit) {
+      permit.check(); // under the write lock: the roster must still match the full export
+      report.before = rosterCycle.counts();
+      rosterCycle.clearRoster(user);
+    }
     for (const rec of parsed) {
       try {
-        applyRow(user, rec, { force, report, placement });
+        applyRow(user, rec, { force, report, placement, strict: !!permit });
       } catch (e) {
         report.errors.push({ row: rec._row, message: e.message });
       }
+    }
+    if (permit) {
+      report.after = rosterCycle.counts();
+      if (!parsed.length) report.errors.push({ row: 1, message: 'A replacement must contain at least one employee row with an Employee ID.' });
+      if (!report.errors.length && report.after.placements !== parsed.length) {
+        report.errors.push({ row: null, message: 'The same Employee ID and placement occurs more than once in this workbook.' });
+      }
+      report.canReplace = report.after.people > 0 && !report.errors.length && !report.flagged;
     }
   };
 
@@ -386,25 +414,35 @@ async function importWorkbook(user, buffer, { filename = 'upload.xlsx', force = 
     } catch (e) {
       if (!e || e.__rollback !== true) throw e;
     }
+    if (permit) permit.reviewed(report.canReplace);
     return { ...report, dryRun: true };
   }
 
-  return tx(() => {
+  if (permit) {
+    permit.check(); // only a confirmed, successfully previewed file can create a backup
+    rosterCycle.saveRestorePoint(); // fails closed; VACUUM INTO must run outside a transaction
+  }
+  const applied = tx(() => {
     run();
+    if (permit && !report.canReplace) throw invalid('Replacement validation failed. Nothing was changed. Export and preview again.');
     q.run(
       `INSERT INTO imports (filename, uploaded_by, created, updated, protected, flagged, errors)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       filename, user.id, report.created, report.updated, report.protected, report.flagged, JSON.stringify(report.errors)
     );
     record({
-      entity: 'import', entityId: null, ref: filename, action: 'import', actor: user,
-      newValue: `${report.created} created / ${report.updated} updated / ${report.protected} protected`,
+      entity: 'import', entityId: null, ref: filename, action: permit ? 'replace' : 'import', actor: user,
+      ...(permit ? { oldValue: `${report.before.people} people / ${report.before.placements} placements`, meta: { after: report.after } } : {}),
+      newValue: permit ? `${report.after.people} people / ${report.after.placements} placements`
+        : `${report.created} created / ${report.updated} updated / ${report.protected} protected`,
     });
     return report;
   });
+  if (permit) permit.consume();
+  return applied;
 }
 
-function applyRow(user, rec, { force, report, placement }) {
+function applyRow(user, rec, { force, report, placement, strict }) {
   const s = rec.meta;
   const fieldsByKey = new Map(schema.listFields().map((f) => [f.key, f]));
   let changed = false;
@@ -444,6 +482,10 @@ function applyRow(user, rec, { force, report, placement }) {
   }
   if (!categoryId && placement) categoryId = placement.categoryId;
   if (!categoryId) throw new Error('Category column is required for import rows.');
+
+  if (strict && !q.get(`SELECT 1 FROM categories c JOIN subprojects s ON s.id=c.subproject_id
+      JOIN projects p ON p.id=s.project_id WHERE c.id=? AND s.id=? AND p.id=? AND c.active=1 AND s.active=1 AND p.active=1`,
+      categoryId, subprojectId, projectId)) throw new Error('Select an active category in the specified project and subproject.');
 
   if (!user.isAdmin) {
     emp.assertProjectAccess(user, projectId, 'can_edit');

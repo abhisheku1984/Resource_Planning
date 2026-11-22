@@ -6,7 +6,7 @@ const digits = (s) => s.replace(/[०-९]/g, (d) => String('०१२३४५�
 const projectWords = new Map(Object.entries({
   'गीगा': 'giga', 'गिगा': 'giga', 'वन': 'one', 'एक': 'one', 'टू': 'two', 'दो': 'two', 'थ्री': 'three', 'तीन': 'three',
 }));
-const spokenProject = (s) => digits(s).split(/\s+/).map((w) => projectWords.get(w) || w).join(' ');
+const projectAlias = (s) => digits(s).split(/\s+/).map((w) => projectWords.get(w) || w).join(' ');
 function projectClause(text, matches) {
   const select = text.match(/^(.+?)\s+(?:चुनें|चुनिए|चुनो)$/u);
   if (select) return { explicit: select[1], ask: '' };
@@ -72,4 +72,4 @@ function employeeTerm(raw) {
   if (!code || !/^\d+$/.test(numeric(code[2]))) return raw;
   return (/^ई/u.test(code[1]) ? 'EMP' : code[1].replace(/\s/g, '')) + '-' + numeric(code[2]);
 }
-module.exports = { spokenProject, projectClause, intent, employeeTerm, label };
+module.exports = { projectAlias, projectClause, intent, employeeTerm, label };

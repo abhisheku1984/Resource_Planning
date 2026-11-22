@@ -11,7 +11,7 @@ import { createFilterBar } from './filterbar.js';
 
 const STATUS_FIELDS = new Set(['status', 'training_status', 'completion_status', 'billing_status', 'allocation_status']);
 
-export function createTable({ onSelect, onSaved, onSummary, compact = false, showScope = true, withFilters = true }) {
+export function createTable({ onSelect, onSaved, compact = false, showScope = true, withFilters = true }) {
   const el = h('div', { class: 'card', style: { overflow: 'hidden' } });
 
   const q = {
@@ -129,9 +129,8 @@ export function createTable({ onSelect, onSaved, onSummary, compact = false, sho
   }
 
   /* ------------------------------------------------------------- loading */
-  function showCounts(result) {
+  function showRowCount(result) {
     rowCount.textContent = fmtNum(result?.total);
-    onSummary?.(result?.summary ?? null);
   }
 
   async function load({ silent = false } = {}) {
@@ -140,14 +139,13 @@ export function createTable({ onSelect, onSaved, onSummary, compact = false, sho
     const { signal } = controller;
     loading = true;
     if (!silent) {
-      showCounts(null);
+      showRowCount(null);
       mount(foot);
       renderLoading();
     }
     const params = new URLSearchParams();
     params.set('page', q.page);
     params.set('pageSize', q.pageSize);
-    if (onSummary) params.set('includeSummary', '1');
     params.set('sort', q.sort);
     params.set('dir', q.dir);
     for (const [key, value] of Object.entries(currentView())) {
@@ -163,12 +161,12 @@ export function createTable({ onSelect, onSaved, onSummary, compact = false, sho
         if (filterBar) filterBar.setFacets(facets, res.scope?.category?.name || res.scope?.project?.name || '');
       }
       loading = false;
-      showCounts(res);
+      showRowCount(res);
       render();
     } catch (err) {
       if (signal.aborted || err.name === 'AbortError') return;
       loading = false;
-      showCounts(null);
+      showRowCount(null);
       mount(bodyHost, h('div', { class: 'card-body' }, emptyState({
         title: 'Could not load records',
         message: err.message,

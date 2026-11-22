@@ -1,11 +1,10 @@
-import {
-  h, mount, icon, api, state, fmtNum, fmtRelative, spinner, emptyState,
-  statusBadge, fmtDate, toast,
-} from '../core.js';
+import { h, mount, icon, api, state, fmtNum, spinner, emptyState } from '../core.js';
 
 const PIE_COLORS = ['#1f5fbf', '#0f9d8b', '#a86300', '#7c4dbe', '#b42318', '#4f92ec', '#8494a9'];
 
-export async function renderDashboard(content, ctx) {
+export async function renderDashboard(content) {
+  const host = h('div', { id: 'dash-body' },
+    h('div', { class: 'row muted', role: 'status' }, spinner(), 'Loading dashboard…'));
   mount(content, h('div', { class: 'page' },
     h('div', { class: 'page-head' },
       h('div', null,
@@ -18,40 +17,26 @@ export async function renderDashboard(content, ctx) {
         h('button', { class: 'btn btn-primary', onclick: () => window.__rp.go('workspace') }, icon('layers', 15), 'Open project workspace'),
       ),
     ),
-    h('div', { class: 'grid grid-kpi', style: { marginBottom: '14px' } },
-      skeletonKpi(), skeletonKpi(), skeletonKpi(), skeletonKpi(),
-    ),
-    h('div', { id: 'dash-body' }, h('div', { class: 'card' }, h('div', { class: 'card-body row' }, spinner(), h('span', { class: 'muted' }, 'Loading dashboard…')))),
+    host,
   ));
 
-  let data;
   try {
-    data = await api('/dashboard');
+    const data = await api('/dashboard?summaryOnly=1');
+    if (!host.isConnected) return; // the user navigated away or refreshed
+    state.dashboard = data;
+    paint(host, data);
   } catch (err) {
-    mount(document.getElementById('dash-body'), h('div', { class: 'card' }, emptyState({
+    if (!host.isConnected) return;
+    mount(host, h('div', { class: 'card' }, emptyState({
       title: 'Dashboard unavailable', message: err.message, iconName: 'alert',
     })));
-    return;
   }
-  state.dashboard = data;
-  if (!document.getElementById('dash-body')) return;
-  paint(data);
 }
 
-function paint(data) {
-  const host = document.getElementById('dash-body');
-  if (!host) return;
-
-  const kpis = h('div', { class: 'grid grid-kpi', style: { marginBottom: '14px' } },
-    kpi('employees', 'People in scope', fmtNum(data.totals.employees), `${fmtNum(data.totals.assignments)} placements`, 'users', () => window.__rp.go('directory')),
-    kpi('layers', state.user.gigaAccess ? 'Hierarchy projects in scope' : 'Projects', fmtNum(data.totals.projects), `${state.tree.reduce((a, p) => a + p.subprojects.length, 0)} subprojects`, 'layers', () => window.__rp.go('workspace')),
-    kpi('truck', 'Suppliers', fmtNum(data.totals.suppliers), 'Active partner network', 'truck', () => window.__rp.go('admin')),
-    kpi('alert',
-      'Needs attention',
-      fmtNum((data.attention || []).length + (state.totals?.pendingReviews || 0)),
-      state.totals?.pendingReviews ? `${state.totals.pendingReviews} duplicate review${state.totals.pendingReviews > 1 ? 's' : ''}` : 'Status exceptions & unassigned',
-      'alert',
-      () => window.__rp.go(state.totals?.pendingReviews ? 'datahub' : 'directory')),
+function paint(host, data) {
+  const kpis = h('section', { class: 'grid grid-2', 'aria-label': 'Workforce summary', style: { marginBottom: '14px' } },
+    kpi('People in scope', fmtNum(data.totals.employees), `${fmtNum(data.totals.assignments)} placements`, 'users', () => window.__rp.go('directory')),
+    kpi(state.user.gigaAccess ? 'Hierarchy projects in scope' : 'Projects', fmtNum(data.totals.projects), `${state.tree.reduce((a, p) => a + p.subprojects.length, 0)} subprojects`, 'layers', () => window.__rp.go('workspace')),
   );
 
   const byStatus = data.byStatus || [];
@@ -116,74 +101,16 @@ function paint(data) {
     ),
   );
 
-  const attentionCard = h('div', { class: 'card' },
-    cardHead('Needs attention', 'Records with exceptions or missing data'),
-    h('div', { class: 'card-body flush' },
-      (data.attention || []).length
-        ? h('div', null,
-          ...data.attention.map((a) => h('button', {
-            class: 'list-item',
-            style: { borderRadius: '0', borderBottom: '1px solid var(--line)', padding: '10px 16px' },
-            onclick: () => { location.hash = `#/workspace?project=${a.project_id || ''}`; },
-          },
-            h('div', { class: 'grow', style: { minWidth: '0' } },
-              h('div', { class: 'row', style: { gap: '7px' } },
-                h('span', { style: { fontWeight: '600', fontSize: '12.5px' } }, a.name),
-                h('span', { class: 'mono subtle', style: { fontSize: '11px' } }, a.emp_code),
-              ),
-              h('div', { class: 'subtle', style: { fontSize: '11.5px' } }, `${a.project_name} · ${a.category_name}`),
-            ),
-            statusBadge(a.status),
-          )),
-        )
-        : emptyState({ title: 'All clear', message: 'No exceptions detected in your projects.', iconName: 'checkCircle' }),
+  const quickActions = h('div', { class: 'card' },
+    cardHead('Quick actions'),
+    h('div', { class: 'card-body col', style: { gap: '8px' } },
+      h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('workspace') }, icon('layers', 15), 'Browse projects & subprojects'),
+      h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('datahub') }, icon('download', 15), 'Generate Excel export'),
+      h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('directory') }, icon('contact', 15), 'Open contact CRM'),
     ),
   );
 
-  const activityCard = h('div', { class: 'card' },
-    cardHead('Recent activity', 'Latest changes from supervisors', h('button', {
-      class: 'btn btn-ghost btn-xs', onclick: () => window.__rp.go('audit'),
-    }, 'View all', icon('chevronRight', 13))),
-    h('div', { class: 'card-body' },
-      (data.activity || []).length
-        ? h('div', { class: 'timeline' },
-          ...data.activity.slice(0, 8).map((a) => h('div', { class: 'tl-item' },
-            h('div', { class: 'tl-dot' }, icon(a.action === 'create' ? 'plus' : 'edit', 11)),
-            h('div', { class: 'tl-body' },
-              h('div', { class: 'tl-line1' },
-                h('span', { style: { fontWeight: '600' } }, a.actor_name || 'System'),
-                ' updated ',
-                a.field_key ? h('span', { class: 'tl-field' }, humanField(a.field_key)) : 'a record',
-                a.ref ? h('span', { class: 'subtle' }, ` · ${a.ref}`) : null,
-              ),
-              h('div', { class: 'tl-meta' },
-                a.old_value ? h('span', null, h('span', { class: 'tl-old' }, trunc(a.old_value)), ' → ', h('span', { class: 'tl-new' }, trunc(a.new_value))) : trunc(a.new_value || ''),
-                ' · ', fmtRelative(a.at),
-              ),
-            ),
-          )),
-        )
-        : emptyState({ title: 'No recent activity', iconName: 'history' }),
-    ),
-  );
-
-  mount(host,
-    kpis,
-    h('div', { class: 'grid grid-dash', style: { marginBottom: '14px' } }, projectCard, statusCard),
-    h('div', { class: 'grid grid-dash' },
-      h('div', { class: 'col', style: { gap: '14px' } }, attentionCard, supplierCard),
-      h('div', { class: 'col', style: { gap: '14px' } }, activityCard,
-        h('div', { class: 'card' },
-          cardHead('Quick actions'),
-          h('div', { class: 'card-body col', style: { gap: '8px' } },
-            h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('workspace') }, icon('layers', 15), 'Browse projects & subprojects'),
-            h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('datahub') }, icon('download', 15), 'Generate Excel export'),
-            h('button', { class: 'btn btn-block', style: { justifyContent: 'flex-start' }, onclick: () => window.__rp.go('directory') }, icon('contact', 15), 'Open contact CRM'),
-          ),
-        ),
-      ),
-    ),
-  );
+  mount(host, kpis, h('div', { class: 'grid grid-dash' }, projectCard, statusCard, supplierCard, quickActions));
 }
 
 /* ------------------------------------------------------------------ pieces */
@@ -191,20 +118,17 @@ function greeting() {
   const hr = new Date().getHours();
   return hr < 12 ? 'morning' : hr < 17 ? 'afternoon' : 'evening';
 }
-const trunc = (s) => { const t = String(s || ''); return t.length > 32 ? `${t.slice(0, 30)}…` : t; };
-const humanField = (k) => k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
-function cardHead(title, sub, extra) {
+function cardHead(title, sub) {
   return h('div', { class: 'card-head' },
     h('div', null,
       h('div', { class: 'card-title' }, title),
       sub ? h('div', { class: 'card-sub' }, sub) : null,
     ),
-    extra || null,
   );
 }
 
-function kpi(iconName, label, value, foot, iconKey, onclick) {
+function kpi(label, value, foot, iconKey, onclick) {
   return h('button', {
     class: 'kpi',
     style: { textAlign: 'left', cursor: onclick ? 'pointer' : 'default', font: 'inherit' },
@@ -216,14 +140,6 @@ function kpi(iconName, label, value, foot, iconKey, onclick) {
     ),
     h('div', { class: 'kpi-value' }, value),
     h('div', { class: 'kpi-foot' }, foot),
-  );
-}
-
-function skeletonKpi() {
-  return h('div', { class: 'kpi' },
-    h('div', { class: 'skeleton', style: { width: '40%', height: '12px' } }),
-    h('div', { class: 'skeleton', style: { width: '55%', height: '26px' } }),
-    h('div', { class: 'skeleton', style: { width: '65%', height: '11px' } }),
   );
 }
 

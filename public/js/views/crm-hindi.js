@@ -1,4 +1,4 @@
-/* Spoken labels only. The CRM editor matches these against fields actually on
+/* Hindi labels and typed commands. The CRM editor matches these against fields actually on
    the open form; API payloads keep the workbook keys and canonical options. */
 export const fieldsHi = {
   leader_input_last_week: 'पिछले सप्ताह की राय', leader_input_this_week: 'इस सप्ताह की राय',

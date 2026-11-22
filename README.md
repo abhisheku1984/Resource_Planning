@@ -37,6 +37,18 @@ updates the schema on startup; **do not run `npm run demo` or `npm run seed`
 as part of an update**. Those commands replace data. The large demo is optional
 and intended only for disposable installations.
 
+### One website link for the team
+
+GitHub stores the code. **GitHub Pages serves static files only**: publishing `public/` there will not run sign-in, workbook imports or supervisor edits. For a working team link, deploy the Node app **and** its API together on one approved, always-on server behind HTTPS. Use one private, persistent disk for SQLite (`DATA_DIR`), outside `public/` and outside the code checkout. A redeploy should update code, not replace the roster.
+
+Start privately. Before admitting users or importing real data, provision individual accounts, disable the known demo logins, remove the demo sign-in shortcuts, and set up access controls and encrypted backups. Verify with synthetic data that a supervisor can edit an authorized record and that the edit survives a restart. See the [data safety checklist](SECURITY.md#6-known-limitations--read-before-using-real-data). Share the resulting HTTPS address with staff; if approved for public listing, it can also go in the repository’s **About → Website** field. Never commit a live database, daily workbook, export or backup to create a website link.
+
+### Try guided Ask on Windows without using your workforce database
+
+Run **`START-PREVIEW.cmd`** and open **<http://localhost:4110>** when the server is running. By default the preview binds to loopback and uses `data/guided-preview.db`, not the normal `data/resource_planning.db`. If you have activated the workbook preview below, the launcher prints and uses that copy instead. The first start creates synthetic records; no import or reset is needed. Sign in as the demo NEXUS supervisor below and [try a guided update](#try-a-guided-update). Press **Ctrl+C** to stop the preview.
+
+For the 1,000-person test roster, see the [sample workbook and preview walkthrough](samples/README.md). For recurring full dumps, follow the [administrator’s daily export and replacement checklist](samples/DAILY-ROSTER.md). Both upload and export work without Excel or Microsoft 365.
+
 ### Demo logins
 
 | Role | Email | Password |
@@ -50,27 +62,11 @@ and intended only for disposable installations.
 | Read-only reviewer | `kavita.rao@resourceplanning.io` | `Super@12345` |
 | HR uploader | `hr.upload@resourceplanning.io` | `Hr@1234567` |
 
-Windows: double-click **`start-windows.bat`**. Before opening the browser it prepares missing app dependencies and the offline **English + हिन्दी microphone** files. The first voice preparation needs internet (up to about 155 MB including fast speakers); subsequent ready launches make no voice downloads. It never opens a mic or reads workbook data. If the download fails, the app still starts. **`start-windows.bat --no-voice`** skips voice preparation (can be combined with `--lan`); plain `npm start` also just starts the server. Use an **Administrator** login for Administration.
+Windows: double-click **`start-windows.bat`**. It installs missing app dependencies on first use, starts the server, and opens the browser. Ask is text-only; there is no microphone or speaker setup. Use an **Administrator** login for Administration.
 
-### Employee Directory totals
+### Employee Directory
 
-The cards above **Employee records** describe the current selection, across **all
-pages**. They update when you choose or clear a Giga project, combine filters,
-search, or change the hierarchy project. Clearing filters shows your authorized
-records, not necessarily the whole database.
-
-* **People in scope** counts distinct employees. **Placements** is the exact
-  Employee records count. One person with two matching placements counts as one
-  person and two records.
-* **Giga projects** counts distinct, nonblank workbook project names. The line
-  beneath it counts the hierarchy projects containing matching rows. One Giga
-  project can span several hierarchy projects.
-* **Pending reviews** counts open duplicate reviews involving matching people,
-  once per review. Only administrators can see the count.
-
-The Directory requests `GET /api/employees?includeSummary=1` with its usual query
-parameters. The summary and table share the same authorization and filter conditions;
-no second request, workbook or stored copy of the totals is needed.
+The Directory opens directly to **Employee records** and the filters. The table's row count is the number of matching placements across all pages. Clearing filters stays within your authorized projects. The Dashboard shows people and project totals, workforce charts, and quick actions. Use the Audit Trail for change history and Data Hub for duplicate reviews.
 
 ### Checking the five filter dropdowns
 
@@ -84,7 +80,7 @@ It signs in as the administrator, loads the Employee Directory the same way the
 browser does, and prints the values plus counts behind **Billing Status, Bench
 Category, BL Status, Offsite/Onsite** and **Giga Project Name**. Then it selects
 one value in each and confirms the row total becomes exactly the number the
-dropdown advertised. It also checks the Directory card totals in the same response.
+dropdown advertised.
 Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere.
 
 ### Tests
@@ -93,9 +89,9 @@ Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere.
 npm test          # integration + UI smoke tests
 ```
 
-## Ask: answers by workbook project name
+## Ask: project answers and guided employee updates
 
-Open **Ask** (or **Ctrl+K**). Say or select a **Giga Project Name** from your
+Open **Ask** (or **Ctrl+K**). Type or select a **Giga Project Name** from your
 workbook. This is not the hierarchy project or its code. If several names are
 available and you don't give one, Ask requests a name instead of returning a
 database-wide total. Follow-ups keep the selected name until you change it;
@@ -114,77 +110,63 @@ Counts, lists and breakdowns use live SQLite data, not an AI provider. Unknown
 names or unsupported filters do not produce estimates. A person with multiple
 matching placements counts once per bucket; distinct buckets can overlap.
 
-### Voice mode and CRM entry
+After a count, **Show their names** runs a fresh, permission-checked list with
+the same filter. Changing project drops that context. **How do approvals work?**
+and **How do I import a workbook?** give app instructions, not a database action.
 
-In **Ask → Voice language / भाषा**, choose **English** or **हिन्दी**. The
-selection applies to typed questions, the microphone, replies and CRM commands;
-it does not change the rest of the site or translate workbook names. Ask remembers
-the choice in this browser. Switching stops listening/read-aloud; it preserves
-unsaved CRM values but requires a fresh review before confirmation.
+### Try a guided update
 
-Two buttons sit above the Ask message box, even when setup help is closed.
-The **microphone** is **Start voice mode** / **बोलना शुरू करें**. Use it on
-**localhost or HTTPS**.
-On Windows, start the app with `start-windows.bat` and open it in desktop Chrome or Edge. Press **Start voice mode**, allow the microphone when prompted, speak and pause. No separate microphone installer or speaker test is needed.
-It pauses during spoken replies and listens again for the next command. You can also just type the same commands and press
-Enter, with **no microphone, speech pack or read-aloud voice**.
+Open **Ask → Update an employee** (or **कर्मचारी अपडेट करें**). You can also
+start with a goal, without opening a form or memorizing its field keys. Here is
+a conversation you can try in the **fresh demo** as Priya. In your workbook,
+use an employee ID and Giga Project Name from your own Directory instead.
+
+| You | What happens |
+|---|---|
+| `Update the interview note for EMP-01031` | Ask requests a workbook project if needed. Select **Giga One**. With more than one matching placement, enter its placement number or click the matching placement chip; it will not guess. |
+| `Ready for a client interview` | Ask fills **Detail Comments** on the visible form and shows the employee, placement and **old → new** value. Nothing is saved. |
+| `Actually, change that to Interview scheduled for Monday` | The field and review change together. You can also type directly in the field and click **Review changes**. |
+| `Yes` / **Confirm save**, or `Cancel` | Only a separate confirmation after the current review writes the update. Cancel discards the draft. |
+
+In Hindi, try **इंटरव्यू नोट अपडेट करें** → choose the workbook project → give
+the employee ID → **साक्षात्कार के लिए तैयार** → **नहीं, इसकी जगह सोमवार को साक्षात्कार लिखें**
+→ check the revised field → **हाँ** or **रद्द करें**. You can type replies, click suggestions, or edit the visible draft before confirming it.
+
+You can also give several fields in one turn: `For EMP-01031 in Giga One, set
+the account owner to Mira and the billing start date to May 12 2027`. An
+ambiguous “billing date” prompts for start or end. Put a literal field-like
+phrase in quotes (for example `set the note to “Research and account owner to
+be discussed”`). This is a local, rules-based guide to the configured fields,
+not an open-ended chatbot. **Guide this form** starts it from an already open
+Ask CRM with no outstanding edits.
+
+The guide is separate from **Update** autosave. It cannot change employee
+identity, a read-only field or the workbook project. For a bench/block status
+request use `Set EMP-01031 to hard block` in general Ask: that is a proposal
+for **administrator approval**, not a guided save. If the record or access
+changes during review, reopen it; the app does not retry the write for you.
+
+### Typing in English and Hindi
+
+In **Ask → Chat language / भाषा**, choose **English** or **हिन्दी**. Type a message and press **Enter** or click **Send message**; **Shift+Enter** adds a new line. Replies and tables appear in the conversation. Switching languages keeps your unsaved CRM values but requires a fresh review before confirmation. Workbook names and IDs are not translated.
 
 | Try this | English | हिन्दी |
 |---|---|---|
 | Ask about a workbook project | How many are on bench in Giga One? | Giga One में बेंच पर कितने लोग हैं? |
 | Ask for a list or breakdown | Who is on bench? / Break down billing status | बेंच पर कौन है? / बिलिंग स्थिति का विवरण दिखाएँ |
 | Open an employee’s form | Open CRM | सीआरएम खोलें |
-| Hear editable and read-only field names | List fields | फ़ील्ड बताएं |
+| List editable and read-only field names | List fields | फ़ील्ड बताएं |
 | Draft a note | Set Detail Comments to ready for interview | टिप्पणी में साक्षात्कार के लिए तैयार लिखें |
 | Check a draft value | Read Detail Comments | टिप्पणी पढ़ें |
 | Review the person, project and changes | Review changes | बदलाव की समीक्षा करें |
 | Confirm the reviewed draft **or** discard it | Confirm save / Discard changes | सहेजने की पुष्टि करें / बदलाव रद्द करें |
-| Close the form / turn off the mic | Close CRM / Stop listening | सीआरएम बंद करें / सुनना बंद करें |
+| Close the form | Close CRM | सीआरएम बंद करें |
 
 Use a project in **your** workbook. After “Open CRM”, give the employee ID or
-exact full name; if more than one placement matches, say **placement** /
+exact full name; if more than one placement matches, enter **placement** /
 **प्लेसमेंट** and the offered number. Use the field names on that form. Dates
-can be dictated as **May 12 2027** or **१२ मई २०२७**. CRM grants, read-only
-fields, revision checks and the audited confirmation step apply in both
-languages. Closing Ask, hiding the tab or signing out stops app voice mode.
-
-### A clearer, louder Ask speaker on Windows
-
-For a more natural read-back, install **Studio**. It uses two different 24 kHz neural voices: one trained for Indian English and one for Hindi. This changes **Test speaker**, **Read last reply** and replies in voice mode. It doesn't replace your microphone, change workbook data or require a re-import.
-
-1. In the **updated app folder**, double-click **`install-studio-voices-windows.bat`**. No Y/N prompt. Or run `npm.cmd run voice:studio` in PowerShell there. This one-time download is about **100 MB** for both languages; allow about 220 MB of installed space plus npm's cache. For just Hindi or English, use `npm.cmd run voice:studio -- hi` or `-- en`.
-2. Wait for **Ready**. After updating the app code, restart `start-windows.bat` and refresh the app tab (**Ctrl+F5**). Open **Ask → English / हिन्दी → Test speaker / स्पीकर जाँचें**. No microphone access is needed. The status identifies the voice actually used.
-3. Open **Speaker settings**. **Auto** prefers Studio when installed; choose **Standard** for the faster original pack or **Local device voice** for a matching offline Windows/browser voice. Studio can take several seconds to prepare each phrase on a slow CPU. An explicitly selected missing pack gives setup guidance rather than silently substituting another language.
-4. Start with **Volume 100%**, test, then adjust (e.g. **125%**). Studio and Standard level quiet speech and limit peaks, including with boost up to **200%**. Device voices use the OS synthesizer and can't be boosted past its maximum. Settings apply on the next test/reply and are remembered in this browser. If it's still quiet, check the tab isn't muted and **Windows Settings → System → Sound → Volume mixer** for Chrome/Edge and the selected output device.
-
-Studio changes the **speaker**, not the mic. Normal Windows startup fills in missing microphone files even on Studio-only installs. It reuses installed Studio voices instead of downloading duplicate Standard models for those languages. `http://localhost:4000/speech/status` reports `studio` (neural speaker), `output` (Standard speaker) and `input` (mic) independently under `en` and `hi`. See [voice credits](voice/studio/NOTICE.md).
-
-### Using the microphone
-
-1. In **Ask**, choose your workbook project and **English** or **हिन्दी**. Select **Start voice mode** / **बोलना शुरू करें**. Only this action requests the microphone. The first use may take a few seconds to load the local model. A blocked browser permission is reported without loading it.
-2. When you see **Listening** / **सुन रहे हैं**, try **“How many people?”** or **“कुल कितने कर्मचारी हैं?”**, then pause. In-progress words are only an on-screen preview. Only the final phrase goes to Ask. The mic is released while the app answers, then listens again. Use **Stop voice** to finish.
-3. If it doesn't start, read the line under the mic button: a missing pack, blocked permission, unavailable input and a silent input need different fixes. An idle error remains visible if you close and reopen Ask. The speaker settings don't open by themselves. No database reset or workbook import is involved.
-
-On Windows, the **normal launcher** installs only what's missing before starting the server. If it reports a failed first download, check the connection and space on the app drive; starting the launcher again reuses verified files. For a manual server install on another platform, `npm run voice:setup` prepares the baseline packs. For a restricted network, the operator can prepare the same version on a connected machine and copy the `voice/` folder. Neither the browser nor a server endpoint installs app files.
-
-**Without the optional download:** the existing browser path still works where
-a matching *on-device* recognizer is available. Ask checks variants of the
-selected language separately. Only a separate **Install … speech pack** click
-asks the browser to install its pack; **Check again** is for a download already
-in progress. Native read-aloud prefers an actual local `en-IN` voice in English
-mode (or tells you which other local English voice was used). Hindi never falls
-back to English. Neither path falls back to a cloud speech service.
-
-**If you cannot hear or be heard after setup:**
-
-- A permission denial is separate from a missing recognizer. Allow the mic in
-  the browser's site controls and **Windows Settings → Privacy & security →
-  Microphone**. Test the selected device under **Settings → System → Sound → Input**.
-  For silent playback, check **Output**, the tab's mute setting and volume instead.
-- If local model loading fails, allow site storage and check free disk space. For an explicit **manual** install of only one language use `npm run voice:setup -- en` or `-- hi`. The server and browser never download missing app models at runtime. See [voice files and licenses](voice/README.md).
-- You can always type into Ask and press **Enter**. On supported Windows 11 PCs,
-  **Start → Voice access** is an alternative for English OS dictation. Windows,
-  not Ask, controls that microphone; **Win+H** is a separate online feature.
+can be entered as **May 12 2027** or **१२ मई २०२७**. CRM grants, read-only
+fields, revision checks and the audited confirmation step apply in both languages.
 
 ### The approval step
 
@@ -236,10 +218,10 @@ accepts hierarchy writes; only the screens were removed.)
 
 As an administrator, open **Administration → Data model** and choose a
 **Category**. **New field** adds a definition to the shared catalogue. To use a
-new field in this category, check **Visible**, choose its **Editable** / **Required**
-settings and **Order**, then click **Save layout**. Open the same category in
-Project Workspace to see the result. A layout change does not remove its filter
-or supervisor-update settings.
+new field in this category, check **Visible**, choose its **Editable** and
+**Required** settings, then click **Save layout**. Open the same category in
+Project Workspace to see the result. Saving these settings keeps the existing
+column sequence, filters and supervisor-update settings.
 
 `GET /api/employees?categoryId=…` returns both `rows` and the `columns` that
 apply to that category. The client renders whatever it is given, so a category
@@ -337,7 +319,7 @@ in. So the portal asks once, and files the rows there:
 4. Drop the file on **Upload a daily dataset**. A **preview** runs in a
    transaction and is rolled back, so nothing is written: check *New employees*,
    *Updated placements*, *Protected values* and any *Rows needing attention*.
-5. Press **Apply import**. The workbook is upserted by **Employee ID**.
+5. Press **Apply import**. The workbook is upserted by **Employee ID**. Rows absent from the file are **not deleted**. For a complete new dump rather than a merge, use **Data Hub → Replace entire roster** as administrator. [Export, replace, verify and recover](samples/DAILY-ROSTER.md).
 
 Header matching is forgiving: case and punctuation are ignored, and the portal
 understands the spellings your file actually uses — `unite manual`,
@@ -348,6 +330,10 @@ kept: the second copy is stored under `… (2nd column)`.
 
 `GET /api/import/template` returns the same blank workbook
 (requires `import.data`).
+
+### Rename an account
+
+As an administrator, go to **Administration → Users & access**, click **Edit access** on the account’s row, change **Display name**, and click **Save changes**. This works for supervisors, other administrators, and your own account. A name-only change leaves the login email, password, and permissions untouched. Your own name and initials update immediately; another signed-in user can refresh to see their new name. Past audit entries keep the name recorded at the time.
 
 ### Assign or change one Giga project
 
@@ -361,7 +347,7 @@ kept: the second copy is stored under `… (2nd column)`.
    or audit permissions only if needed. Click **Create user**. Account and access
    are saved together: an invalid project leaves no partial account behind.
 4. To change it later, find that person's row and click **Edit access**. The
-   picker shows the current selection. Choose a different name and **Save access**,
+   picker shows the current selection. Choose a different Giga project and **Save changes**,
    or choose **No project access** to keep the login and revoke workforce access.
    The change applies on the next request, including in existing sessions. Refresh
    an already open page to reload its navigation and rows; no new sign-in is needed.
@@ -418,7 +404,7 @@ and past attribution remain. You cannot delete yourself or the last active admin
 | --- | --- | --- |
 | `POST` | `/api/auth/login`, `/api/auth/logout` | Session tokens (scrypt hashes) |
 | `GET` | `/api/bootstrap` | User, tree, field catalogue, suppliers, totals |
-| `GET` | `/api/dashboard` | Aggregates for the dashboard |
+| `GET` | `/api/dashboard` | The dashboard uses `?summaryOnly=1` for scoped totals and charts, without individual employee or activity lists. The full API response is still available without the parameter. |
 | `GET` | `/api/employees` | Dynamic table: scope, search, filter, sort, paginate |
 | `GET` | `/api/employees/:id` | One record with its category's columns |
 | `PATCH` | `/api/employees/:id` | Validated update with optimistic concurrency |
@@ -428,13 +414,17 @@ and past attribution remain. You cannot delete yourself or the last active admin
 | `GET`/`PUT` | `/api/categories/:id/columns` | Read / write the column layout |
 | `GET`/`POST`/`PATCH` | `/api/projects`, `/api/subprojects`, `/api/categories` | Hierarchy |
 | `GET`/`POST`/`PATCH` | `/api/suppliers`, `/api/groups`, `/api/fields`, `/api/users` | Configuration |
-| `PUT` | `/api/users/:id/access` | Replace or revoke Giga project access; update capabilities |
+| `PUT` | `/api/users/:id/access` | Rename an account (`name`); optionally update supervisor access and capabilities in the same save |
 | `DELETE` | `/api/users/:id` | Remove an account (not yourself, not the last admin) |
 | `GET` | `/api/duplicates`, `POST /api/duplicates/:id/resolve` | Review queue |
 | `GET` | `/api/export` | Excel snapshot (scope-aware) |
 | `POST` | `/api/import` | Daily dataset upsert (dry-run supported, optional `projectId`/`subprojectId`/`categoryId` placement) |
+| `POST` | `/api/import/replace` | Admin-only complete replacement: receipt from unfiltered `/api/export?forReplacement=1`, clean dry run of the same file and placement, `confirmation: "REPLACE"`, private restore point, atomic delete + import |
 | `GET` | `/api/import/template` | Blank workbook: your 65 headers + the 3 placement columns |
 | `GET` | `/api/audit` | Activity feed scoped by project access |
+| `GET`, `POST` | `/api/agent/projects`, `/api/agent/ask` | Visible workbook names; local questions, update goals and scoped employee/placement choices |
+| `POST` | `/api/agent/crm/:id/review` | Validate `crmProjectName`, numeric `rev`, `before` and `changes`. Returns the normalized field diff and a single-use, five-minute session ticket; no workforce write. `:id` is the placement ID. |
+| `POST` | `/api/agent/crm/:id/confirm` | Recheck the same reviewed draft, session ticket, live permissions and revision; use the normal audited update transaction. An expired or superseded ticket requires a new review. |
 
 Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticated,
 `403` unauthorised, `404` missing, `409` stale write, `422` validation.
@@ -443,7 +433,7 @@ Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticate
 
 ## Tests
 
-`npm test` runs both suites without modifying your application database:
+`npm test` runs the following suites without modifying your application database:
 
 * `tests/api.test.js` — HTTP integration tests against a temporary database, covering all twelve required
   scenarios (shared project with six supervisors, multi-project supervisor,
@@ -458,6 +448,9 @@ Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticate
   drops the connection mid-save and asserts the panel reports `Not saved`,
   keeps the typed value, and succeeds on explicit retry. Administration tests open
   the user and field forms, confirm/cancel deletion, and submit a category layout.
+* `tests/guide.test.mjs` — English/Hindi goal parsing, corrections, multi-field staging and ambiguity. API and UI suites also cover exact placement choices, live permission changes, expired/stale reviews, refusal of unreviewed writes and audit attribution.
+
+**Optional real-browser check:** Run `npm ci --include=dev` and set `CHROME_PATH` to your installed Chrome or Edge executable. `npm run ask:check` verifies the Directory layout and typed English/Hindi conversations against an isolated, in-memory demo database. It does not need browser downloads, audio devices or real HR data.
 
 ## Project layout
 

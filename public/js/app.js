@@ -165,6 +165,14 @@ function renderSidebar() {
   );
 }
 
+function topbarAvatar() {
+  const name = state.user?.name || '';
+  return h('div', { class: 'avatar avatar-sm', title: name }, initials(name));
+}
+function refreshTopbarAvatar() {
+  document.querySelector('.topbar .avatar-sm')?.replaceWith(topbarAvatar());
+}
+
 function renderTopbar() {
   const topbar = document.querySelector('.topbar');
   if (!topbar) return;
@@ -187,7 +195,7 @@ function renderTopbar() {
         'aria-label': 'Refresh data',
         onclick: () => refreshAll(),
       }, icon('refresh', 16)),
-      h('div', { class: 'avatar avatar-sm', title: state.user?.name }, initials(state.user?.name || '')),
+      topbarAvatar(),
     ),
   );
   renderCrumbs();
@@ -234,10 +242,9 @@ const go = (name, params = {}) => {
 };
 
 async function refreshAll() {
-  const btn = document.querySelector('.topbar .btn-icon');
   try {
     await loadBootstrap();
-    renderSidebar();
+    refreshTopbarAvatar();
     renderRoute();
     toast('Refreshed', 'Latest data loaded from the database.', 'success', 2000);
   } catch (err) {
@@ -292,6 +299,8 @@ window.addEventListener('hashchange', () => {
   renderRoute();
 });
 
+// A self-rename changes the signed-in name and avatar without ending the session.
+document.addEventListener('rp:account-renamed', () => { renderSidebar(); refreshTopbarAvatar(); });
 window.addEventListener('rp:navigate', () => { if (shellBuilt) renderRoute(); });
 
 // keep the shared reference to nav helper used by views

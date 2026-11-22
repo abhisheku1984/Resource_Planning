@@ -291,7 +291,7 @@ function countRows({ where, args }) {
   return q.get(`SELECT COUNT(*) c ${COUNT_FROM} WHERE ${where}`, ...args).c;
 }
 
-// Directory cards summarize the exact working set used for the table, before
+// Optional API aggregates summarize the same working set as the table, before
 // pagination. A review belongs to the view if either person in it matches;
 // counting reviews separately avoids multiplying placements or review tickets.
 function directorySummary(user, { where, args }) {
@@ -316,7 +316,7 @@ function listEmployees(user, params = {}) {
   const sortExpr = SORTS[params.sort] || 'e.name COLLATE NOCASE';
   const dir = String(params.dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC';
 
-  // Other consumers of this table don't need the Directory's extra aggregates.
+  // Additional aggregates are opt-in; the Directory table only needs the row count.
   const summary = params.includeSummary === '1' ? directorySummary(user, ctx.narrow) : null;
   const total = summary?.placements ?? countRows(ctx.narrow);
 

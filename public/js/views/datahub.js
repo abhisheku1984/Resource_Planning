@@ -6,25 +6,28 @@ import {
   h, mount, icon, api, state, toast, spinner, emptyState, modal, fmtNum,
   fmtDateTime, fmtRelative, downloadExport, downloadWorkbook, confirmDialog,
 } from '../core.js';
+import { openRosterReplacement, readWorkbook } from './replace-roster.js';
 
 export async function renderDataHub(content, ctx) {
   const giga = state.user?.gigaAccess;
   const canExport = !giga || state.user.capabilities['export.data'];
+  const host = h('div', { id: 'hub-body' }, h('div', { class: 'card' },
+    h('div', { class: 'card-body row' }, spinner(), h('span', { class: 'muted' }, 'Loading…'))));
   mount(content, h('div', { class: 'page' },
     h('div', { class: 'page-head' },
       h('div', null,
         h('div', { class: 'page-title' }, 'Data Hub'),
-        h('div', { class: 'page-sub' }, giga ? `Giga Project Name: ${giga.name || 'No project access'}` : 'Generate an Excel snapshot of the central database at any scope, or apply a daily dataset without disturbing supervisor edits.'),
+        h('div', { class: 'page-sub' }, giga ? `Giga Project Name: ${giga.name || 'No project access'}` : state.user.isAdmin ? 'Export the current roster, merge changes, or replace it with a complete daily workbook.' : 'Export a workbook or merge permitted updates without disturbing supervisor edits.'),
       ),
       h('div', { class: 'page-actions' },
+        state.user.isAdmin && !giga ? h('button', { class: 'btn', onclick: () => openRosterReplacement(placementPicker) }, 'Replace entire roster') : null,
         h('button', { class: 'btn btn-primary', disabled: !canExport, onclick: () => openExportModal({}) }, icon('download', 15), 'Generate export'),
       ),
     ),
-    h('div', { id: 'hub-body' }, h('div', { class: 'card' }, h('div', { class: 'card-body row' }, spinner(), h('span', { class: 'muted' }, 'Loading…')))),
+    host,
   ));
 
   if (giga) {
-    const host = content.querySelector('#hub-body');
     mount(host, canExport ? exportCard() : emptyState({ title: 'Export not permitted', message: 'Ask your administrator if you need an Excel export of your Giga project.', iconName: 'shield' }));
     return; // master imports and duplicate reviews span Giga projects
   }
@@ -35,16 +38,16 @@ export async function renderDataHub(content, ctx) {
     imports = res.imports || [];
   } catch { /* imports list is non-critical */ }
 
-  const host = document.getElementById('hub-body');
-  if (!host) return;
-
+  if (!host.isConnected) return; // a newer visit must own its own queue
+  const duplicates = createDuplicateCard();
   mount(host,
     h('div', { class: 'grid grid-2', style: { marginBottom: '14px' } },
       exportCard(),
       importCard(imports),
     ),
-    h('div', { id: 'dup-host', style: { marginTop: '14px' } }, duplicateCard(imports)),
+    h('div', { id: 'dup-host', style: { marginTop: '14px' } }, duplicates.el),
   );
+  await duplicates.load(); // the card is now on the page
 }
 
 /* ------------------------------------------------------------------ export */
@@ -195,7 +198,7 @@ function importCard(imports) {
     h('div', { class: 'empty-icon' }, icon('upload', 22)),
     h('div', { class: 'empty-title' }, canImport ? 'Upload a daily dataset' : 'Import not permitted'),
     h('div', { class: 'empty-body' }, canImport
-      ? 'Drop an .xlsx file here or click to browse. Rows are matched on Employee ID; supervisor edits are protected.'
+      ? 'Drop an .xlsx file here or click to browse. Matches Employee IDs and keeps rows not in the file. Supervisor edits are protected.'
       : 'Ask an administrator to grant the import capability.'),
   );
 
@@ -251,15 +254,12 @@ function importCard(imports) {
   );
 
   async function handleFile(file) {
-    if (!/\.xlsx$/i.test(file.name)) {
-      toast('Unsupported file', 'Upload an Excel .xlsx workbook.', 'error');
-      return;
-    }
-    const buffer = await file.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-    const modalRef = showImportPreview(file.name, base64,
-      place.categoryId ? place : {});
-    fileInput.value = '';
+    fileInput.value = ''; // allow choosing the same file again, including after Cancel
+    const placement = place.categoryId ? { ...place } : {};
+    try {
+      const content = await readWorkbook(file);
+      if (fileInput.isConnected) showImportPreview(file.name, content, placement);
+    } catch (err) { toast('Could not read workbook', err.message, 'error'); }
   }
 }
 
@@ -317,7 +317,7 @@ function placementPicker(place) {
     h('summary', { style: { cursor: 'pointer', fontSize: '13px', fontWeight: '600' } },
       'Where should new rows go?'),
     h('div', { class: 'note', style: { margin: '8px 0' } }, icon('info', 15),
-      h('span', null, 'Your workbook has no Project column, so the portal needs to know where to file the people. Rows that do carry Project, Subproject and Category use those instead.')),
+      h('span', null, 'Only choose a destination if your workbook omits placement columns. Rows with Project, Subproject and Category use the placement in the file.')),
     h('div', { class: 'grid', style: { gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' } },
       h('div', { class: 'field' }, h('label', { class: 'field-label' }, 'Project'), projSel),
       h('div', { class: 'field' }, h('label', { class: 'field-label' }, 'Subproject'), subSel),
@@ -327,7 +327,7 @@ function placementPicker(place) {
   );
 }
 
-function showImportPreview(filename, base64, placement = {}) {
+function showImportPreview(filename, content, placement = {}) {
   const host = h('div', null, h('div', { class: 'row' }, spinner(), h('span', { class: 'muted' }, 'Validating workbook…')));
   const ref = modal({
     title: 'Import preview',
@@ -335,29 +335,30 @@ function showImportPreview(filename, base64, placement = {}) {
     size: 'modal-lg',
     body: host,
     footer: h('div', { class: 'row', style: { gap: '8px', justifyContent: 'flex-end', width: '100%' } },
-      h('button', { class: 'btn', onclick: () => document.querySelector('.overlay')?.remove() }, 'Cancel'),
+      h('button', { class: 'btn', onclick: () => ref.close() }, 'Cancel'),
       h('button', { id: 'apply-import', class: 'btn btn-primary', disabled: true }, icon('check', 15), 'Apply import'),
     ),
   });
 
   (async () => {
     try {
-      const res = await api('/import', { method: 'POST', body: { filename, content: base64, dryRun: true, ...placement } });
+      const res = await api('/import', { method: 'POST', body: { filename, content, dryRun: true, ...placement } });
+      if (!ref.box.isConnected) return; // a cancelled preview cannot enable Apply on a newer file
       const r = res.result;
       renderReport(host, r, { dryRun: true });
-      const applyBtn = document.getElementById('apply-import');
+      const applyBtn = ref.box.querySelector('#apply-import');
       applyBtn.disabled = false;
       applyBtn.replaceChildren(icon('check', 15), 'Apply import');
       applyBtn.onclick = async () => {
         applyBtn.disabled = true;
         applyBtn.replaceChildren(spinner(), 'Applying…');
         try {
-          const out = await api('/import', { method: 'POST', body: { filename, content: base64, ...placement } });
-          document.querySelector('.overlay')?.remove();
+          const out = await api('/import', { method: 'POST', body: { filename, content, ...placement } });
+          if (ref.box.isConnected) ref.close();
           toast('Import complete',
             `${out.result.created} created · ${out.result.updated} updated · ${out.result.protected} protected`,
             'success', 6500);
-          renderDataHub(document.getElementById('content'), {});
+          document.dispatchEvent(new CustomEvent('rp:data-changed')); // refresh the Directory badge as well as upload history
         } catch (err) {
           toast('Import failed', err.message, 'error');
           applyBtn.disabled = false;
@@ -405,23 +406,22 @@ function renderReport(host, r, { dryRun }) {
 }
 
 /* ------------------------------------------------------------------ duplicates */
-function duplicateCard() {
-  const host = h('div', { class: 'card' },
+function createDuplicateCard() {
+  const body = h('div', { id: 'dup-body', class: 'card-body' });
+  const el = h('div', { class: 'card' },
     h('div', { class: 'card-head' },
       h('div', null,
         h('div', { class: 'card-title' }, icon('merge', 15), 'Duplicate review queue'),
         h('div', { class: 'card-sub' }, 'Name-only or contact matches are never auto-merged. An administrator decides.'),
       ),
     ),
-    h('div', { id: 'dup-body', class: 'card-body' }, h('div', { class: 'row' }, spinner(), h('span', { class: 'muted' }, 'Loading…'))),
+    body,
   );
-  loadDuplicates();
-  return host;
+  return { el, load: loadDuplicates };
 
   async function loadDuplicates() {
-    const body = document.getElementById('dup-body');
-    if (!body) return;
-    if (!state.user.isAdmin) {
+    if (!body.isConnected) return;
+    if (!state.user?.isAdmin) {
       mount(body, emptyState({
         title: 'Administrator review',
         message: 'Possible duplicates are queued here for an administrator. Your additions are always matched against existing Employee IDs first.',
@@ -429,11 +429,16 @@ function duplicateCard() {
       }));
       return;
     }
+    const loading = h('div', { class: 'row muted', role: 'status' }, spinner(), 'Checking for duplicates…');
+    mount(body, loading);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
-      const res = await api('/duplicates?status=pending');
-      const rows = res.reviews || [];
+      const { reviews: rows } = await api('/duplicates?status=pending', { signal: controller.signal });
+      if (!loading.isConnected) return; // superseded by navigation, refresh or another read
+      if (!Array.isArray(rows)) throw new Error('The server did not return a review list.');
       if (!rows.length) {
-        mount(body, emptyState({ title: 'Nothing to review', message: 'No uncertain matches are pending. Imports and CRM additions matched cleanly.', iconName: 'checkCircle' }));
+        mount(body, emptyState({ title: 'Nothing to review', message: 'No possible duplicates are waiting for a decision.', iconName: 'checkCircle' }));
         return;
       }
       const table = h('table', { class: 'data' },
@@ -470,15 +475,23 @@ function duplicateCard() {
       );
       mount(body, h('div', { class: 'table-wrap', style: { maxHeight: 'none' } }, table));
     } catch (err) {
-      mount(body, emptyState({ title: 'Could not load queue', message: err.message, iconName: 'alert' }));
+      if (!loading.isConnected) return;
+      mount(body, emptyState({
+        title: 'Could not load queue', iconName: 'alert',
+        message: controller.signal.aborted ? 'The request timed out. Check your connection and retry.'
+          : err.status === 0 ? 'Cannot reach the server. Check your connection and retry.' : err.message,
+        action: h('button', { class: 'btn', onclick: loadDuplicates }, 'Retry'),
+      }));
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
   async function resolve(id, action, done) {
     try {
-      const res = await api(`/duplicates/${id}/resolve`, { method: 'POST', body: { action } });
+      await api(`/duplicates/${id}/resolve`, { method: 'POST', body: { action } });
       done(action === 'link' ? 'Record linked to the existing employee.' : action === 'create' ? 'Kept as a separate employee.' : 'Flag dismissed.');
-      loadDuplicates();
+      await loadDuplicates();
     } catch (err) {
       toast('Could not resolve', err.message, 'error');
     }

@@ -2,7 +2,7 @@
    Employee Directory — cross-project people search with the CRM panel.
    Also hosts the "person card" view: every placement for one person.
    ========================================================================= */
-import { h, mount, icon, state, fmtNum } from '../core.js';
+import { h, mount, icon, state } from '../core.js';
 import { createTable } from './table.js';
 import { createCrm } from './crm.js';
 import { createSubmitPanel } from './submit.js';
@@ -10,24 +10,12 @@ import { createSubmitPanel } from './submit.js';
 export function renderDirectory(content, ctx) {
   const scope = { projectId: null, subprojectId: null, categoryId: null };
   const giga = state.user?.gigaAccess;
-  const isAdmin = !!state.user?.isAdmin;
   const canCrm = !giga || state.user.capabilities['crm.use'];
   const canCreate = !giga || state.user.capabilities['employee.create'];
   // The 17-column updater doesn't require CRM search permission.
   const updater = canCrm ? null : createSubmitPanel({ getScope: () => scope, onSaved: () => table.refresh() });
   const crm = createCrm({ getScope: () => scope, onChanged: () => table.refresh() });
-  const cards = h('section', { class: 'grid grid-kpi', 'aria-label': 'Totals for the current filters', style: { marginBottom: '14px' } });
   const table = createTable({
-    onSummary(s) {
-      mount(cards,
-        miniKpi('users', 'People in scope', s?.people, 'Unique employees matching the filters'),
-        miniKpi('table', 'Placements', s?.placements, 'Matching records across all pages'),
-        miniKpi('layers', 'Giga projects', s?.gigaProjects, s
-          ? `${fmtNum(s.hierarchyProjects)} hierarchy project${s.hierarchyProjects === 1 ? '' : 's'} in view` : 'Named workbook projects'),
-        miniKpi('alert', 'Pending reviews', s?.pendingReviews, isAdmin ? 'For people in this view' : 'Administrators only',
-          isAdmin ? () => window.__rp.go('datahub') : null),
-      );
-    },
     onSaved: () => table.refresh(), // an inline edit can move a row out of the selection
     onSelect(row) {
       showPanel(updater?.el || crm.el);
@@ -71,7 +59,6 @@ export function renderDirectory(content, ctx) {
         h('button', { class: 'btn btn-primary', disabled: !canCreate, onclick: () => { showPanel(crm.el); crm.newPerson(); } }, icon('plus', 15), 'Add person'),
       ),
     ),
-    cards,
     workspace,
   ));
 
@@ -100,17 +87,4 @@ export function renderDirectory(content, ctx) {
   }, { once: true });
   renderCrumbs();
   table.setScope(scope);
-}
-
-function miniKpi(iconName, label, value, detail, onclick) {
-  return h(onclick ? 'button' : 'div', {
-    class: 'kpi', style: { textAlign: 'left', cursor: onclick ? 'pointer' : 'default', font: 'inherit' }, onclick,
-  },
-    h('div', { class: 'kpi-top' },
-      h('span', { class: 'kpi-label' }, label),
-      h('span', { class: 'kpi-icon' }, icon(iconName, 16)),
-    ),
-    h('div', { class: 'kpi-value', style: { fontSize: '22px' } }, fmtNum(value)),
-    h('div', { class: 'kpi-foot' }, detail),
-  );
 }

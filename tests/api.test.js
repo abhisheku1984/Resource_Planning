@@ -71,20 +71,17 @@ function client(token) {
 }
 
 /* ================================================================== tests */
-test('offline speech serves only fixed local assets, never an install/upload endpoint or a document-wide eval exception', async () => {
-  const status = await fetch(`${base}/speech/status`);
-  assert.equal(status.status, 200); assert.equal(status.headers.get('cache-control'), 'no-store');
-  const packs = await status.json(); assert.deepEqual(Object.keys(packs).sort(), ['en', 'hi']);
-  for (const p of Object.values(packs)) for (const url of Object.values(p)) assert.match(url, /^\/speech\/models\/[\w.-]+$/);
-  for (const url of ['/speech/install', '/speech/models/not-installed.tar.gz', '/speech/node_modules/anything', '/speech/setup.js', '/speech/studio/install', '/speech/tokens/index.js', '/speech/ort/ort.webgpu.min.mjs', '/speech/models/voice.onnx.part']) assert.equal((await fetch(base + url)).status, 404);
-  assert.equal((await fetch(base + '/speech/status', { method: 'POST' })).status, 404);
-  for (const [url, directive] of [['/', "script-src 'self'"], ['/js/voice.js', "script-src 'self'"],
-    ['/js/speech/studio.js', "script-src 'self'"], ['/speech/ort/ort.wasm.min.mjs', "script-src 'self'"],
-    ['/speech/vosk.worker.js', "script-src 'unsafe-eval'"], ['/js/speech/speaker-worker.js', "script-src 'self' 'wasm-unsafe-eval'"]]) {
-    const headers = (await fetch(base + url, { method: 'HEAD' })).headers;
-    const csp = headers.get('content-security-policy').split('; ');
-    assert.ok(csp.includes(directive) && csp.includes("connect-src 'self'"));
-    if (url.includes('worker.js')) assert.ok(csp.includes("worker-src 'none'"));
+test('text-only Ask: no speech endpoints, audio workers or microphone permission', async () => {
+  const page = await fetch(base);
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get('permissions-policy'), 'microphone=()');
+  const csp = page.headers.get('content-security-policy');
+  assert.ok(csp.split('; ').includes("script-src 'self'"));
+  assert.doesNotMatch(csp, /unsafe-eval/);
+  for (const path of ['/speech/status', '/speech/vosk.worker.js', '/js/voice.js', '/js/speech/speaker-worker.js']) {
+    const retired = await fetch(base + path);
+    assert.equal(retired.status, 404, path);
+    assert.doesNotMatch(retired.headers.get('content-security-policy'), /unsafe-eval/, path);
   }
 });
 
@@ -493,7 +490,7 @@ test('per-category column configuration round-trips and validates required field
     visible,
     editable: f.editable,
     required: f.required,
-    // The form only sends the settings it edits.
+    // The layout form carries the display order through unchanged.
     sort_order: f.sort_order,
   });
   const payload = original.map((f) => toPayload(f, f.key === 'remarks' ? false : f.visible));
@@ -508,7 +505,8 @@ test('per-category column configuration round-trips and validates required field
     // the hidden column disappears from the table for supervisors
     const sup = client(await login('priya.nair@resourceplanning.io'));
     const cols = (await sup('GET', `/employees?categoryId=${cat.id}`)).data.columns.map((c) => c.key);
-    assert.ok(!cols.includes('remarks'), 'hidden columns must not be returned at all');
+    assert.deepEqual(cols, original.filter(f => f.visible && f.key !== 'remarks').map(f => f.key),
+      'hiding a field keeps the remaining supervisor columns in their original sequence');
   } finally {
     // PUT replaces the whole layout, so restore it. Later tests read this
     // category and must not inherit a half-configured column set.
@@ -1079,6 +1077,71 @@ test('a new user is created with their project access and capabilities in the sa
   assert.equal(relogin.status, 401, 'a deleted user cannot sign in');
 });
 
+test('Edit access: administrators can rename themselves and other administrators without changing access', async (t) => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const email = 'rename.admin@example.test', password = 'Example123';
+  const made = await admin('POST', '/users', { name: 'Original Admin', email, password, role: 'admin' });
+  assert.equal(made.status, 200);
+  const id = made.data.user.id, url = `/users/${id}/access`;
+  t.after(() => admin('DELETE', `/users/${id}`));
+  const self = client(await login(email, password));
+  const before = (await self('GET', '/auth/me')).data.user;
+  for (const [actor, name] of [[admin, 'Other Admin'], [self, 'आर्या राव']]) {
+    const saved = await actor('PUT', url, { name: `  ${name}  ` });
+    assert.equal(saved.status, 200, JSON.stringify(saved.data));
+    assert.deepEqual(saved.data.user, { id, name });
+    assert.deepEqual((await self('GET', '/auth/me')).data.user, { ...before, name });
+    assert.equal((await self('GET', '/users')).data.users.find((u) => u.id === id).name, name);
+  }
+  for (const extra of [{ gigaProjectName: null }, { projects: [] }, { capabilities: {} }, { role: 'supervisor' }]) {
+    assert.equal((await self('PUT', url, { name: 'Must not persist', ...extra })).status, 422);
+  }
+  const relogin = client(await login(email, password));
+  assert.deepEqual((await relogin('GET', '/auth/me')).data.user, { ...before, name: 'आर्या राव' });
+  const history = (await admin('GET', `/audit/user/${id}`)).data.history;
+  const renames = history.filter((r) => r.field_key === 'name');
+  assert.equal(renames.length, 2);
+  const ownRename = renames.find((r) => r.old_value === 'Other Admin' && r.new_value === 'आर्या राव');
+  assert.equal(ownRename?.actor_name, 'Other Admin');
+  assert.equal(q.get('SELECT actor_id FROM audit_log WHERE id = ?', ownRename.id).actor_id, id);
+  assert.ok(history.some((r) => r.action === 'login' && r.actor_name === 'Original Admin'), 'past attribution stays intact');
+  assert.ok(!history.some((r) => r.field_key === 'access'), 'renaming does not write an access change');
+});
+
+test('Edit access: supervisor renames are admin-only; name and grant edits succeed or fail together', async (t) => {
+  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const email = 'rename.lead@example.test', password = 'Example123';
+  const project = q.get('SELECT id FROM projects LIMIT 1').id;
+  const made = await admin('POST', '/users', { name: 'Original Lead', email, password,
+    projects: [{ project_id: project, can_edit: false, can_export: true }], capabilities: { 'export.data': true } });
+  assert.equal(made.status, 200);
+  const id = made.data.user.id, url = `/users/${id}/access`;
+  t.after(() => admin('DELETE', `/users/${id}`));
+  const lead = client(await login(email, password));
+  const me = async () => (await lead('GET', '/auth/me')).data.user;
+  const before = await me();
+  assert.equal((await lead('PUT', url, { name: 'Not authorized' })).status, 403);
+  assert.equal((await lead('PATCH', `/users/${id}`, { name: 'Not authorized' })).status, 403);
+  assert.equal((await fetch(base + '/api' + url, { method: 'PUT' })).status, 401);
+  assert.equal((await admin('PUT', '/users/-1/access', { name: 'Missing' })).status, 404);
+  for (const name of [' ', null, 123, 'x'.repeat(161)]) {
+    assert.equal((await admin('PUT', url, { name, projects: [] })).status, 422);
+    assert.equal((await admin('PATCH', `/users/${id}`, { name })).status, 422);
+  }
+  assert.equal((await admin('PUT', url, { name: 'Rollback', projects: [{ project_id: -1 }] })).status, 422);
+  assert.deepEqual(await me(), before);
+  assert.ok(!(await admin('GET', `/audit/user/${id}`)).data.history.some((r) => r.action === 'update'));
+
+  const first = await admin('PUT', url, { name: '  Renamed Lead  ' });
+  assert.equal(first.status, 200); assert.deepEqual(await me(), { ...before, name: 'Renamed Lead' });
+  const gigaProjectName = q.get('SELECT project_name FROM giga_assignments LIMIT 1').project_name;
+  assert.equal((await admin('PUT', url, { name: 'Giga Lead', gigaProjectName, capabilities: { 'employee.edit': true } })).status, 200);
+  const changed = await me();
+  assert.equal(changed.name, 'Giga Lead'); assert.equal(changed.gigaAccess.name, gigaProjectName); assert.equal(changed.capabilities['employee.edit'], true);
+  assert.equal((await admin('PUT', url, { name: 'Final Lead' })).status, 200);
+  assert.deepEqual(await me(), { ...changed, name: 'Final Lead' }, 'renaming preserves the live Giga grant too');
+});
+
 test('an administrator cannot delete their own account, but can delete another admin', async () => {
   const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
   const list = await admin('GET', '/users');
@@ -1229,6 +1292,11 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     const dash = (await xyz('GET', '/dashboard')).data;
     for (const key of ['byProject','byStatus','bySupplier','byCategory']) assert.equal(dash[key].reduce((n,r) => n+r.c,0), 2, key);
     assert.ok(dash.attention.every((r) => expected.includes(r.assignment_id)));
+    const summary = await xyz('GET', '/dashboard?summaryOnly=1');
+    assert.equal(summary.status, 200);
+    assert.deepEqual(summary.data, {
+      totals: dash.totals, byProject: dash.byProject, byStatus: dash.byStatus, bySupplier: dash.bySupplier,
+    }, 'the dashboard gets the same scoped counts without any employee or audit feed');
     assert.equal((await xyz('GET', `/categories/${sibling.category_id}/columns`)).status, 403);
   });
 
@@ -1317,7 +1385,7 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     assert.equal((await ask(`${A} में सी आर एम खोलें।`)).kind, 'crm_lookup');
     const found = await ask(`${A} में GIG डैश आठ आठ शून्य शून्य एक का सीआरएम खोलें`);
     assert.equal(found.kind, 'crm'); assert.equal(found.crm.assignmentId, one.assignmentId); assert.equal(found.crm.projectName, A);
-    assert.equal(found.crm.name, q.get('SELECT name FROM employees WHERE id=?', one.employeeId).name, 'review speaks the real employee name, not a missing workbook column');
+    assert.equal(found.crm.name, q.get('SELECT name FROM employees WHERE id=?', one.employeeId).name, 'review shows the real employee name, not a missing workbook column');
     assert.match(found.reply, /बदलाव की समीक्षा/); assert.ok(found.crm.fields.some((f) => f.key === 'detail_comments' && f.editable));
     assert.equal((await ask(`प्लेसमेंट ${sharedOther.assignmentId} का CRM खोलें`)).kind, 'crm_lookup');
     assert.equal((await ask(`प्लेसमेंट ${one.assignmentId} का CRM खोलें`)).crm.assignmentId, one.assignmentId);
@@ -1327,7 +1395,7 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     assert.notEqual((await xyz('GET', `/employees/${one.assignmentId}`)).data.record.values.block_status, 'Hard Block');
   });
 
-  await t.test('voice CRM resolves an exact placement and confirmed submit rechecks scope, fields, revision and permissions', async () => {
+  await t.test('Ask CRM resolves an exact placement and confirmed submit rechecks scope, fields, revision and permissions', async () => {
     const opened = await xyz('POST', '/agent/ask', { message: `Open C R M for G I G dash 88001 in ${A}` });
     assert.equal(opened.status, 200); assert.equal(opened.data.kind, 'crm');
     const form = opened.data.crm;
@@ -1335,7 +1403,7 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     assert.equal(form.projectName, A); assert.ok(form.fields.some((f) => f.key === 'detail_comments' && f.editable));
     assert.ok(!form.fields.some((f) => ['giga_project_name','emp_code'].includes(f.key)));
     const url = `/employees/${form.assignmentId}/submit`;
-    const body = { crmProjectName: A, changes: { detail_comments: 'Dictated confirmed note' }, rev: form.rev };
+    const body = { crmProjectName: A, changes: { detail_comments: 'Typed confirmed note' }, rev: form.rev };
     assert.equal((await xyz('POST', url, { ...body, rev: null })).status, 422);
     assert.equal((await xyz('POST', url, { ...body, changes: { giga_project_name: B } })).status, 403);
     assert.equal((await xyz('POST', url, { ...body, crmProjectName: B })).status, 403);
@@ -1348,6 +1416,100 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
     assert.equal((await xyz('POST', '/agent/ask', { language: 'hi', message: 'GIG-88001 का सीआरएम खोलें' })).data.kind, 'denied');
     assert.equal((await xyz('POST', url, { ...body, rev: ok.data.record.rev })).status, 403);
     assert.equal((await admin('PUT', accessPath, { gigaProjectName: A, capabilities: caps })).status, 200);
+  });
+
+  await t.test('guided requests clarify the project, employee and exact placement; choices cannot change scope or person', async () => {
+    const message = 'Update the interview note';
+    assert.equal((await admin('POST', '/agent/ask', { message })).data.kind, 'choose_project');
+    const ask = async (message, guideChoice, language = 'en') => (await xyz('POST', '/agent/ask', { message, projectName: A, language, guideChoice })).data;
+    assert.equal((await ask(message)).guide.step, 'person');
+    const miss = 'Update the interview note for QA-99999';
+    assert.equal((await ask(miss)).guide.step, 'person');
+    assert.equal((await ask(miss, { person: 'GIG-88001' })).crm.assignmentId, one.assignmentId);
+    // Case/spoken aliases may refer to several distinct workbook names. An
+    // old picker value must not decide which one, even for an administrator.
+    tag(sharedOther.assignmentId, A.toLowerCase());
+    try {
+      const goal = { message: 'Update the interview note for GIG-88001 in ' + A.toUpperCase(), projectName: A };
+      const ambiguous = (await admin('POST', '/agent/ask', goal)).data;
+      assert.ok(ambiguous.ambiguousProject); assert.ok(!ambiguous.crm);
+      assert.equal((await admin('POST', '/agent/ask', { ...goal, projectPicked: true })).data.crm.assignmentId, one.assignmentId);
+      assert.ok(!(await admin('POST', '/agent/ask', { ...goal, projectName: B, projectPicked: true })).data.crm);
+    } finally { tag(sharedOther.assignmentId, B); }
+    assert.equal((await ask(`Update the note for GIG-88001 in ${B}`)).kind, 'denied');
+    assert.equal((await ask(`${B} में GIG-88001 की टिप्पणी अपडेट करें`, null, 'hi')).kind, 'denied');
+    assert.ok(!(await ask(message, { person: 'GIG-88003' })).crm);
+    assert.equal((await xyz('POST', '/agent/ask', { message, guideChoice: { person: [], placementId: -1 } })).status, 422);
+    tag(sharedOther.assignmentId, A);
+    try {
+      const lookup = await ask(message, { person: 'GIG-88001' });
+      assert.equal(lookup.guide.step, 'placement');
+      assert.deepEqual(lookup.table.rows.map(([id]) => id).sort((a,b) => a-b), [one.assignmentId, sharedOther.assignmentId].sort((a,b) => a-b));
+      const request = `For GIG-88001 in ${A}, set the interview note to Ready for an interview in May and account owner to Mira`;
+      const chosen = await ask(request, { person: '', placementId: one.assignmentId });
+      assert.equal(chosen.crm.assignmentId, one.assignmentId); assert.equal(chosen.crm.projectName, A);
+      assert.deepEqual(chosen.guide, { step: 'form', instruction: 'the interview note to Ready for an interview in May and account owner to Mira' });
+      assert.equal(chosen.crm.fields.find(f => f.key === 'block_status').editable, false);
+      const hi = await ask(`${A} में GIG-88001 की टिप्पणी में साक्षात्कार के लिए तैयार लिखें`, { person: '', placementId: one.assignmentId }, 'hi');
+      assert.equal(hi.crm.assignmentId, one.assignmentId); assert.equal(hi.guide.instruction, 'टिप्पणी में साक्षात्कार के लिए तैयार');
+      for (const placementId of [two.assignmentId, other.assignmentId]) assert.ok(!(await ask(request, { person: 'GIG-88002', placementId })).crm);
+    } finally { tag(sharedOther.assignmentId, B); }
+  });
+
+  await t.test('guided review is read-only; confirmation binds the session, exact values, placement, live grants and revision', async (t) => {
+    const id = one.assignmentId, open = () => xyz('POST', '/agent/ask', { message: 'Update the note for GIG-88001', projectName: A });
+    const field = 'detail_comments';
+    const getBody = async () => {
+      const { data: { crm } } = await open();
+      return { crmProjectName: A, rev: crm.rev, before: { [field]: String(crm.fields.find(f => f.key === field).value) }, changes: { [field]: 'Reviewed in the guided conversation' } };
+    };
+    const review = (body) => xyz('POST', `/agent/crm/${id}/review`, body), confirm = (body) => xyz('POST', `/agent/crm/${id}/confirm`, body);
+    const audited = () => q.get("SELECT COUNT(*) n FROM audit_log WHERE entity='assignment' AND entity_id=? AND field_key=? AND action='update'", id, field).n;
+    const initial = audited(), body = await getBody();
+    const date = 'billing_start_date', oldDate = (await open()).data.crm.fields.find(f => f.key === date).value;
+    assert.equal((await review({ ...body, changes: { ...body.changes, [date]: '2027-02-30' }, before: { ...body.before, [date]: oldDate } })).status, 422);
+    assert.equal((await confirm(body)).status, 409);
+    assert.equal((await review({ ...body, crmProjectName: B })).status, 403);
+    assert.equal((await review({ ...body, changes: { block_status: 'Hard Block' } })).status, 403);
+    assert.equal((await review({ ...body, changes: { giga_project_name: B } })).status, 403);
+    assert.equal((await review({ ...body, before: { [field]: 'different baseline' } })).status, 409);
+    const receipt = await review(body); assert.equal(receipt.status, 200); assert.ok(Date.parse(receipt.data.expiresAt) > Date.now());
+    const { fields, action, module: targetModule } = receipt.data.interpretation;
+    assert.equal(action, 'UPDATE'); assert.equal(targetModule, 'employee_crm');
+    assert.deepEqual(fields.map(({ key, before, after }) => [key, before, after]), [[field, body.before[field], body.changes[field]]]);
+    assert.equal((await admin('POST', `/agent/crm/${id}/confirm`, { ...body, ticket: receipt.data.ticket })).status, 409);
+    let ticket = (await review(body)).data.ticket;
+    assert.equal((await confirm({ ...body, ticket: receipt.data.ticket })).status, 409, 'superseded review');
+    assert.equal((await confirm({ ...body, changes: { [field]: 'not reviewed' }, ticket })).status, 409);
+    assert.equal((await confirm({ ...body, ticket })).status, 409, 'receipt already consumed');
+    ticket = (await review(body)).data.ticket;
+    const future = Date.now() + 6 * 60_000, clock = t.mock.method(Date, 'now', () => future);
+    try { assert.equal((await confirm({ ...body, ticket })).data.code, 'REVIEW_AGAIN'); } finally { clock.mock.restore(); }
+    ticket = (await review(body)).data.ticket;
+    assert.equal((await xyz('POST', `/agent/crm/${two.assignmentId}/confirm`, { ...body, ticket })).status, 409);
+    ticket = (await review(body)).data.ticket;
+    await admin('PUT', accessPath, { gigaProjectName: A, capabilities: { ...caps, 'crm.use': false } });
+    assert.equal((await confirm({ ...body, ticket })).status, 403);
+    await admin('PUT', accessPath, { gigaProjectName: A, capabilities: caps });
+    ticket = (await review(body)).data.ticket;
+    await admin('PATCH', `/employees/${id}`, { rev: body.rev, changes: { account_name: 'Changed while reviewing' } });
+    assert.equal((await confirm({ ...body, ticket })).status, 409);
+    assert.equal(audited(), initial); // plans and refused confirmations did not edit the field
+    const latest = await getBody(); ticket = (await review(latest)).data.ticket;
+    const success = await confirm({ ...latest, ticket }); assert.equal(success.status, 200, JSON.stringify(success.data));
+    assert.equal(success.data.record.values[field], latest.changes[field]); assert.equal(audited(), initial+1);
+    assert.equal((await confirm({ ...latest, ticket })).status, 409);
+    const audit = q.get('SELECT actor_name, meta FROM audit_log WHERE entity_id=? AND field_key=? ORDER BY id DESC LIMIT 1', id, field);
+    assert.equal(audit.actor_name, account.name); assert.match(audit.meta, /Confirmed guided CRM update/);
+  });
+
+  await t.test('Ask how-to uses the user’s real permissions and does not perform an import, proposal or workforce edit', async () => {
+    const message = 'How do I import a workbook?';
+    const help = (await xyz('POST', '/agent/ask', { message })).data;
+    assert.equal(help.kind, 'howto'); assert.equal(help.source, 'Data Hub');
+    assert.match(help.reply, /does not permit/); assert.ok(!help.crm && !help.proposal && !help.data);
+    assert.match((await admin('POST', '/agent/ask', { message })).data.reply, /Apply import/);
+    assert.equal((await xyz('POST', '/agent/ask', { message: 'मंज़ूरी कैसे मिलती है?', language: 'hi' })).data.source, 'Ask');
   });
 
   await t.test('Edit access replaces the grant immediately; disappearing names and revocation fail closed', async () => {

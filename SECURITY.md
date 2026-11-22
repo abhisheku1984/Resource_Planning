@@ -11,36 +11,24 @@ Everything below was verified against the code in this repository, not assumed.
 
 | Question | Answer |
 | --- | --- |
-| Does my data leave my computer? | **No.** Not at runtime, not ever, once installed. |
+| Does my data leave my computer? | With the default localhost setup, no. If staff use a shared host, uploads and edits go to that host and authorized results return to their browsers. GitHub is not the roster database. |
 | Is there a cloud database? | No. A single SQLite file on your disk. |
 | Any analytics, telemetry, crash reporting? | None. |
-| Any scripts or fonts loaded from a third-party site? | No. Fonts and optional speech runtimes are served locally. |
+| Any scripts or fonts loaded from a third-party site? | No. The application code and fonts are served locally. |
 | Can other people on my Wi-Fi see it? | No, by default. The server binds to `127.0.0.1` only. |
-| What needs internet? | Initial dependency install. The normal Windows launcher also prepares missing offline mic/Standard files once (up to about 155 MB). `--no-voice` skips that step. Optional Studio speakers (about 100 MB) and browser-managed packs are separate downloads. Normal use needs no internet. |
+| What needs internet? | Installing npm dependencies for the first time. Normal operation, including typed Ask, needs no internet. |
 | Where is the actual data? | One file: `data/resource_planning.db` |
 
 ---
 
 ## 2. What gets installed
 
-`npm install` downloads **242 packages / 53 MB** into `node_modules`. That sounds
-alarming, so here is what it really is:
-
-* **2 direct dependencies** — Express (HTTP routing) and ExcelJS (reads/writes
-  `.xlsx`). The default app needs no speech library. Optional voice runtimes have separate `voice/package-lock.json` and `voice/studio/package-lock.json` files and are installed with lifecycle scripts disabled.
-* **240 transitive packages** — the dependencies of those two, and of their
-  dependencies. They are ordinary JavaScript utility libraries.
+The runtime uses **two direct dependencies**: Express for HTTP routing and ExcelJS for `.xlsx` files. Their transitive dependencies install into `node_modules`. The Windows launchers use `npm ci --omit=dev --ignore-scripts` on first use. Playwright Core is a development dependency for the optional browser check, not an application runtime or a browser download.
 
 Two facts worth knowing:
 
-* **No package executes code at install time.** I checked every
-  `preinstall` / `install` / `postinstall` hook in the tree: there are none. This
-  matters because install-time scripts are how most npm supply-chain attacks
-  work. (There are `prepublish` entries, but those only run when a package
-  author publishes it, never on your machine.)
-* **Lockfile pinned.** `package-lock.json` is committed, so `npm install`
-  installs exact, reviewed versions rather than "whatever is newest today". For
-  a stricter guarantee use `npm ci` (installs the lockfile byte-for-byte).
+* The Windows launchers disable dependency install scripts. The application does not need a native compilation step.
+* The committed lockfile pins package versions and integrity hashes; `npm ci` installs from that file rather than updating it.
 
 ### The one audit finding, explained honestly
 
@@ -60,13 +48,11 @@ worth re-checking with `npm audit` before each release.
 | `data/resource_planning.db` | **All employee data** — one SQLite file | **Yes** |
 | `data/resource_planning.db-wal` | Write-ahead log, same data, transient | **Yes** |
 | `data/resource_planning.db-shm` | Shared-memory index file, transient | Yes |
+| `roster-backups/<database>.before-last-replace.db` next to the active DB | Latest admin-initiated full-roster replacement restore point (includes credentials/hashes, sessions and history); never served as a download | **Yes** |
 | `exports/hr-master-12000.xlsx` | Generated sample workbook (demo generator only) | Yes |
 | `node_modules/` | Libraries | No |
-| `voice/node_modules/`, `voice/studio/node_modules/`, `voice/.cache/models/` | Optional browser speech runtimes and checksummed model data | No |
 
-The server and voice setup keep app files in the project folder; there are no
-registry changes, Windows services or scheduled tasks. The browser maintains
-its usual profile and site storage, including the optional recognition-model cache.
+The server keeps app files in the project folder; there are no registry changes, Windows services or scheduled tasks. The browser maintains its usual profile and site storage. Any model caches left on a machine by an older release are not used or served.
 
 To move or back up the whole installation: copy the project folder. To move only
 the data: copy `data/resource_planning.db` (stop the server first so the WAL is
@@ -86,10 +72,7 @@ been fixed: the font files are now vendored in `public/fonts/` (100 KB, SIL Open
 Font License) and served from the app itself. Verified: the served HTML contains
 **zero** `https://` references.
 
-**Speech preparation is not server runtime.** Before starting the server, `start-windows.bat` invokes a separate setup process. It verifies the required English/Hindi microphone files, and Standard speaker files where Studio is not installed. Only missing/invalid files and missing runtimes need downloads from npm/GitHub. Runtimes use a pinned lockfile with install scripts disabled. A ready installation doesn't contact either service. Use `start-windows.bat --no-voice` or `npm start` to skip this preflight. Explicit `voice:setup` and `voice:studio` commands remain available. Setup never reads SQLite or microphone audio.
-The server has no speech install or audio-upload endpoint; `/speech/` serves an allowlist of
-local runtime and model files. In the browser, model data may be cached in site
-storage/IndexedDB. Microphone samples, synthesized PCM/WAVs and the synthesizer's virtual files are not saved by Ask. Studio inference is single-threaded WASM with same-origin model, runtime and tokenizer files only.
+Ask sends typed messages to the local app server. It does not request microphone permission, record audio, synthesize speech, or download language models.
 
 ### Binding address — the most important setting
 
@@ -118,12 +101,7 @@ img-src 'self' data:; font-src 'self'; connect-src 'self';
 form-action 'self'; frame-ancestors 'self'; base-uri 'none'; object-src 'none'
 ```
 
-Only two same-origin **worker script responses** have different `script-src`
-policies. The self-contained Vosk worker requires `'unsafe-eval'` for Emscripten
-binding generation and WASM; its policy permits **no script imports**. The speaker
-worker allows `'self' 'wasm-unsafe-eval'` for the local Standard (Flite) or Studio (ONNX) runtime. Both
-forbid child workers and retain `connect-src 'self'`. Neither exception applies
-to the app document. No blob/CDN script or cross-origin speech endpoint is allowed.
+There are no worker-specific evaluation exceptions. The server also sends `Permissions-Policy: microphone=()` so the document cannot access a microphone.
 
 Practical effect: even if malicious content ended up in a field, it could not
 load a remote script, phone home, or exfiltrate data to another domain. Also set:
@@ -166,18 +144,27 @@ These are the controls actually implemented (each has a test):
 ## 5a. The in-app assistant
 
 The assistant raises an obvious question — "does this thing send our data
-somewhere?" Answer: **no.** It is a rules-based parser running inside the same
-Node process, not a language model and not a cloud service.
+somewhere?" Answer: **no.** Intent and field matching run in the app (Node and the browser tab), not in a cloud service.
 
 | Concern | Reality |
 |---|---|
 | Does it call an AI provider? | No. There is no API key, no SDK, no HTTP client for it. `server/agent.js` is plain string matching plus SQL against the local database. |
-| Does it send speech to a provider? | No. The optional Indian English/Hindi packs run Vosk and either Flite or the Studio neural model in browser workers. Partial words are displayed transiently in the tab. Only final transcribed text goes through the existing Ask command path; microphone samples never leave the browser. During command processing and read-back the app is not recording. Without optional files, native recognition requires `processLocally`, and native read-aloud requires a matching `localService` voice. No cloud fallback. OS dictation is controlled by the OS. |
-| What is remembered when I switch languages? | Only the language, speaker mode and volume preferences are stored in browser local storage for this feature, not audio, transcripts or CRM drafts. Switching stops app voice and drops late microphone/read-aloud events. An open draft stays in memory and must be reviewed again before confirmation. |
-| Can it change records on its own? | No. Chat change requests are proposals for administrator approval. Explicitly opening the CRM form is a separate, authenticated editing workflow: dictation drafts values in memory. A separate review and confirmation submits the displayed changes with the current revision through the existing employee update path. |
+| Does it use the microphone or play replies aloud? | No. Ask accepts text and displays replies, tables and CRM drafts. |
+| What is remembered when I switch languages? | Ask stores its language preference in browser local storage, not chat messages or CRM drafts. An open draft stays in memory and must be reviewed again before confirmation. |
+| Can it change records on its own? | No. Bench/block requests in general Ask are proposals for administrator approval. A guided employee update fills an authenticated CRM form. Its review route returns a server-validated before/after diff, not a write. Only a separate confirmation uses the employee edit transaction and audit trail. The ordinary Update panel retains its existing autosave behavior. |
 | Can it leak another project's data? | The assistant resolves only Giga Project Names from active placements in the caller’s access. Counts, lists, proposals and CRM all intersect the exact workbook name with assignment ACLs. A missing or ambiguous name never enables a broader search. CRM submit rechecks the placement, CRM/edit grants, editable fields and revision. |
-| Does it weaken the audit trail? | It strengthens it. Proposals and approvals are both logged in `audit_log` with the requester and the approver named. |
-| What if it mis-parses? | The damage is bounded: a wrong proposal needs a human to approve it, and approval is refused if the target field or workbook project changed (`stale`). In the CRM form a dictated value must be reviewed and separately confirmed by the editor. |
+| Does it weaken the audit trail? | Proposals and approvals are logged with the requester and approver. Confirmed guided edits log the authenticated editor, field, old/new values and the reason `Confirmed guided CRM update`. The review does not log draft values as edits. |
+| What if it mis-parses? | The damage is bounded: a wrong proposal needs a human to approve it, and approval is refused if the target field or workbook project changed (`stale`). In the CRM form a draft value must be reviewed and separately confirmed by the editor. |
+
+A guided review is bound to the session, exact Giga project, employee/placement,
+revision and canonical field diff. The server keeps only digests and an expiry
+in a bounded in-memory map (latest ticket per session, five minutes, single
+use). Tokens are not put in browser storage. Editing the draft, switching
+language, hiding the tab or closing Ask drops the browser's confirmation;
+starting another review supersedes the previous ticket on the server. Confirm
+checks the current scope, form layout, values and revision again. Restarting
+the server invalidates outstanding reviews. This is a safeguard for the guided
+workflow, not a restriction on independently authorized manual edit endpoints.
 
 One honest limitation: because it is pattern matching, it will not understand
 unusual phrasing. It says so plainly ("I did not understand that yet") instead of
@@ -201,7 +188,7 @@ I would rather you know these than discover them later.
    would upload your database to a third-party cloud.
 4. **No rate limiting on login.** Someone who can reach the port can attempt many
    passwords. Another reason to keep the loopback binding.
-5. **No automatic backups.** Copy `data/` to an encrypted drive on a schedule.
+5. **No scheduled backups.** A confirmed full-roster replacement saves one private SQLite restore point before deletion. This does not replace scheduled, tested backups on encrypted storage; archive dated workforce exports privately.
 6. **The database holds PII** (names, emails, phone numbers, salary/rate data).
    Depending on your jurisdiction this may be regulated; treat the file as
    confidential and define who may copy it.

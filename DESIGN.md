@@ -15,7 +15,7 @@ surface.
 ```
 Resource Planning
 ├── Overview
-│   └── Dashboard                     KPIs, project mix, status donut, attention queue, activity
+│   └── Dashboard                     People and project totals, workforce charts, quick actions
 ├── Workforce
 │   ├── Project Workspace             Drill-down: project → subproject → category → table + CRM
 │   └── Employee Directory            Cross-project table + CRM, project filter
@@ -44,14 +44,12 @@ data model.
 ┌ page head ─────────────────────────────────────────────────────────────┐
 │ Good afternoon, Priya            [Employee directory] [Open workspace] │
 │ Consolidated view of your authorised workforce                         │
-├ KPI ────────────┬ KPI ────────────┬ KPI ────────────┬ KPI ────────────┤
-│ People in scope │ Projects        │ Suppliers       │ Needs attention │
-│ 66              │ 1               │ 12              │ 8               │
+├───────────────────────────────────┬───────────────────────────────────┤
+│ People in scope                   │ Projects                          │
+│ 66                                │ 1                                 │
 ├ Employees by project (bars) ─────────────┬ Workforce status (donut) ──┤
 │ Nexus ████████████████████████ 81         │ ◕ 81 placements            │
-├ Needs attention (list) ──────────────────┬ Recent activity (timeline) ┤
-│ EMP-01126 Aditya Iyer   [On Leave]       │ Priya updated Training…    │
-├ Supplier mix (bars) ─────────────────────┤ Quick actions              │
+├ Supplier mix (bars) ─────────────────────┼ Quick actions ─────────────┤
 └──────────────────────────────────────────┴────────────────────────────┘
 ```
 
@@ -130,14 +128,12 @@ from its own title bar.
 
 ## 3. Dashboard design
 
-* **Four KPI tiles** — one glance summary; each tile is clickable and routes to
-  the relevant surface.
+* **Two summary tiles** — People in scope opens the Employee Directory; Projects
+  opens the Project Workspace. The tiles span the row on desktop and stack on mobile.
 * **Employees by project** — horizontal bars, click-through to that project's
   workspace.
 * **Workforce status** — donut with legend, six largest statuses.
-* **Needs attention** — records that are on leave / billing hold / released or
-  have no supplier. Deliberately action-oriented, not decorative.
-* **Recent activity** — audit-derived timeline, 8 most recent changes.
+* **Supplier mix** — top partners by placement count.
 * **Quick actions** — three primary tasks for a supervisor.
 
 Colour is semantic only: brand blue for volume, teal for suppliers, amber for

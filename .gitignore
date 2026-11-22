@@ -1,12 +1,30 @@
 node_modules/
-data/
 *.log
 .DS_Store
 tests/screenshots/
 
-# Optional downloaded models and locally generated speaker auditions (not user data)
-/voice/.cache/
-/voice/*.wav
+# Private installation data, including copies made outside the default data/.
+data/
+backups/
+roster-backups/
+exports/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+.env
+.env.*
 
-# Portable offline voice distributions (generated; do not commit)
-/voice/*.zip
+# A real roster must not be added accidentally alongside the synthetic fixture.
+*.[xX][lL][sS]
+*.[xX][lL][sS][xX]
+*.[xX][lL][sS][mM]
+*.[cC][sS][vV]
+!/samples/workforce-1000.xlsx
+
+# Generated download bundles and artifacts from older installations.
+/local-preview/
+*.zip
+/voice/

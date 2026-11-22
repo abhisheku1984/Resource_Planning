@@ -56,28 +56,17 @@ if not exist "node_modules\express" (
   echo.
   echo  First run - installing dependencies ^(this may take a minute^)...
   echo.
-  call npm install --no-audit --no-fund
+  call npm.cmd ci --omit=dev --ignore-scripts --no-audit --no-fund
   if errorlevel 1 (
     echo.
-    echo  [X] npm install failed. Check your internet connection and try again.
+    echo  [X] App installation failed. Check your internet connection and try again.
     echo.
     pause
     exit /b 1
   )
 )
 
-REM ---- 3. prepare the offline Ask mic BEFORE opening the app --------------
-REM No browser/server-triggered install. Use --no-voice for a text-only start.
-set "PREPARE_VOICE=1"
-if /i "%~1"=="--no-voice" set "PREPARE_VOICE=0"
-if /i "%~2"=="--no-voice" set "PREPARE_VOICE=0"
-if "%PREPARE_VOICE%"=="1" (
-  echo  Checking offline Ask voice. Missing files download once from npm/GitHub.
-  call npm.cmd run --silent voice:prepare
-  if errorlevel 1 echo  [!] Starting the app anyway. Text and already-installed voices still work.
-)
-
-REM ---- 4. start the server and open the browser ---------------------------
+REM ---- 3. start the server and open the browser ---------------------------
 REM  By default the server only listens on this computer (127.0.0.1).
 REM  Run  start-windows.bat --lan  to let other people on your network connect.
 set BIND=127.0.0.1

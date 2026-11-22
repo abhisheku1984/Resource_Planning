@@ -9,6 +9,7 @@ const schema = require('./schema');
 const { crmForm } = require('./assistant-crm');
 const hindi = require('./agent-hi');
 const copy = require('./agent-copy');
+const { parseGuide, howTo } = require('./agent-guide');
 
 const FROM = `FROM giga_assignments g JOIN assignments a ON a.id = g.assignment_id JOIN employees e ON e.id = g.employee_id`;
 function visibleProjectNames(user) {
@@ -21,20 +22,20 @@ function scopeFor(user, name, flag) {
 }
 const norm = (s) => s.toLowerCase().replace(/’/g, "'").replace(/\s+/g, ' ').trim();
 const numbers = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
-const spoken = (s) => norm(s).replace(/\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (w) => String(numbers.indexOf(w)));
-function resolve(user, message, selected, lang) {
+const numberAlias = (s) => norm(s).replace(/\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (w) => String(numbers.indexOf(w)));
+function resolve(user, message, selected, lang, requested = null, projectPicked = false) {
   const names = visibleProjectNames(user), hi = lang === copy.hi;
   const choose = (choices) => ({ understood: false, kind: 'choose_project', reply: lang.choose(choices.slice(0, 8)), suggestions: choices.slice(0, 8) });
   const unavailable = () => ({ understood: false, kind: 'denied', reply: lang.unavailable });
   if (!names.length) return { error: { kind: 'denied', reply: lang.noProjects } };
-  const sound = (s) => spoken(hi ? hindi.spokenProject(norm(s)) : s);
+  const projectAlias = (s) => numberAlias(hi ? hindi.projectAlias(norm(s)) : s);
   const matches = (raw) => {
     const name = raw.trim();
     if (names.includes(name)) return [name];
     const same = names.filter((s) => norm(s) === norm(name));
     if (same.length) return same;
-    const alias = sound(name);
-    return names.filter((s) => sound(s) === alias);
+    const alias = projectAlias(name);
+    return names.filter((s) => projectAlias(s) === alias);
   };
   // Compare whole names first, even if a workbook name contains a preposition.
   const text = message.trim().replace(/[.?!।]+$/u, '').trim();
@@ -42,7 +43,8 @@ function resolve(user, message, selected, lang) {
   const select = text.match(/^(?:select|switch to|use)\s+(?:project\s+)?(.+)$/i);
   const prefix = text.match(/^(?:in|for|within)\s+(.+?)[,:]?\s+((?:how many|who|what|list|show|count|break ?down|open|set|mark)\b.*)$/i);
   const clauseHi = hi && hindi.projectClause(text, matches);
-  if (matches(text).length) { explicit = text; ask = ''; }
+  if (requested !== null) explicit = requested;
+  else if (matches(text).length) { explicit = text; ask = ''; }
   else if (clauseHi) ({ explicit, ask } = clauseHi);
   else if (select) { explicit = select[1]; ask = ''; }
   else if (prefix) { explicit = prefix[1]; ask = prefix[2]; }
@@ -67,7 +69,10 @@ function resolve(user, message, selected, lang) {
   if (explicit !== null) {
     let hits = matches(explicit);
     if (!hits.length) hits = matches(explicit.replace(/^(?:(?:the )?(?:giga )?project(?: name)?|प्रोजेक्ट|परियोजना)\s+/iu, ''));
-    if (hits.length !== 1) return { error: hits.length ? choose(hits) : unavailable() };
+    // An old selection is not a tie-breaker. Only an explicit follow-up pick
+    // can narrow ambiguous aliases, and only to an exact, live candidate.
+    if (hits.length > 1 && projectPicked && hits.includes(selected)) hits = [selected];
+    if (hits.length !== 1) return { error: hits.length ? { ...choose(hits), ambiguousProject: true } : unavailable() };
     return { name: hits[0], ask };
   }
   if (selected != null && selected !== '') return names.includes(selected) ? { name: selected, ask } : { error: unavailable() };
@@ -113,21 +118,23 @@ function report(user, name, ask, lang) {
   return { kind: verb === group ? 'breakdown' : 'count', reply, data, table: { title: `${field.label} · ${name}`, columns: [field.label, lang.people], rows: buckets.map((r) => [r.value, fmt(r.c)]) } };
 }
 
-function findPlacement(user, name, raw, crm, lang) {
+function findPlacement(user, name, raw, crm, lang, choiceId = null) {
   const scope = scopeFor(user, name, crm ? 'can_crm' : 'can_edit');
   const who = raw.trim().replace(lang === copy.hi ? /^(?:employee(?: id)?|कर्मचारी(?: (?:आई\s*डी|id))?)\s+/iu : /^employee(?: id)?\s+/i, '');
   const id = lang === copy.hi ? hindi.employeeTerm(who) : who;
   const placement = id.match(/^placement\s+(\d+)$/i);
-  // Keep the literal ID/name and also try its spoken code, preserving leading zeros.
+  // Keep the literal ID/name and also try its spelled-out code, preserving leading zeros.
   const code = id.replace(/\b(?:dash|hyphen)\b/i, '-').match(/^([a-z](?:\s*[a-z])*)[\s-]+([\d ]+)$/i);
-  const rows = q.all(`SELECT a.id, e.name, e.emp_code ${FROM} WHERE ${scope.sql} AND ` + (placement ? 'a.id = ?' :
-    '(e.emp_code = ? COLLATE NOCASE OR e.emp_code = ? COLLATE NOCASE OR e.name = ? COLLATE NOCASE)') + ' ORDER BY a.id LIMIT 11',
-    ...scope.args, ...(placement ? [Number(placement[1])] : [who, code ? code[1].replace(/\s/g, '') + '-' + code[2].replace(/\s/g, '') : id, who]));
+  const rows = q.all(`SELECT a.id, e.name, e.emp_code, p.name AS project, s.name AS subproject, c.name AS category ${FROM}
+    JOIN projects p ON p.id = a.project_id JOIN subprojects s ON s.id = a.subproject_id JOIN categories c ON c.id = a.category_id
+    WHERE ${scope.sql} AND ` + (placement ? 'a.id = ?' :
+    '(e.emp_code = ? COLLATE NOCASE OR e.emp_code = ? COLLATE NOCASE OR e.name = ? COLLATE NOCASE)') + (choiceId == null ? '' : ' AND a.id = ?') + ' ORDER BY a.id LIMIT 11',
+    ...scope.args, ...(placement ? [Number(placement[1])] : [who, code ? code[1].replace(/\s/g, '') + '-' + code[2].replace(/\s/g, '') : id, who]), ...(choiceId == null ? [] : [choiceId]));
   if (rows.length === 1) return { person: rows[0] };
   const kind = crm ? 'crm_lookup' : 'clarify';
   if (!rows.length) return { error: { kind, reply: lang.noMatch(name) } };
   return { error: { kind, reply: lang.ambiguous(name),
-    table: { title: lang.placements + ' · ' + name, columns: lang.placementColumns, rows: rows.slice(0, 10).map((r) => [r.id, r.emp_code, r.name]) } } };
+    table: { title: lang.placements + ' · ' + name, columns: lang.placementColumns, rows: rows.slice(0, 10).map((r) => [r.id, r.emp_code, r.name, `${r.project} / ${r.subproject} / ${r.category}`]) } } };
 }
 
 function action(user, name, ask, lang) {
@@ -154,12 +161,45 @@ function action(user, name, ask, lang) {
   }
   return null;
 }
-function understand(user, message, selected = null, language = 'en') {
+// A guide choice is a scoped lookup, not a write token.
+function guided(user, name, request, choice, lang) {
+  if (!can(user, 'crm.use') || !can(user, 'employee.edit')) {
+    return { kind: 'denied', reply: lang.noPermission(name, !can(user, 'crm.use')) };
+  }
+  let who = request.person || choice?.person;
+  // A user can correct a mistyped name ONLY if the original exact target has
+  // no match in this scope. A choice must never replace a valid named person.
+  if (request.person && choice?.person && choice.person !== request.person) {
+    const first = findPlacement(user, name, request.person, true, lang);
+    if (first.error && !first.error.table) who = choice.person;
+  }
+  const prompt = (step, reply, extra = {}) => ({ kind: 'crm_lookup', reply, guide: { step, person: who || '' }, suggestions: [], ...extra });
+  if (!who) return prompt('person', lang.askPerson(name));
+  const { person, error } = findPlacement(user, name, who, true, lang, choice?.placementId);
+  if (error?.table) return prompt('placement', error.reply, { table: error.table,
+    suggestions: error.table.rows.map(([id]) => (lang === copy.hi ? 'प्लेसमेंट ' : 'Placement ') + id) });
+  if (error) return choice?.placementId != null
+    ? { kind: 'clarify', reply: lang.retryGuide(name), suggestions: [] }
+    : prompt('person', error.reply);
+  const crm = crmForm(user, person.id, name, true);
+  if (!crm.fields.some((f) => f.editable)) return { kind: 'denied', reply: lang.noPermission(name, false) };
+  return { kind: 'crm', crm, guide: { step: 'form', instruction: request.instruction },
+    reply: lang.draftFor(lang.reference(person, name)), suggestions: [] };
+}
+
+function understand(user, message, selected = null, language = 'en', choice = null, projectPicked = false) {
   const lang = language === 'hi' ? copy.hi : copy.en;
-  const { name, ask: question, error } = resolve(user, String(message || ''), selected, lang);
+  const text = String(message || '');
+  const help = !choice && howTo(text, language, user);
+  if (help) return help;
+  const guide = parseGuide(text, language, (term) => schema.listFields(user).some((f) =>
+    [f.key.replaceAll('_', ' '), f.label].some((v) => norm(v) === norm(term))));
+  const { name, ask: question, error } = resolve(user, guide ? '' : text, selected, lang, guide?.project, projectPicked);
   if (error) return error;
   const ask = lang === copy.hi ? hindi.intent(question) : question;
-  const answer = !ask ? { kind: 'project', reply: lang.selected(name) }
+  const answer = guide ? guided(user, name, guide, choice, lang)
+    : choice ? { kind: 'clarify', reply: lang.retryGuide(name) }
+    : !ask ? { kind: 'project', reply: lang.selected(name) }
     : action(user, name, ask, lang) || report(user, name, ask, lang) || { kind: 'help', understood: false, reply: lang.help(name) };
   return { understood: true, projectName: name, suggestions: lang.examples(name), ...answer };
 }
