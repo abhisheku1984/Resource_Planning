@@ -1,12 +1,13 @@
 import { h, mount, icon, api, setToken, state, spinner } from '../core.js';
+import { atLoginEntry } from '../transport.js';
 
 export function renderLogin(root, onSuccess, notice = '') {
   const emailInput = h('input', { class: 'input', type: 'email', name: 'email', autocomplete: 'username', placeholder: 'you@company.com', required: true });
   const pwInput = h('input', { class: 'input', type: 'password', name: 'password', autocomplete: 'current-password', placeholder: 'Enter your password', required: true });
   const errBox = h('div', { class: 'hidden', role: 'alert' });
   const submitBtn = h('button', { class: 'btn btn-primary btn-block', type: 'submit', style: { height: '38px' } }, 'Sign in');
-  const form = h('form', { onsubmit: submit, novalidate: true },
-    h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'login-email' }, 'Work email'), emailInput),
+  const form = h('form', { method: 'post', action: '/api/auth/login', onsubmit: submit, novalidate: true },
+    h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'login-email' }, 'Login ID (email)'), emailInput),
     h('div', { class: 'field', style: { marginTop: '13px' } }, h('label', { class: 'field-label', for: 'login-pw' }, 'Password'), pwInput),
     errBox,
     h('div', { style: { marginTop: '18px' } }, submitBtn),
@@ -29,6 +30,7 @@ export function renderLogin(root, onSuccess, notice = '') {
       const data = await api('/auth/login', { method: 'POST', body: { email: emailInput.value.trim(), password: pwInput.value } });
       setToken(data.token);
       state.user = data.user;
+      if (atLoginEntry()) history.replaceState(null, '', '/');
       onSuccess();
     } catch (err) {
       if (err.status === 401) pwInput.value = '';
@@ -68,8 +70,8 @@ export function renderLogin(root, onSuccess, notice = '') {
       ),
       h('main', { class: 'auth-main' },
         h('div', { class: 'auth-card' },
-          h('div', { class: 'auth-title' }, 'Sign in'),
-          h('div', { class: 'auth-sub' }, 'Enter your own work email and password to access your projects.'),
+          h('h2', { class: 'auth-title' }, 'Sign in to Resource Planning'),
+          h('div', { class: 'auth-sub' }, 'Use your Resource Planning ID and password, not your GitHub password.'),
           notice ? h('div', { class: 'note warn', style: { marginBottom: '14px' } }, icon('alert', 15), notice) : null,
           form,
         ),

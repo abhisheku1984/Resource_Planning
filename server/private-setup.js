@@ -1,5 +1,5 @@
 'use strict';
-// Host-console setup only. There is deliberately no HTTP setup or recovery route.
+// Setup is restricted to the host. There is no HTTP setup or recovery route.
 const { q, tx, DB_FILE, newDatabase } = require('./db');
 const auth = require('./auth');
 const { record } = require('./audit');
@@ -12,7 +12,7 @@ function hasPrivateAdmin(admins) {
   return admins.some(u => u.password_hash && !auth.hasDemoHash(u.password_hash));
 }
 
-function configureAdmin({ name, email, password }) {
+function configureAdmin({ name, email, password }, firstAccountOnly) {
   name = name.trim(); email = auth.loginEmail(email);
   if (!name || name.length > 160) throw Error('Enter a display name of 1–160 characters.');
   auth.checkNewPassword(password);
@@ -22,6 +22,11 @@ function configureAdmin({ name, email, password }) {
     // just-configured account, and this is not a reset for private passwords.
     const admins = activeAdmins();
     if (hasPrivateAdmin(admins)) throw Error('A private administrator already exists. Use Users & access to manage accounts.');
+    // Stale hosting secrets must never revive a deleted/disabled user or
+    // replace any legacy account. AUTOINCREMENT remembers even deleted IDs.
+    if (firstAccountOnly && (q.get('SELECT 1 FROM users LIMIT 1') || q.get("SELECT 1 FROM sqlite_sequence WHERE name='users' AND seq > 0"))) {
+      throw Error('Hosted setup cannot reset an existing installation. Recover access privately on the host.');
+    }
     const existing = q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email);
     if (existing && !admins.some(u => u.id === existing.id)) throw Error('That email is already assigned. Choose another email.');
     const target = existing || admins[0];
@@ -69,7 +74,7 @@ async function promptForAdmin() {
   } finally { rl.close(); }
 }
 
-async function initializePrivateApp(prompt = promptForAdmin) {
+async function initializePrivateApp(prompt = promptForAdmin, { firstAccountOnly = false } = {}) {
   // Only create starter data for a brand-new file. An existing (even empty)
   // roster is never a reason to reseed, reset accounts or restore deleted users.
   if (newDatabase && !q.get('SELECT 1 FROM projects LIMIT 1') && !q.get('SELECT 1 FROM users LIMIT 1')) {
@@ -77,7 +82,7 @@ async function initializePrivateApp(prompt = promptForAdmin) {
   } else {
     require('./schema').seedFields();
   }
-  if (!hasPrivateAdmin(activeAdmins())) configureAdmin(await prompt());
+  if (!hasPrivateAdmin(activeAdmins())) configureAdmin(await prompt(), firstAccountOnly);
 }
 
 if (require.main === module) initializePrivateApp().then(() => console.log('Private sign-in is ready.')).catch(err => {

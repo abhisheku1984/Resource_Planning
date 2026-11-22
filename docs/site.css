@@ -1245,3 +1245,15 @@ table.mini tr:last-child td { border-bottom: none; }
 @media(max-width:600px) { .demo-notice { padding:7px 14px; } }
 /* A narrow-screen CRM sheet sits above content, but never above open navigation. */
 @media(max-width:1024px) { .sidebar.open { z-index:80; } }
+
+/* Static sign-in handoff. No login controls or scripts run on the Pages origin. */
+.entry-page { min-height:100vh; margin:0; display:grid; align-items:center; padding:clamp(18px,5vw,64px); background:#eff4f7; color:#193344; }
+.entry-card { box-sizing:border-box; width:min(100%,39rem); margin:auto; padding:clamp(24px,5vw,52px); background:#fff; border:1px solid #d6e1e6; border-radius:18px; box-shadow:0 14px 45px #1336490f; }
+.entry-brand { display:flex; gap:12px; align-items:center; font-size:15px; font-weight:650; }
+.entry-kicker { margin:38px 0 7px; color:#286b5b; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.1em; }
+.entry-card h1 { margin:0 0 14px; font-size:clamp(24px,5vw,34px); line-height:1.15; }
+.entry-card p:not(.entry-kicker), .entry-demo { color:#425b6b; line-height:1.65; overflow-wrap:anywhere; }
+.entry-action { display:inline-block; margin:18px 0 25px; border-radius:7px; background:#164d43; color:white; padding:11px 17px; font-weight:600; text-decoration:none; }
+.entry-card a:focus-visible { outline:3px solid #2671b5; outline-offset:4px; }
+.entry-demo { border-top:1px solid #d6e1e6; padding-top:17px; font-size:13px; }
+.entry-demo a { color:#165b4b; text-decoration:underline; }

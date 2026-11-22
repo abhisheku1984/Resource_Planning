@@ -18,7 +18,7 @@ const server = createServer((req,res) => {
   const m = /^\/(root-source|docs-source)\/Resource_Planning\/(.*)$/.exec(uri);
   let file;
   if (m && req.method === 'GET') {
-    if (m[1] === 'root-source') file = !m[2] ? path.join(root,'index.html') : m[2].startsWith('docs/') ? assets.get(m[2].slice(5) || 'index.html') : null;
+    if (m[1] === 'root-source') file = (!m[2] || m[2] === 'sample.html') ? path.join(root,m[2] || 'index.html') : m[2].startsWith('docs/') ? assets.get(m[2].slice(5) || 'index.html') : null;
     else file = assets.get(m[2] || 'index.html');
   }
   if (!file) { bad.push(req.method+' '+uri); res.writeHead(404).end(); return; }
@@ -43,10 +43,20 @@ try {
   const download = async button => { const [d] = await Promise.all([page.waitForEvent('download',{timeout:45000}),button.click()]);
     const file = path.join(temp,d.suggestedFilename()); await d.saveAs(file); return file; };
   const type = async (q,text) => { await q.fill(text); await q.press('Tab'); };
-  await page.goto(origin+'/root-source/Resource_Planning/'); await waitPlacements('1,000');
+  const entry = origin+'/root-source/Resource_Planning/';
+  // The default for a not-yet-connected install must not open the sample or accept credentials.
+  const team = JSON.parse(fs.readFileSync(path.join(root,'deploy/site.json'),'utf8')).teamOrigin;
+  if (!team) {
+    await page.goto(entry+'?next=https://ignored.example/#/dashboard');
+    await page.getByRole('heading',{name:'Sign in to Resource Planning'}).waitFor();
+    assert.equal(await page.locator('form, input, nav').count(),0);
+    assert.ok(!requests.some(p => /workspace\.js|sample\.gz/.test(p)));
+    await page.getByRole('link',{name:'Open the fictional sample'}).click();
+  } else await page.goto(entry+'sample.html');
+  await waitPlacements('1,000');
   assert.match(await page.title(), /Sample workspace/); assert.equal(await page.locator('input[type=password]').count(),0);
-  const instructions = page.getByRole('link', {name:'How to try private sign-in'});
-  assert.equal(await instructions.getAttribute('href'), 'https://github.com/abhisheku1984/Resource_Planning#try-private-sign-in-on-github');
+  const instructions = page.getByRole('link', {name:'Team sign-in'});
+  assert.equal(await instructions.getAttribute('href'), 'https://abhisheku1984.github.io/Resource_Planning/');
   assert.equal(await instructions.getAttribute('target'), '_blank');
   // User-facing drill-down, not just static files or a dashboard picture.
   await page.getByRole('button',{name:'Open project workspace'}).click();
@@ -97,7 +107,7 @@ try {
   // Same payload also works when /docs is already the publishing source; a
   // hash deep link on a phone opens the app without a rewrite or repo visit.
   await page.setViewportSize({width:390,height:844});
-  await page.goto(origin+'/docs-source/Resource_Planning/#/directory'); await waitCount('1,000');
+  await page.goto(origin+'/docs-source/Resource_Planning/sample.html#/directory'); await waitCount('1,000');
   await page.getByLabel('Toggle navigation').click(); await nav('Dashboard'); await waitPlacements('1,000');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
   assert.equal(await page.evaluate(() => localStorage.getItem('rp.token')),null);
