@@ -1,0 +1,10 @@
+{
+  "name": "Resource Planning private demo",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22-bookworm",
+  "postCreateCommand": "npm ci --omit=dev --ignore-scripts --no-audit --no-fund",
+  "containerEnv": { "HOST": "127.0.0.1", "PORT": "4000" },
+  "forwardPorts": [4000],
+  "portsAttributes": {
+    "4000": { "label": "Resource Planning (keep private)", "onAutoForward": "notify" }
+  }
+}

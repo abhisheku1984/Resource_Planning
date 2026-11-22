@@ -39,9 +39,16 @@ and intended only for disposable installations.
 
 ### One website link for the team
 
-GitHub stores the code. **GitHub Pages serves static files only**: publishing `public/` there will not run sign-in, workbook imports or supervisor edits. For a working team link, deploy the Node app **and** its API together on one approved, always-on server behind HTTPS. Use one private, persistent disk for SQLite (`DATA_DIR`), outside `public/` and outside the code checkout. A redeploy should update code, not replace the roster.
+**[Open the Resource Planning website](https://abhisheku1984.github.io/Resource_Planning/)** for setup instructions and the daily roster workflow. It is a **public guide**, not a sign-in or upload site. GitHub Pages publishes only `docs/` from `main` (**Settings → Pages → Deploy from a branch → main /docs**). Never change the publishing folder to the repository root, `public/` or a data folder.
 
-Start privately. Before admitting users or importing real data, provision individual accounts, disable the known demo logins, remove the demo sign-in shortcuts, and set up access controls and encrypted backups. Verify with synthetic data that a supervisor can edit an authorized record and that the edit survives a restart. See the [data safety checklist](SECURITY.md#6-known-limitations--read-before-using-real-data). Share the resulting HTTPS address with staff; if approved for public listing, it can also go in the repository’s **About → Website** field. Never commit a live database, daily workbook, export or backup to create a website link.
+**Try the app on GitHub, without changing your Windows installation:**
+
+1. Open [GitHub Codespaces setup for this repository](https://github.com/codespaces/new?repo=1465729572&ref=main). Review your account’s quota/billing before creating a codespace. Visiting the public guide does not create one.
+2. Select `main`, create your codespace and wait for dependency installation. In its terminal run `npm start` and leave it running.
+3. In **Ports**, find **4000**, verify its visibility is **Private**, then choose **Open in Browser**. Use a demo account on that screen. Each fresh codespace has its own synthetic roster; use the [sample workbook](samples/README.md) to test imports.
+4. Stop the codespace when finished. Its files are temporary and disappear when it is deleted. Do not upload real staff data, commit a database, or make the demo port public.
+
+For daily work, all supervisors must use the same **approved private app installation**, not individual codespaces. GitHub Pages cannot run the Node API or store shared edits. Before using real data, replace the demo credentials, restrict access, protect the persistent SQLite disk and test private backups; see [Data safety](SECURITY.md).
 
 ### Try guided Ask on Windows without using your workforce database
 
