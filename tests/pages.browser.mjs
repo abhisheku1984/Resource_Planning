@@ -45,6 +45,9 @@ try {
   const type = async (q,text) => { await q.fill(text); await q.press('Tab'); };
   await page.goto(origin+'/root-source/Resource_Planning/'); await waitPlacements('1,000');
   assert.match(await page.title(), /Sample workspace/); assert.equal(await page.locator('input[type=password]').count(),0);
+  const instructions = page.getByRole('link', {name:'How to try private sign-in'});
+  assert.equal(await instructions.getAttribute('href'), 'https://github.com/abhisheku1984/Resource_Planning#try-private-sign-in-on-github');
+  assert.equal(await instructions.getAttribute('target'), '_blank');
   // User-facing drill-down, not just static files or a dashboard picture.
   await page.getByRole('button',{name:'Open project workspace'}).click();
   await page.locator('.project-card').filter({hasText:'Nexus Digital'}).click();
@@ -66,6 +69,7 @@ try {
   await nav('Audit Trail'); await page.locator('.tl-new').getByText('Pages sample edit',{exact:true}).waitFor();
   await nav('Administration'); await page.locator('#admin-body .card').first().waitFor();
   await nav('Users & Access'); await page.getByText('Sample accounts only',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button', {name:/Change login ID|Reset password|New user/i}).count(), 0);
   await page.getByRole('button',{name:'Ask',exact:true}).click();
   await page.locator('.assistant-scope select').selectOption('Giga One');
   const ask = page.getByPlaceholder('Ask a question or describe an employee update');

@@ -1116,6 +1116,65 @@ test('a new user is created with their project access and capabilities in the sa
   assert.equal(relogin.status, 401, 'a deleted user cannot sign in');
 });
 
+test('changing a login ID reauthenticates the admin, preserves account identity and revokes only target sessions', async t => {
+  const adminEmail = 'admin@resourceplanning.io', currentPassword = passwords.get(adminEmail);
+  const admin = client(await login(adminEmail)), anon = client();
+  const original = 'staff-id@example.test', next = 'New-ID@example.test';
+  const password = require('node:crypto').randomBytes(24).toString('hex');
+  const project = q.get('SELECT id FROM projects LIMIT 1');
+  const created = await admin('POST', '/users', { email: original, password, name: 'Scoped supervisor',
+    projects: [{ project_id: project.id, can_edit: true }], capabilities: { 'employee.edit': true } });
+  assert.equal(created.status, 200);
+  const id = created.data.user.id, path = `/users/${id}/login-id`;
+  t.after(() => admin('DELETE', `/users/${id}`));
+  const staff = client(await login(original, password)), second = client(await login(original, password));
+  const before = (await staff('GET', '/auth/me')).data.user;
+  const stored = () => q.get('SELECT password_hash FROM users WHERE id=?', id).password_hash;
+  const hash = stored(), body = { previousEmail: original, email: next, currentPassword };
+  assert.equal((await anon('PUT', path, body)).status, 401);
+  assert.equal((await staff('PUT', path, body)).status, 403, 'even the owner of a supervisor login cannot change IDs');
+  for (const changes of [{ currentPassword: 'wrong' }, { currentPassword: undefined }, { email: '' },
+    { email: 'not an email' }, { email: ['person@example.test'] }, { email: 'a'.repeat(255) + '@example.test' },
+    { email: adminEmail.toUpperCase() }, { email: original.toUpperCase() }, { role: 'admin' }]) {
+    assert.equal((await admin('PUT', path, { ...body, ...changes })).status, 422);
+  }
+  assert.equal((await admin('PUT', path, { ...body, previousEmail: 'stale@example.test' })).status, 409);
+  assert.equal((await admin('PATCH', `/users/${id}`, { email: next })).status, 422);
+  assert.equal((await admin('PUT', `/users/${id}/access`, { email: next })).status, 422);
+  assert.equal((await admin('PUT', '/users/-1/login-id', body)).status, 404);
+  assert.deepEqual((await staff('GET', '/auth/me')).data.user, before, 'failed edits revoke nothing');
+  const saved = await admin('PUT', path, { ...body, email: `  ${next}  ` });
+  assert.deepEqual([saved.status, saved.data], [200, { user: { id, email: next } }]);
+  assert.equal(stored(), hash, 'password is not reset or rehashed');
+  for (const active of [staff, second]) assert.equal((await active('GET', '/auth/me')).status, 401);
+  assert.equal((await anon('POST', '/auth/login', { email: original, password })).status, 401);
+  const renewed = client(await login(next.toLowerCase(), password));
+  assert.deepEqual((await renewed('GET', '/auth/me')).data.user, { ...before, email: next });
+  const history = (await admin('GET', `/audit/user/${id}`)).data.history;
+  const edits = history.filter(r => r.field_key === 'email');
+  assert.equal(edits.length, 1); assert.deepEqual([edits[0].old_value, edits[0].new_value], [original, next]);
+  assert.ok(history.some(r => r.action === 'create' && r.ref === original), 'old audit entries stay on this account');
+  assert.ok(!JSON.stringify(history).includes(currentPassword));
+});
+
+test('an administrator can change their own login ID and sign back in with the same access', async t => {
+  const root = client(await login('admin@resourceplanning.io'));
+  const email = 'self-id@example.test', next = 'self-new@example.test';
+  const password = require('node:crypto').randomBytes(24).toString('hex');
+  const made = await root('POST', '/users', { name: 'Another admin', email, password, role: 'admin' });
+  assert.equal(made.status, 200); const id = made.data.user.id;
+  t.after(() => root('DELETE', `/users/${id}`));
+  const self = client(await login(email, password));
+  const before = (await root('GET', '/users')).data.users;
+  assert.equal((await self('PUT', `/users/${id}/login-id`, { previousEmail: email, email: next, currentPassword: password })).status, 200);
+  assert.equal((await self('GET', '/users')).status, 401);
+  assert.equal((await client()('POST', '/auth/login', { email, password })).status, 401);
+  const signedIn = client(await login(next, password));
+  assert.deepEqual((await signedIn('GET', '/users')).data.users, before.map(u => u.id === id ? { ...u, email: next } : u));
+  // Other admins remain signed in and no second owner was created.
+  assert.equal((await root('GET', '/users')).status, 200);
+});
+
 test('Edit access: administrators can rename themselves and other administrators without changing access', async (t) => {
   const admin = client(await login('admin@resourceplanning.io'));
   const email = 'rename.admin@example.test', password = 'Example123';

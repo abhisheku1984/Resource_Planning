@@ -10,7 +10,7 @@
    ========================================================================= */
 import {
   h, mount, icon, api, state, toast, modal, spinner, emptyState,
-  closeModal, confirmDialog, initials, setRouteFromHash,
+  closeModal, confirmDialog, initials, setRouteFromHash, returnToSignIn,
 } from '../core.js';
 
 const TABS = [
@@ -442,10 +442,12 @@ async function renderAccess(host) {
       h('td', null, u.role === 'admin'
         ? h('span', { class: 'badge badge-brand' }, 'All capabilities')
         : h('span', { class: 'badge badge-outline' }, `${Object.values(u.capabilities).filter(Boolean).length} granted`)),
-      h('td', null, h('div', { class: 'row', style: { gap: '4px', justifyContent: 'flex-end' } },
+      h('td', null, h('div', { class: 'row', style: { gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' } },
         h('button', { class: 'btn btn-ghost btn-xs',
           title: u.role === 'admin' ? `Edit the display name for ${u.name}` : `Edit name and access for ${u.name}`,
           onclick: () => openEditor(u) }, icon('edit', 12), 'Edit access'),
+        !state.user.browserDemo
+          ? h('button', { class: 'btn btn-ghost btn-xs', onclick: () => changeLoginId(u) }, 'Change login ID') : null,
         !state.user.browserDemo && u.id !== state.user.id
           ? h('button', { class: 'btn btn-ghost btn-xs', onclick: () => resetPassword(u) }, 'Reset password') : null,
         u.id === state.user.id
@@ -609,6 +611,41 @@ async function renderAccess(host) {
           },
         }, 'Save changes'),
       ),
+    });
+  }
+
+  function changeLoginId(u) {
+    const self = u.id === state.user.id;
+    const email = h('input', { class: 'input', type: 'email', maxlength: 254, autocomplete: 'off', required: true });
+    email.value = u.email;
+    const current = h('input', { class: 'input', type: 'password', autocomplete: 'current-password', required: true });
+    const error = h('div', { class: 'note warn hidden', role: 'alert' });
+    const { box } = modal({
+      title: 'Change login ID', subtitle: `${u.name} · ${u.email}`,
+      onClose: () => { current.value = ''; },
+      body: h('div', { class: 'col', style: { gap: '12px' } }, error,
+        field('New sign-in email', email, 'The password, permissions and work history stay the same.'),
+        field('Your administrator password', current, self
+          ? 'You will be signed out on all devices. Sign back in with the new email.'
+          : 'This user will be signed out on all devices. Give them the new login ID privately.')),
+      footer: h('div', { class: 'row', style: { gap: '8px' } },
+        h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+        h('button', { class: 'btn btn-primary', onclick: async (event) => {
+          const button = event.currentTarget; button.disabled = true;
+          error.classList.add('hidden');
+          try {
+            const nextEmail = email.value.trim();
+            const result = await api(`/users/${u.id}/login-id`, { method: 'PUT',
+              body: { previousEmail: u.email, email: nextEmail, currentPassword: current.value } });
+            if (result.user?.email !== nextEmail) throw Error('The server did not confirm the new login ID. Refresh the user list.');
+            if (box.isConnected) closeModal();
+            if (self) return returnToSignIn();
+            toast('Login ID updated', 'The user can sign in with the new email and their existing password.', 'success');
+            await renderAccess(host);
+          } catch (err) {
+            error.textContent = err.message; error.classList.remove('hidden');
+          } finally { button.disabled = false; }
+        } }, 'Save login ID')),
     });
   }
 

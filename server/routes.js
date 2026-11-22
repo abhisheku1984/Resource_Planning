@@ -820,11 +820,10 @@ function renameAccount(user, value, actor) {
 
 router.post('/users', requireAuth, requireAdmin, wrap((req, res) => {
   const body = req.body || {};
-  const email = String(body.email || '').trim();
+  const email = auth.loginEmail(body.email);
   const name = accountName(body.name);
   const role = body.role === 'admin' ? 'admin' : 'supervisor';
   if (role === 'admin' && body.gigaProjectName !== undefined) throw access.invalid('Administrator accounts cannot be restricted to a Giga project.');
-  if (!email) throw access.invalid('Email is required.');
   auth.checkNewPassword(body.password);
   const user = tx(() => {
     if (q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email)) {
@@ -867,8 +866,37 @@ router.delete('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
   res.json({ ok: true });
 }));
 
+// Login IDs are credentials, not display names or project grants. Change the
+// existing row, revoke only its sessions and retain its numeric ID/history.
+router.put('/users/:id/login-id', requireAuth, requireAdmin, wrap((req, res) => {
+  const id = Number(req.params.id), body = req.body || {};
+  if (Object.keys(body).some(k => !['email', 'previousEmail', 'currentPassword'].includes(k))) throw access.invalid('Only the sign-in email can be changed here.');
+  const email = auth.loginEmail(body.email);
+  const user = tx(() => {
+    const admin = q.get("SELECT password_hash FROM users WHERE id = ? AND active = 1 AND role = 'admin'", req.user.id);
+    if (!admin || typeof body.currentPassword !== 'string' || !auth.verifyPassword(body.currentPassword, admin.password_hash)) {
+      throw access.invalid('Enter your current administrator password to change a login ID.');
+    }
+    const target = accountForEdit(id);
+    if (body.previousEmail !== target.email) {
+      throw Object.assign(new Error('This login ID has changed. Refresh Users & access and try again.'), { status: 409 });
+    }
+    // Same comparison as /auth/login, including inactive accounts. The write
+    // transaction prevents two admins from claiming the same email at once.
+    const assigned = q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email);
+    if (assigned) throw access.invalid(assigned.id === id ? 'Enter a different sign-in email.' : 'That login ID is already assigned.');
+    q.run('UPDATE users SET email = ? WHERE id = ?', email, id);
+    q.run('DELETE FROM sessions WHERE user_id = ?', id);
+    record({ entity: 'user', entityId: id, ref: email, action: 'update', fieldKey: 'email',
+      oldValue: target.email, newValue: email, actor: req.user });
+    return { id, email };
+  });
+  res.json({ user });
+}));
+
 router.patch('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
   const id = Number(req.params.id), body = req.body || {};
+  if (Object.hasOwn(body, 'email')) throw access.invalid('Use Change login ID to change the sign-in email.');
   const user = tx(() => {
     const target = accountForEdit(id);
     if (Object.hasOwn(body, 'name')) renameAccount(target, body.name, req.user);

@@ -205,6 +205,15 @@ export function setToken(token) {
   storeToken(token);
 }
 
+// Call after logout or when a credential change already revoked our sessions.
+export function returnToSignIn() {
+  setToken(null);
+  state.user = null;
+  // Don't dispatch hashchange into the old shell after clearing its user.
+  history.replaceState(null, '', location.href.split('#')[0]);
+  location.reload();
+}
+
 /**
  * Downloads any authenticated workbook route (export, blank import template) as
  * a file. The route decides the name through Content-Disposition.

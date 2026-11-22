@@ -97,7 +97,9 @@ async function start() {
     const local = HOST === '127.0.0.1' || HOST === 'localhost';
     console.log('');
     console.log('  Resource Planning is running.');
-    console.log(`  Open:   http://localhost:${PORT}`);
+    console.log(process.env.CODESPACES === 'true'
+      ? `  Open:   Codespaces Ports tab > port ${PORT} (Private) > Open in Browser`
+      : `  Open:   http://localhost:${PORT}`);
     console.log(`  Bound:  ${HOST}:${PORT}  ${local ? '(this computer only)' : '(reachable from your network)'}`);
     if (!local) {
       console.log('');

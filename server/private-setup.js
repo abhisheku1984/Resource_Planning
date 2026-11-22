@@ -13,9 +13,8 @@ function hasPrivateAdmin(admins) {
 }
 
 function configureAdmin({ name, email, password }) {
-  name = name.trim(); email = email.trim();
+  name = name.trim(); email = auth.loginEmail(email);
   if (!name || name.length > 160) throw Error('Enter a display name of 1–160 characters.');
-  if (!/^[^\s@]+@[^\s@]+$/.test(email)) throw Error('Enter your own sign-in email.');
   auth.checkNewPassword(password);
 
   tx(() => {

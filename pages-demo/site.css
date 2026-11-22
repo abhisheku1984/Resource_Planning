@@ -1,5 +1,6 @@
 /* Additions to the same stylesheet as the Windows application. */
 .demo-notice { display:flex; flex-wrap:wrap; gap:3px 12px; align-items:baseline; padding:8px 24px; background:#eef7f5; color:#275d51; border-bottom:1px solid #d3e8e2; font-size:12px; }
+.demo-notice a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .demo-notice strong { font-size:11px; letter-spacing:.055em; text-transform:uppercase; }
 .sample-loading { max-width:38rem; margin:15vh auto; padding:2rem; color:#233c57; }
 .sample-loading strong { color:#237262; font-size:.85rem; }
