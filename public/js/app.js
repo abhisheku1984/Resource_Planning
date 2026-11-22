@@ -109,8 +109,8 @@ function buildShell() {
     main.append(h('div', { class: 'demo-notice' },
       h('strong', null, 'Sample workspace'),
       h('span', null, 'This tab only · Changes reset on reload. Do not enter real staff data.'),
-      h('a', { href: 'https://github.com/abhisheku1984/Resource_Planning#try-private-sign-in-on-github',
-        target: '_blank', rel: 'noopener noreferrer' }, 'How to try private sign-in')));
+      h('a', { href: 'https://abhisheku1984.github.io/Resource_Planning/',
+        target: '_blank', rel: 'noopener noreferrer' }, 'Team sign-in')));
   }
   main.append(content);
   const assistant = createAssistant();

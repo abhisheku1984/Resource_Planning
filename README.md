@@ -1,13 +1,17 @@
 # Resource Planning Platform
 
-**[Open the public sample dashboard](https://abhisheku1984.github.io/Resource_Planning/)** (1,000 fictional employees, no sign-in) · **[Try private sign-in on GitHub](#try-private-sign-in-on-github)**
+**[Open Resource Planning sign-in](https://abhisheku1984.github.io/Resource_Planning/)** · [Fictional demo (no account)](https://abhisheku1984.github.io/Resource_Planning/sample.html)
+
+Open the sign-in link above after signing in to GitHub. Once the team server is connected, it opens **the app’s login page**. Enter your assigned Resource Planning ID and password there to open the dashboard. A repository cannot change GitHub’s own post-login homepage. **Owner, one time:** [connect a persistent team server](HOSTING.md). No Codespace or file upload is needed.
 
 Single source of truth for the workforce master: one SQLite database, Excel as
 import/export only, supervisors update records in the app.
 
 ## Try private sign-in on GitHub
 
-To see the **real sign-in screen in your browser**, run the app in your own GitHub Codespace. The `github.io` dashboard is a separate public sample and will never ask for a password.
+*Optional personal developer preview only. For the shared login use [team hosting](HOSTING.md).*
+
+To see the **real sign-in screen in your browser**, run the app in your own GitHub Codespace. The `sample.html` dashboard is a separate public sample and will never ask for a password.
 
 1. Sign in to GitHub. [Create a Codespace for this repository on `main`](https://github.com/codespaces/new?repo=1465729572&ref=main), or select **Code → Codespaces** in the repository. If you already set up accounts, [reopen that same codespace](https://github.com/codespaces) instead of creating another. Review your Codespaces quota/billing before starting.
 2. Wait for setup to finish, then enter **`npm start`** in the Codespace **Terminal**. On a fresh database, enter your chosen administrator display name, sign-in email and a **new private password** at the prompts. No password is displayed, and only this first account can sign in. On later starts, use the credentials you already set.
@@ -64,7 +68,7 @@ The Windows sign-in page lists **no accounts**, including the administrator. Eve
 
 ### The GitHub website and the private app
 
-The [website link](https://abhisheku1984.github.io/Resource_Planning/) **opens the app, not a guide**. Try **Employee Directory → search `TEST-0001` → Aarav Sen**, change a sample CRM field, then check **Audit Trail**. Project drill-down, filters, Ask and workbook downloads run inside the same website. Click the account at the bottom of the sidebar to try a sample supervisor instead of the administrator.
+The [fictional demo](https://abhisheku1984.github.io/Resource_Planning/sample.html) opens a separate sample dashboard. Try **Employee Directory → search `TEST-0001` → Aarav Sen**, change a sample CRM field, then check **Audit Trail**. Project drill-down, filters, Ask and workbook downloads run inside the same website. Click the account at the bottom of the sidebar to try a sample supervisor instead of the administrator.
 
 | | GitHub Pages | Your private Windows installation |
 |---|---|---|
@@ -74,7 +78,7 @@ The [website link](https://abhisheku1984.github.io/Resource_Planning/) **opens t
 
 **Do not enter real staff information or passwords on the demo.** Pages serves static files. The database engine runs in the browser, not on GitHub. There is no connection to your PC, cloud API, hosted database, or Codespace to start. For a personal preview of the full Node app with real sign-in, [use a private Codespace](#try-private-sign-in-on-github).
 
-**Maintainers:** `npm ci` then `npm run build:pages` regenerates the static files from the existing UI, domain handlers and approved synthetic fixture. `npm run check:pages` checks for stale output. See [Pages implementation](pages-demo/README.md). Both GitHub branch publishing settings (`main /docs` or the existing `main /` with the committed Jekyll allowlist) open the dashboard at the same address. Prefer `/docs`; never publish `public/`, a database directory or exports. No Windows restart is needed for a website-only update.
+**Maintainers:** `npm ci` then `npm run build:pages` regenerates the static files from the existing UI, domain handlers and approved synthetic fixture. `npm run check:pages` checks for stale output. See [Pages implementation](pages-demo/README.md). Both GitHub branch publishing settings (`main /docs` or the existing `main /` with the committed Jekyll allowlist) use the site root for the team sign-in link and `/sample.html` for the demo. Prefer `/docs`; never publish `public/`, a database directory or exports. No Windows restart is needed for a website-only update.
 
 ### Try guided Ask on Windows without using your workforce database
 

@@ -1,6 +1,11 @@
 'use strict';
 const path = require('node:path');
 const express = require('express');
+const hosted = require.main === module && process.argv.includes('--hosted');
+if (hosted) {
+  try { require('./hosted').checkDisk(); }
+  catch (err) { console.error('[startup]', err.message); process.exit(1); }
+}
 const auth = require('./auth');
 const { initializePrivateApp } = require('./private-setup');
 const { router } = require('./routes');
@@ -14,11 +19,10 @@ const HOST = process.env.HOST || '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 // The hosted preview is embedded by Arena; local/Windows installs keep their
 // original same-origin framing policy. This does not relax scripts or API auth.
-const FRAME_ANCESTORS = process.env.ARENA_PREVIEW === '1'
+const FRAME_ANCESTORS = !hosted && process.env.ARENA_PREVIEW === '1'
   ? "frame-ancestors 'self' https://arena.ai https://*.arena.ai" : "frame-ancestors 'self'";
 
 app.disable('x-powered-by');
-app.use(express.json({ limit: '40mb' }));
 
 // Preview-host friendly: no origin or host allowlist, and allow iframe embedding.
 app.use((req, res, next) => {
@@ -42,13 +46,22 @@ app.use((req, res, next) => {
     "object-src 'none'",
   ].join('; '));
   res.removeHeader('X-Frame-Options');
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Expose-Headers', 'X-Export-Rows');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  if (hosted) {
+    // The login form and API share one HTTPS origin; Pages never calls the API.
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+    res.setHeader('Cache-Control', 'no-store');
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Expose-Headers', 'X-Export-Rows');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+  }
   next();
 });
+
+if (hosted) app.post('/api/auth/login', express.json({ limit: '4kb' }), require('./hosted').loginBudget());
+app.use(express.json({ limit: '40mb' }));
 
 // bearer token sessions
 app.use((req, res, next) => {
@@ -92,16 +105,20 @@ app.get('*', (req, res, next) => {
 
 async function start() {
   // The first administrator is configured on the host, before opening a port.
-  await initializePrivateApp();
+  try {
+    await initializePrivateApp(hosted ? require('./hosted').initialOwner : undefined, { firstAccountOnly: hosted });
+  } finally {
+    if (hosted) delete process.env.RP_OWNER_PASSWORD;
+  }
   app.listen(PORT, HOST, () => {
     const local = HOST === '127.0.0.1' || HOST === 'localhost';
     console.log('');
     console.log('  Resource Planning is running.');
-    console.log(process.env.CODESPACES === 'true'
+    console.log(hosted ? '  Open:   your HTTPS service address followed by /login' : process.env.CODESPACES === 'true'
       ? `  Open:   Codespaces Ports tab > port ${PORT} (Private) > Open in Browser`
       : `  Open:   http://localhost:${PORT}`);
     console.log(`  Bound:  ${HOST}:${PORT}  ${local ? '(this computer only)' : '(reachable from your network)'}`);
-    if (!local) {
+    if (!local && !hosted) {
       console.log('');
       console.log('  WARNING: HOST is set to ' + HOST + ', so other machines on your');
       console.log('           network can open this app. Unset HOST to restrict it.');
