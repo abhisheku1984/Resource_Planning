@@ -35,7 +35,8 @@ export function renderDirectory(content, ctx) {
     const name = activePanel === crm.el ? 'CRM' : 'Update';
     toggle.replaceChildren(icon('contact', 15), `${panel ? 'Hide' : 'Show'} ${name}`);
   }
-  showPanel(activePanel);
+  // On phones open the sample table first, then its CRM sheet after a row tap.
+  showPanel(state.user?.browserDemo && window.matchMedia('(max-width: 820px)').matches ? null : activePanel);
 
   const projectFilter = h('select', {
     class: 'select', style: { width: '220px' },

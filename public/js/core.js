@@ -1,3 +1,4 @@
+import { request, readToken, storeToken } from './transport.js';
 /* =========================================================================
    Core: tiny helpers, icon set, API client, toast + modal infrastructure.
    No framework — a small reactive render loop keeps the bundle dependency free
@@ -150,10 +151,9 @@ export const debounce = (fn, ms = 300) => {
 };
 
 /* ------------------------------ API client ------------------------------ */
-const TOKEN_KEY = 'rp.token';
 
 export const state = {
-  token: localStorage.getItem(TOKEN_KEY) || null,
+  token: readToken(),
   user: null,
   tree: [],
   fields: [],
@@ -176,7 +176,7 @@ export async function api(path, { method = 'GET', body, signal } = {}) {
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   let res;
   try {
-    res = await fetch(`/api${path}`, {
+    res = await request(`/api${path}`, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -200,8 +200,7 @@ export async function api(path, { method = 'GET', body, signal } = {}) {
 export function setToken(token) {
   if (!token && state.token) document.dispatchEvent(new CustomEvent('rp:logout'));
   state.token = token;
-  if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
+  storeToken(token);
 }
 
 /**
@@ -211,7 +210,7 @@ export function setToken(token) {
 export async function downloadWorkbook(path, query, fallbackName = 'download.xlsx') {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(query || {})) if (v !== null && v !== undefined && v !== '') params.set(k, v);
-  const res = await fetch(`${path}?${params}`, { headers: { Authorization: `Bearer ${state.token}` } });
+  const res = await request(`${path}?${params}`, { headers: { Authorization: `Bearer ${state.token}` } });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new ApiError(data.error || 'Download failed.', res.status, data);
@@ -237,7 +236,7 @@ export async function downloadExport(query) {
     if (Array.isArray(v)) { for (const value of v) params.append(`${k}[]`, value); }
     else if (v !== null && v !== undefined && v !== '') params.set(k, v);
   }
-  const res = await fetch(`/api/export?${params}`, {
+  const res = await request(`/api/export?${params}`, {
     headers: { Authorization: `Bearer ${state.token}` },
   });
   if (!res.ok) {

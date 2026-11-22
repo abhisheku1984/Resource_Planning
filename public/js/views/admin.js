@@ -462,7 +462,8 @@ async function renderAccess(host) {
           h('div', { class: 'card-title' }, icon('users', 15), 'Users & access control', h('span', { class: 'count-pill' }, users.length)),
           h('div', { class: 'card-sub' }, 'Project scope and permissions for each account.'),
         ),
-        h('button', { class: 'btn btn-sm btn-primary', onclick: newUser }, icon('plus', 14), 'New user'),
+        state.user.browserDemo ? h('span', { class: 'badge badge-outline' }, 'Sample accounts only')
+          : h('button', { class: 'btn btn-sm btn-primary', onclick: newUser }, icon('plus', 14), 'New user'),
       ),
       h('div', { class: 'card-body flush' }, h('div', { class: 'table-wrap', style: { maxHeight: 'none' } }, table)),
     ),

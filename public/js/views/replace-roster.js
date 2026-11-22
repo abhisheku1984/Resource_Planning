@@ -1,10 +1,11 @@
-import { api, downloadExport, fmtNum, h, modal, mount, spinner, toast } from '../core.js';
+import { api, downloadExport, fmtNum, h, modal, mount, spinner, state, toast } from '../core.js';
 
 // Both merge and replacement use the browser's native encoder. No Office app,
 // cloud account, or function call with one argument per workbook byte.
 export function readWorkbook(file) {
   return new Promise((resolve, reject) => {
     if (!/\.xlsx$/i.test(file.name)) return reject(new Error('Choose an Excel .xlsx workbook.'));
+    if (state.user?.browserDemo && file.size > 15_000_000) return reject(new Error('Choose the sample workbook or an export from this tab.'));
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
     reader.onerror = () => reject(new Error('Could not read this file. Select the local .xlsx workbook again.'));
@@ -52,7 +53,7 @@ export function openRosterReplacement(placementPicker) {
     mount(message);
     mount(host, step('2 of 3 · Choose the complete new roster'),
       h('div', { class: 'note' }, `Export: ${archive.filename} · ${fmtNum(archive.rows)} placements. Check that your download was saved before continuing.`),
-      h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'roster-file' }, 'New full workbook (.xlsx)'), file),
+      h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'roster-file' }, state.user.browserDemo ? 'Sample workbook (unchanged fixture or export from this tab)' : 'New full workbook (.xlsx)'), file),
       placementPicker(place), h('div', { class: 'subtle' }, 'Preview does not change the current roster.'), message);
     mount(footer, cancel, preview);
   }
@@ -87,7 +88,7 @@ export function openRosterReplacement(placementPicker) {
         // checks whether the export receipt is still valid.
       }
     } }, 'Delete old roster and import');
-    host.append(h('div', { class: 'note' }, 'No row issues or duplicate placements. The old roster stays visible until the new one is ready. A private database restore point is saved before replacement.'),
+    host.append(h('div', { class: 'note' }, state.user.browserDemo ? 'This replaces only the sample roster in this tab. The export is your copy of any edits; reloading restores the original 1,000 samples.' : 'No row issues or duplicate placements. The old roster stays visible until the new one is ready. A private database restore point is saved before replacement.'),
       h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'roster-confirm' }, 'If your export is saved and these totals are correct, type REPLACE.'), confirm), message);
     mount(footer, cancel, again, apply);
   }
