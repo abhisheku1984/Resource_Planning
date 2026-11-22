@@ -1,5 +1,7 @@
 # Resource Planning Platform
 
+**[Open the interactive Resource Planning dashboard](https://abhisheku1984.github.io/Resource_Planning/)** · 1,000 fictional employees, no sign-in.
+
 Single source of truth for the workforce master: one SQLite database, Excel as
 import/export only, supervisors update records in the app.
 
@@ -37,18 +39,19 @@ updates the schema on startup; **do not run `npm run demo` or `npm run seed`
 as part of an update**. Those commands replace data. The large demo is optional
 and intended only for disposable installations.
 
-### One website link for the team
+### The GitHub website and the private app
 
-**[Open the Resource Planning website](https://abhisheku1984.github.io/Resource_Planning/)** for setup instructions and the daily roster workflow. It is a **public guide**, not a sign-in or upload site. GitHub Pages publishes only `docs/` from `main` (**Settings → Pages → Deploy from a branch → main /docs**). Never change the publishing folder to the repository root, `public/` or a data folder.
+The [website link](https://abhisheku1984.github.io/Resource_Planning/) **opens the app, not a guide**. Try **Employee Directory → search `TEST-0001` → Aarav Sen**, change a sample CRM field, then check **Audit Trail**. Project drill-down, filters, Ask and workbook downloads run inside the same website. Click the account at the bottom of the sidebar to try a sample supervisor instead of the administrator.
 
-**Try the app on GitHub, without changing your Windows installation:**
+| | GitHub Pages | Your private Windows installation |
+|---|---|---|
+| Data | The 1,000-person synthetic fixture in a separate in-memory SQLite database **per tab** | Your persistent database and signed-in users |
+| Edits | Stay in that tab while you navigate; reloading restores the sample | Shared with authorized supervisors in the same installation |
+| Workbooks | Exports download locally. For practice, import the unchanged sample or an unmodified workbook generated in that tab. Other files are refused. | Use the [daily export and replacement workflow](samples/DAILY-ROSTER.md) for actual work |
 
-1. Open [GitHub Codespaces setup for this repository](https://github.com/codespaces/new?repo=1465729572&ref=main). Review your account’s quota/billing before creating a codespace. Visiting the public guide does not create one.
-2. Select `main`, create your codespace and wait for dependency installation. In its terminal run `npm start` and leave it running.
-3. In **Ports**, find **4000**, verify its visibility is **Private**, then choose **Open in Browser**. Use a demo account on that screen. Each fresh codespace has its own synthetic roster; use the [sample workbook](samples/README.md) to test imports.
-4. Stop the codespace when finished. Its files are temporary and disappear when it is deleted. Do not upload real staff data, commit a database, or make the demo port public.
+**Do not enter real staff information or passwords on the demo.** Pages serves static files. The database engine runs in the browser, not on GitHub. There is no connection to your PC, cloud API, hosted database, or Codespace to start. For an optional separate full Node test installation, [create a private Codespace](https://github.com/codespaces/new?repo=1465729572&ref=main), review your quota, run `npm start` and open private port 4000. Stop it when finished.
 
-For daily work, all supervisors must use the same **approved private app installation**, not individual codespaces. GitHub Pages cannot run the Node API or store shared edits. Before using real data, replace the demo credentials, restrict access, protect the persistent SQLite disk and test private backups; see [Data safety](SECURITY.md).
+**Maintainers:** `npm ci` then `npm run build:pages` regenerates the static files from the existing UI, domain handlers and approved synthetic fixture. `npm run check:pages` checks for stale output. See [Pages implementation](pages-demo/README.md). Both GitHub branch publishing settings (`main /docs` or the existing `main /` with the committed Jekyll allowlist) open the dashboard at the same address. Prefer `/docs`; never publish `public/`, a database directory or exports. No Windows restart is needed for a website-only update.
 
 ### Try guided Ask on Windows without using your workforce database
 

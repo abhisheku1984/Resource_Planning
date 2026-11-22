@@ -104,7 +104,13 @@ function buildShell() {
   const main = h('div', { class: 'main' });
   const topbar = h('header', { class: 'topbar' });
   const content = h('div', { id: 'content' });
-  main.append(topbar, content);
+  main.append(topbar);
+  if (state.user.browserDemo) {
+    main.append(h('div', { class: 'demo-notice' },
+      h('strong', null, 'Sample workspace'),
+      h('span', null, 'This tab only · Changes reset on reload. Do not enter real staff data.')));
+  }
+  main.append(content);
   const assistant = createAssistant();
   mount(root, h('div', { class: 'app' }, sidebar, main, assistant.el));
   shellBuilt = true;

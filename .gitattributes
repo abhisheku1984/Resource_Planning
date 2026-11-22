@@ -8,3 +8,6 @@
 # Binary artefacts
 *.xlsx binary
 *.db binary
+*.wasm binary
+*.gz binary
+*.woff2 binary

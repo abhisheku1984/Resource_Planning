@@ -198,7 +198,8 @@ function importCard(imports) {
     h('div', { class: 'empty-icon' }, icon('upload', 22)),
     h('div', { class: 'empty-title' }, canImport ? 'Upload a daily dataset' : 'Import not permitted'),
     h('div', { class: 'empty-body' }, canImport
-      ? 'Drop an .xlsx file here or click to browse. Matches Employee IDs and keeps rows not in the file. Supervisor edits are protected.'
+      ? state.user.browserDemo ? 'Try the unchanged 1,000-row sample or an unmodified export from this tab. Real workforce files are not accepted.'
+        : 'Drop an .xlsx file here or click to browse. Matches Employee IDs and keeps rows not in the file. Supervisor edits are protected.'
       : 'Ask an administrator to grant the import capability.'),
   );
 

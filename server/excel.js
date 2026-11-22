@@ -1,4 +1,5 @@
 'use strict';
+const { sendWorkbook } = require('./send-workbook');
 const ExcelJS = require('exceljs');
 const { q, tx } = require('./db');
 const { record } = require('./audit');
@@ -225,8 +226,7 @@ async function streamWorkbook(res, user, scope, filename) {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('X-Export-Rows', String(count));
-  await wb.xlsx.write(res);
-  res.end();
+  await sendWorkbook(res, wb);
 }
 
 // ---------------------------------------------------------------------------
