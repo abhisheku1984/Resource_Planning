@@ -32,6 +32,16 @@ function acceptsLogin(password, stored) {
   return verifyPassword(password, stored || missingHash) && !!stored;
 }
 
+// Keep the same input rules on first setup, account creation and ID changes.
+// The sign-in query handles case; keep the operator's spelling for display.
+function loginEmail(value) {
+  const email = typeof value === 'string' ? value.trim() : '';
+  if (email.length > 254 || !/^[^\s@\x00-\x1f\x7f]+@[^\s@\x00-\x1f\x7f]+$/u.test(email)) {
+    throw Object.assign(new Error('Enter a valid sign-in email (up to 254 characters).'), { status: 422 });
+  }
+  return email;
+}
+
 function checkNewPassword(password) {
   if (typeof password !== 'string' || password.length < 8 || demoPasswords.includes(password)) {
     throw Object.assign(new Error('Choose a private password of at least 8 characters, not a published demo password.'), { status: 422 });
@@ -62,4 +72,4 @@ function userFromToken(token) {
   return hydrateUser(row);
 }
 
-module.exports = { ...permissions, hashPassword, verifyPassword, acceptsLogin, hasDemoHash, checkNewPassword, createSession, destroySession, userFromToken };
+module.exports = { ...permissions, hashPassword, verifyPassword, acceptsLogin, hasDemoHash, loginEmail, checkNewPassword, createSession, destroySession, userFromToken };

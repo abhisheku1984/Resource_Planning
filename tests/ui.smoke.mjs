@@ -977,7 +977,45 @@ test('private Users & access resets only the selected account; the sample never 
   assert.equal(input.value, ''); assert.ok(!body.querySelector('.overlay'));
   core.state.user.browserDemo = true;
   await renderAdmin(content, { tab: 'access' });
-  assert.doesNotMatch(flatten(content).join(' '), /Reset password|New user/);
+  assert.doesNotMatch(flatten(content).join(' '), /Reset password|New user|Change login ID/);
+});
+
+test('Change login ID confirms the saved email and signs out only after updating oneself', async t => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  const content = new El('div'); body.replaceChildren(content);
+  const users = [
+    { id: 1, role: 'admin', email: 'owner@example.test', name: 'Owner', projects: [], capabilities: {} },
+    { id: 2, role: 'supervisor', email: 'staff@example.test', name: 'Staff', projects: [], capabilities: {} },
+  ];
+  core.state.user = { id: 1, isAdmin: true }; core.setToken('private-test-token');
+  let reloads = 0; location.reload = () => reloads++;
+  t.after(() => { delete location.reload; });
+  const writes = [];
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url === '/api/users') return jsonResponse({ users, capabilities: [], gigaProjectNames: [], gigaCapabilities: [] });
+    const payload = JSON.parse(opts.body); writes.push(payload);
+    const target = users.find(u => url === `/api/users/${u.id}/login-id`);
+    assert.equal(opts.method, 'PUT'); assert.ok(target); assert.equal(payload.previousEmail, target.email);
+    if (!payload.currentPassword) return jsonResponse({ error: 'Enter your current administrator password.' }, 422);
+    target.email = payload.email; return jsonResponse({ user: { id: target.id, email: target.email } });
+  });
+  await renderAdmin(content, { tab: 'access' });
+  for (const target of [users[1], users[0]]) {
+    const row = content.querySelectorAll('tr').find(r => flatten(r).includes(target.email));
+    button(row, 'Change login ID').click();
+    const dialog = body.querySelector('.overlay'); const [email, pw] = dialog.querySelectorAll('input');
+    assert.deepEqual([email.value, pw.value, pw.attrs.type], [target.email, '', 'password']);
+    const next = `changed-${target.email}`; email.value = ` ${next} `;
+    button(dialog, 'Save login ID').click(); await settleClicks();
+    assert.match(flatten(dialog).join(' '), /Enter your current administrator password/); assert.equal(reloads, 0);
+    pw.value = 'test confirmation'; button(dialog, 'Save login ID').click(); await settleClicks();
+    assert.equal(writes.at(-1).email, next); assert.equal(pw.value, ''); assert.ok(!body.querySelector('.overlay'));
+    if (target.id === 2) {
+      assert.ok(flatten(content).includes(next)); assert.equal(core.state.token, 'private-test-token'); assert.equal(reloads, 0);
+    } else {
+      assert.equal(reloads, 1); assert.equal(core.state.token, null); assert.equal(core.state.user, null);
+    }
+  }
 });
 
 test('Edit access can rename a supervisor and replace hierarchy grants in one save', async (t) => {

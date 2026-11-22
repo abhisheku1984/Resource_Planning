@@ -1,9 +1,22 @@
 # Resource Planning Platform
 
-**[Open the interactive Resource Planning dashboard](https://abhisheku1984.github.io/Resource_Planning/)** · 1,000 fictional employees, no sign-in.
+**[Open the public sample dashboard](https://abhisheku1984.github.io/Resource_Planning/)** (1,000 fictional employees, no sign-in) · **[Try private sign-in on GitHub](#try-private-sign-in-on-github)**
 
 Single source of truth for the workforce master: one SQLite database, Excel as
 import/export only, supervisors update records in the app.
+
+## Try private sign-in on GitHub
+
+To see the **real sign-in screen in your browser**, run the app in your own GitHub Codespace. The `github.io` dashboard is a separate public sample and will never ask for a password.
+
+1. Sign in to GitHub. [Create a Codespace for this repository on `main`](https://github.com/codespaces/new?repo=1465729572&ref=main), or select **Code → Codespaces** in the repository. If you already set up accounts, [reopen that same codespace](https://github.com/codespaces) instead of creating another. Review your Codespaces quota/billing before starting.
+2. Wait for setup to finish, then enter **`npm start`** in the Codespace **Terminal**. On a fresh database, enter your chosen administrator display name, sign-in email and a **new private password** at the prompts. No password is displayed, and only this first account can sign in. On later starts, use the credentials you already set.
+3. Open the **Ports** tab, verify that **4000** is **Private**, and click its **Open in Browser** globe. This opens the app, not the source files. Sign in using your **app** email and password, not your GitHub password.
+4. Under **Administration → Users & access**, use **New user** to assign a supervisor their own email, password and scope. **Change login ID** works on your own row or another user's row. To try another account in this private preview, sign out **of the app** and sign back in while still signed in to GitHub as the codespace owner.
+
+**Where are the users saved?** In `data/resource_planning.db` on that codespace's disk. Refreshing the app or restarting the **same** codespace keeps them. A different codespace has a different database; deleting a codespace deletes its local data. Stop the codespace when finished. Do not commit its database, passwords, password hashes or session tokens to Git.
+
+**For a shared team website:** a private forwarded port is a personal preview, not a team URL. GitHub repository membership does not grant an app account (or vice versa). GitHub Pages serves static files and cannot run this Node server or securely save user accounts for other visitors. Run **one** private, HTTPS-protected app server with a persistent database for the team. The source can stay in this repository; members use their previously assigned app credentials on that server.
 
 ## Quick start (Node 22.5 or newer — nothing else)
 
@@ -46,7 +59,7 @@ The Windows sign-in page lists **no accounts**, including the administrator. Eve
 - **First launch:** double-click `start-windows.bat`. In the **launcher window on the host PC**, enter your display name, your own admin email and a unique password, then confirm it. The password is not echoed. A fresh private database has the starter workforce but only the administrator you set up can sign in. `npm start` uses the same setup. For an unattended server, run `npm run setup:admin` once in an interactive terminal on that host with the same `DATA_DIR` / `DB_FILE` first.
 - **Existing installation:** keep your current folder, database and usual launcher. Old sessions are signed out once. If you have a private admin password, use it as before. If there is no active administrator with a private password, the host window asks you to configure one **before** the server listens. If an old administrator row exists, setup updates it in place; it does not reset the roster, recreate deleted users or overwrite an existing private administrator. Previously published demo passwords are refused, even on older databases.
 - **Give someone access:** sign in as admin → **Administration → Users & access → New user**. Enter their name, email and a unique temporary password, leave **Role = Supervisor**, select their project and permissions, then **Create user**. Give just that person their credentials privately. They can change the password under their profile → **Account & session → Change password**. Your admin credentials are not needed on their device.
-- **Review before sharing:** in **Users & access**, **Reset password** assigns a new password to an existing account without changing its grants or work; it signs that user out on all devices. **Delete** revokes an unwanted account and its sessions, not the employee records it edited. If your old admin email was public and you already changed its password, create an **Administrator** with your own email, verify it in a separate browser profile, then delete the old admin while signed in as the new one. Never delete your only working administrator.
+- **Review before sharing:** in **Users & access**, **Reset password** assigns a new password to an existing account without changing its grants or work; it signs that user out on all devices. **Delete** revokes an unwanted account and its sessions, not the employee records it edited. To replace a published admin email, choose **Change login ID** on your own row and confirm with your current administrator password. Sign back in with the new email and the same password; you do not need to delete or recreate the account.
 - **Share the app, not the database.** Give colleagues the private **HTTPS address of the same running installation** (ask IT to provide it). Keep the default loopback binding behind the HTTPS proxy; unprotected LAN HTTP does not protect passwords in transit. Do not send the project folder, database, backups, a signed-in browser profile or the GitHub Pages sample as team access. On a shared PC use separate browser profiles, sign out and do not save the admin password in a shared profile.
 
 ### The GitHub website and the private app
@@ -59,7 +72,7 @@ The [website link](https://abhisheku1984.github.io/Resource_Planning/) **opens t
 | Edits | Stay in that tab while you navigate; reloading restores the sample | Shared with authorized supervisors in the same installation |
 | Workbooks | Exports download locally. For practice, import the unchanged sample or an unmodified workbook generated in that tab. Other files are refused. | Use the [daily export and replacement workflow](samples/DAILY-ROSTER.md) for actual work |
 
-**Do not enter real staff information or passwords on the demo.** Pages serves static files. The database engine runs in the browser, not on GitHub. There is no connection to your PC, cloud API, hosted database, or Codespace to start. For an optional separate full Node test installation, [create a private Codespace](https://github.com/codespaces/new?repo=1465729572&ref=main), review your quota, run `npm start` and open private port 4000. Stop it when finished.
+**Do not enter real staff information or passwords on the demo.** Pages serves static files. The database engine runs in the browser, not on GitHub. There is no connection to your PC, cloud API, hosted database, or Codespace to start. For a personal preview of the full Node app with real sign-in, [use a private Codespace](#try-private-sign-in-on-github).
 
 **Maintainers:** `npm ci` then `npm run build:pages` regenerates the static files from the existing UI, domain handlers and approved synthetic fixture. `npm run check:pages` checks for stale output. See [Pages implementation](pages-demo/README.md). Both GitHub branch publishing settings (`main /docs` or the existing `main /` with the committed Jekyll allowlist) open the dashboard at the same address. Prefer `/docs`; never publish `public/`, a database directory or exports. No Windows restart is needed for a website-only update.
 
@@ -339,6 +352,12 @@ kept: the second copy is stored under `… (2nd column)`.
 
 As an administrator, go to **Administration → Users & access**, click **Edit access** on the account’s row, change **Display name**, and click **Save changes**. This works for supervisors, other administrators, and your own account. A name-only change leaves the login email, password, and permissions untouched. Your own name and initials update immediately; another signed-in user can refresh to see their new name. Past audit entries keep the name recorded at the time.
 
+### Change a login ID or password
+
+In the private app, open **Administration → Users & access → Change login ID** on the account's row (including your own). Enter an unused sign-in email and **your current administrator password**, then click **Save login ID**. The old email stops working and all sessions for that user end. The password, internal account ID, role, project access and work history stay the same. Changing your own ID takes you back to sign-in. No email is sent.
+
+To change **your password**, open your profile → **Account & session → Change password**. To assign another user a new password, use **Users & access → Reset password**.
+
 ### Assign or change one Giga project
 
 1. Sign in as an **Administrator**. Open **Administration → Users & access → New user**.
@@ -419,6 +438,7 @@ and past attribution remain. You cannot delete yourself or the last active admin
 | `GET`/`POST`/`PATCH` | `/api/projects`, `/api/subprojects`, `/api/categories` | Hierarchy |
 | `GET`/`POST`/`PATCH` | `/api/suppliers`, `/api/groups`, `/api/fields`, `/api/users` | Configuration |
 | `PUT` | `/api/users/:id/access` | Rename an account (`name`); optionally update supervisor access and capabilities in the same save |
+| `PUT` | `/api/users/:id/login-id` | Administrator only: `{previousEmail, email, currentPassword}`. In-place login ID change; invalidates only the target user’s sessions. |
 | `DELETE` | `/api/users/:id` | Remove an account (not yourself, not the last admin) |
 | `GET` | `/api/duplicates`, `POST /api/duplicates/:id/resolve` | Review queue |
 | `GET` | `/api/export` | Excel snapshot (scope-aware) |

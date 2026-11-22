@@ -13,6 +13,7 @@ async function handle({ path, method = 'GET', body }) {
   if (!url.pathname.startsWith('/api/')) return json(404, {error:'Not a sample action.'});
   const route = url.pathname.slice(4);
   if (route.startsWith('/auth/') || (route === '/users' && method === 'POST')
+      || /^\/users\/[^/]+\/login-id$/.test(route)
       || (route.startsWith('/users/') && method === 'PATCH' && Object.hasOwn(body || {}, 'password'))) {
     return json(403, {error:'This is a sample workspace, not a sign-in service.'});
   }

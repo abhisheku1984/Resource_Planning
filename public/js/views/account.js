@@ -1,4 +1,4 @@
-import { h, api, state, setToken, modal, toast, icon, initials, fmtDateTime } from '../core.js';
+import { h, api, state, returnToSignIn, modal, toast, icon, initials } from '../core.js';
 
 export function openAccountModal() {
   const user = state.user || {};
@@ -18,7 +18,7 @@ export function openAccountModal() {
       try {
         await api('/auth/password', { method: 'POST', body: { current: current.value, next: next.value } });
         toast('Password updated', 'Please sign in again with your new password.', 'success');
-        signOut();
+        returnToSignIn();
       } catch (e) {
         mountErr(e.message);
         saveBtn.disabled = false;
@@ -83,8 +83,5 @@ export function openAccountModal() {
 
 async function signOut() {
   try { await api('/auth/logout', { method: 'POST' }); } catch { /* ignore */ }
-  setToken(null);
-  state.user = null;
-  location.hash = '';
-  location.reload();
+  returnToSignIn();
 }
