@@ -14,9 +14,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'resource_planning.db');
 
-if (DB_FILE !== ':memory:' && fs.existsSync(DB_FILE) === false) {
-  // file will be created by SQLite
-}
+const newDatabase = DB_FILE === ':memory:' || !fs.existsSync(DB_FILE);
 
 const db = new DatabaseSync(DB_FILE);
 
@@ -331,6 +329,13 @@ function migrate() {
   const add = (table, name, ddl) => {
     if (!cols(table).includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   };
+  // Sessions from before private sign-in may have been obtained using the
+  // published demo passwords. Revoke those once, not on every restart.
+  tx(() => {
+    if (db.prepare('PRAGMA user_version').get().user_version === 0) {
+      db.exec('DELETE FROM sessions; PRAGMA user_version = 1;');
+    }
+  });
   add('category_fields', 'filterable', 'filterable INTEGER NOT NULL DEFAULT 0');
   add('category_fields', 'submit_field', 'submit_field INTEGER NOT NULL DEFAULT 0');
   add('fields', 'group_name', 'group_name TEXT');
@@ -418,4 +423,4 @@ function remember(key, fn) {
   return value;
 }
 
-module.exports = { db, q, tx, DB_FILE, DATA_DIR, SCHEMA, batch, remember };
+module.exports = { db, q, tx, DB_FILE, DATA_DIR, newDatabase, SCHEMA, batch, remember };

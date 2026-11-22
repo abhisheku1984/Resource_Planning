@@ -10,7 +10,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-daily-'));
 process.env.DATA_DIR = dir; process.env.DB_FILE = path.join(dir, 'cycle.db');
 const { app } = require('../server/index');
 const { db, q } = require('../server/db');
-let server, url;
+let server, url, passwords;
 const restorePoint = path.join(dir, 'roster-backups', 'cycle.db.before-last-replace.db');
 const counts = conn => conn.prepare('SELECT (SELECT COUNT(*) FROM employees) people, (SELECT COUNT(*) FROM assignments) placements').get();
 const roster = conn => Object.values(counts(conn));
@@ -20,7 +20,8 @@ async function call(token, route, body) {
     'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }, body: body && JSON.stringify(body) });
 }
-async function login(email, password) {
+async function login(email) {
+  const password = passwords.get(email);
   const res = await call(null, '/auth/login', { email, password });
   assert.equal(res.status, 200); return (await res.json()).token;
 }
@@ -40,7 +41,7 @@ async function workbook(ids, options = {}) {
 }
 
 test.before(async () => {
-  require('../server/seed').run({ quiet: true });
+  passwords = require('./fixture-users').seedTestUsers();
   q.run(`INSERT INTO agent_actions(kind,assignment_id,summary,before_json,after_json)
     SELECT 'update_assignment',id,'Old proposal','{}','{}' FROM assignments LIMIT 1`);
   server = app.listen(0, '127.0.0.1'); await new Promise(ok => server.once('listening', ok));
@@ -49,8 +50,8 @@ test.before(async () => {
 test.after(async () => { if (server) await new Promise(ok => server.close(ok)); db.close(); fs.rmSync(dir, { recursive:true, force:true }); });
 
 test('export → preview → delete and import is admin-only, all-or-nothing and repeatable on the next day', async () => {
-  const admin = await login('admin@resourceplanning.io', 'Admin@12345');
-  const uploader = await login('sameer.khan@resourceplanning.io', 'Super@12345');
+  const admin = await login('admin@resourceplanning.io');
+  const uploader = await login('sameer.khan@resourceplanning.io');
   const before = roster(db), oldId = q.get('SELECT id FROM assignments ORDER BY id LIMIT 1').id;
   const config = () => ['users','user_projects','user_subprojects','user_capabilities','projects','subprojects','categories','fields','category_fields','suppliers'].map(t => q.get(`SELECT COUNT(*) c FROM ${t}`).c);
   const originalConfig = config();

@@ -10,7 +10,7 @@ if (!process.env.CHROME_PATH) throw Error('Set CHROME_PATH to your Chrome or Edg
 const dir = await mkdtemp(path.join(os.tmpdir(), 'rp-guided-'));
 process.env.DB_FILE = ':memory:'; process.env.DATA_DIR = dir;
 const { app } = require('../server/index'), { q, db } = require('../server/db');
-require('../server/seed').run({ quiet: true });
+const passwords = require('./fixture-users').seedTestUsers();
 const project = 'Giga One';
 const person = q.get(`SELECT g.assignment_id id, e.emp_code FROM giga_assignments g JOIN employees e ON e.id=g.employee_id
   JOIN projects p ON p.id=g.project_id WHERE p.code='NEXUS' AND g.project_name=? GROUP BY e.id HAVING count(*)=1 ORDER BY g.assignment_id LIMIT 1`, project);
@@ -37,7 +37,15 @@ try {
       }
       if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = () => unexpected('getUserMedia');
     });
-    await page.goto(base); await page.fill('#login-email', 'priya.nair@resourceplanning.io'); await page.fill('#login-pw', 'Super@12345');
+    await page.goto(base);
+    assert.deepEqual(await page.locator('form input').evaluateAll(inputs => inputs.map(i => i.value)), ['', '']);
+    assert.equal(await page.getByRole('button').allTextContents().then(labels => labels.join()), 'Sign in');
+    await page.fill('#login-email', 'priya.nair@resourceplanning.io');
+    await page.fill('#login-pw', 'incorrect');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.getByRole('alert').filter({ hasText: 'Incorrect email or password.' }).waitFor();
+    assert.equal(await page.locator('#login-pw').inputValue(), '');
+    await page.fill('#login-pw', passwords.get('priya.nair@resourceplanning.io'));
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /Employee Directory/i }).click();
     const directory = page.locator('#content');

@@ -446,6 +446,8 @@ async function renderAccess(host) {
         h('button', { class: 'btn btn-ghost btn-xs',
           title: u.role === 'admin' ? `Edit the display name for ${u.name}` : `Edit name and access for ${u.name}`,
           onclick: () => openEditor(u) }, icon('edit', 12), 'Edit access'),
+        !state.user.browserDemo && u.id !== state.user.id
+          ? h('button', { class: 'btn btn-ghost btn-xs', onclick: () => resetPassword(u) }, 'Reset password') : null,
         u.id === state.user.id
           ? h('span', { class: 'subtle', title: 'You cannot delete your own account.' }, 'Your account')
           : h('button', { class: 'btn btn-ghost btn-xs', onclick: () => deleteUser(u) }, icon('trash', 12), 'Delete'),
@@ -455,7 +457,9 @@ async function renderAccess(host) {
 
   mount(host, h('div', null,
     h('div', { class: 'note', style: { marginBottom: '14px' } }, icon('shield', 15),
-      h('span', null, 'Use Edit access to rename any account, or to change a supervisor’s project access and permissions.')),
+      h('span', null, state.user.browserDemo
+        ? 'Use Edit access to rename any account, or to change a supervisor’s project access and permissions.'
+        : 'Only administrators see this list. No accounts appear on the sign-in page. Use New user to assign a login, or Reset password for someone keeping an existing account.')),
     h('div', { class: 'card' },
       h('div', { class: 'card-head' },
         h('div', null,
@@ -608,11 +612,34 @@ async function renderAccess(host) {
     });
   }
 
+  function resetPassword(u) {
+    const pw = h('input', { class: 'input', type: 'password', autocomplete: 'new-password', required: true });
+    const error = h('div', { class: 'note warn hidden', role: 'alert' });
+    const { box } = modal({
+      onClose: () => { pw.value = ''; },
+      title: 'Reset password', subtitle: `${u.name} · ${u.email}`,
+      body: h('div', { class: 'col', style: { gap: '12px' } }, error,
+        field('New password', pw, 'Choose a unique password of at least 8 characters. This signs the user out on all devices; their access and work stay the same.')),
+      footer: h('div', { class: 'row', style: { gap: '8px' } },
+        h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+        h('button', { class: 'btn btn-primary', onclick: async (e) => {
+          const button = e.currentTarget; button.disabled = true;
+          try {
+            await api(`/users/${u.id}`, { method: 'PATCH', body: { password: pw.value } });
+            if (box.isConnected) closeModal();
+            toast('Password reset', 'Give the new password only to this person.', 'success');
+          } catch (err) {
+            error.textContent = err.message; error.classList.remove('hidden'); button.disabled = false;
+          }
+        } }, 'Set password')),
+    });
+  }
+
   function newUser() {
     const name = h('input', { class: 'input', placeholder: 'Full name', maxlength: 160, required: true });
     const email = h('input', { class: 'input', type: 'email', placeholder: 'name@company.com' });
     const title = h('input', { class: 'input', placeholder: 'Job title (optional)' });
-    const pw = h('input', { class: 'input', type: 'password', placeholder: 'At least 8 characters' });
+    const pw = h('input', { class: 'input', type: 'password', autocomplete: 'new-password', placeholder: 'At least 8 characters' });
 
     const controls = buildAccessControls();
     const role = h('select', { class: 'select', onchange: () => controls.setDisabled(role.value === 'admin') },

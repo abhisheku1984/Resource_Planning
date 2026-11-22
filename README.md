@@ -18,7 +18,7 @@ For a **new checkout** of `main`:
 git clone --branch main https://github.com/abhisheku1984/Resource_Planning.git
 cd Resource_Planning
 npm ci
-npm start         # http://localhost:4000
+npm start         # complete private admin setup in the terminal, then open http://localhost:4000
 ```
 
 To **update an existing installation on Windows**, stop the running server with
@@ -39,6 +39,16 @@ updates the schema on startup; **do not run `npm run demo` or `npm run seed`
 as part of an update**. Those commands replace data. The large demo is optional
 and intended only for disposable installations.
 
+### Private sign-in and team access
+
+The Windows sign-in page lists **no accounts**, including the administrator. Everyone enters their own assigned email and password. There is no self-registration or public account lookup. The browser’s password manager can still remember a login on that browser profile.
+
+- **First launch:** double-click `start-windows.bat`. In the **launcher window on the host PC**, enter your display name, your own admin email and a unique password, then confirm it. The password is not echoed. A fresh private database has the starter workforce but only the administrator you set up can sign in. `npm start` uses the same setup. For an unattended server, run `npm run setup:admin` once in an interactive terminal on that host with the same `DATA_DIR` / `DB_FILE` first.
+- **Existing installation:** keep your current folder, database and usual launcher. Old sessions are signed out once. If you have a private admin password, use it as before. If there is no active administrator with a private password, the host window asks you to configure one **before** the server listens. If an old administrator row exists, setup updates it in place; it does not reset the roster, recreate deleted users or overwrite an existing private administrator. Previously published demo passwords are refused, even on older databases.
+- **Give someone access:** sign in as admin → **Administration → Users & access → New user**. Enter their name, email and a unique temporary password, leave **Role = Supervisor**, select their project and permissions, then **Create user**. Give just that person their credentials privately. They can change the password under their profile → **Account & session → Change password**. Your admin credentials are not needed on their device.
+- **Review before sharing:** in **Users & access**, **Reset password** assigns a new password to an existing account without changing its grants or work; it signs that user out on all devices. **Delete** revokes an unwanted account and its sessions, not the employee records it edited. If your old admin email was public and you already changed its password, create an **Administrator** with your own email, verify it in a separate browser profile, then delete the old admin while signed in as the new one. Never delete your only working administrator.
+- **Share the app, not the database.** Give colleagues the private **HTTPS address of the same running installation** (ask IT to provide it). Keep the default loopback binding behind the HTTPS proxy; unprotected LAN HTTP does not protect passwords in transit. Do not send the project folder, database, backups, a signed-in browser profile or the GitHub Pages sample as team access. On a shared PC use separate browser profiles, sign out and do not save the admin password in a shared profile.
+
 ### The GitHub website and the private app
 
 The [website link](https://abhisheku1984.github.io/Resource_Planning/) **opens the app, not a guide**. Try **Employee Directory → search `TEST-0001` → Aarav Sen**, change a sample CRM field, then check **Audit Trail**. Project drill-down, filters, Ask and workbook downloads run inside the same website. Click the account at the bottom of the sidebar to try a sample supervisor instead of the administrator.
@@ -55,24 +65,9 @@ The [website link](https://abhisheku1984.github.io/Resource_Planning/) **opens t
 
 ### Try guided Ask on Windows without using your workforce database
 
-Run **`START-PREVIEW.cmd`** and open **<http://localhost:4110>** when the server is running. By default the preview binds to loopback and uses `data/guided-preview.db`, not the normal `data/resource_planning.db`. If you have activated the workbook preview below, the launcher prints and uses that copy instead. The first start creates synthetic records; no import or reset is needed. Sign in as the demo NEXUS supervisor below and [try a guided update](#try-a-guided-update). Press **Ctrl+C** to stop the preview.
+Run **`START-PREVIEW.cmd`** and open **<http://localhost:4110>** when the server is running. By default the preview binds to loopback and uses `data/guided-preview.db`, not the normal `data/resource_planning.db`. If you have activated the workbook preview below, the launcher prints and uses that copy instead. The first start creates synthetic records; no import or reset is needed. Set up or sign in with your own administrator for that preview, or use a supervisor you created for the relevant project, and [try a guided update](#try-a-guided-update). Press **Ctrl+C** to stop the preview.
 
 For the 1,000-person test roster, see the [sample workbook and preview walkthrough](samples/README.md). For recurring full dumps, follow the [administrator’s daily export and replacement checklist](samples/DAILY-ROSTER.md). Both upload and export work without Excel or Microsoft 365.
-
-### Demo logins
-
-| Role | Email | Password |
-|---|---|---|
-| Administrator | `admin@resourceplanning.io` | `Admin@12345` |
-| Supervisor — NEXUS | `priya.nair@resourceplanning.io` | `Super@12345` |
-| Supervisor — ATLAS + HORIZON | `rohit.verma@resourceplanning.io` | `Super@12345` |
-| Supervisor — ORBIT | `meera.iyer@resourceplanning.io` | `Super@12345` |
-| Supervisor — NEXUS/ATLAS/ORBIT/VERTEX | `sameer.khan@resourceplanning.io` | `Super@12345` |
-| Supervisor — VERTEX + ZENITH | `arun.pillai@resourceplanning.io` | `Super@12345` |
-| Read-only reviewer | `kavita.rao@resourceplanning.io` | `Super@12345` |
-| HR uploader | `hr.upload@resourceplanning.io` | `Hr@1234567` |
-
-Windows: double-click **`start-windows.bat`**. It installs missing app dependencies on first use, starts the server, and opens the browser. Ask is text-only; there is no microphone or speaker setup. Use an **Administrator** login for Administration.
 
 ### Employee Directory
 
@@ -80,18 +75,18 @@ The Directory opens directly to **Employee records** and the filters. The table'
 
 ### Checking the five filter dropdowns
 
-With the server running in one window, open a second one:
+With the server running in one window, open a second one. Supply `EMAIL` and `PASSWORD` for your own account through the process environment (not a checked-in file). No demo credentials are assumed:
 
 ```bash
 npm run check:filters
 ```
 
-It signs in as the administrator, loads the Employee Directory the same way the
+It signs in with that account, loads the Employee Directory the same way the
 browser does, and prints the values plus counts behind **Billing Status, Bench
 Category, BL Status, Offsite/Onsite** and **Giga Project Name**. Then it selects
 one value in each and confirms the row total becomes exactly the number the
 dropdown advertised.
-Set `BASE_URL`, `EMAIL` or `PASSWORD` to point it elsewhere.
+Set `BASE_URL` only if you need to point it to a different trusted app server. Clear the credential variables when finished.
 
 ### Tests
 
@@ -128,7 +123,7 @@ and **How do I import a workbook?** give app instructions, not a database action
 
 Open **Ask → Update an employee** (or **कर्मचारी अपडेट करें**). You can also
 start with a goal, without opening a form or memorizing its field keys. Here is
-a conversation you can try in the **fresh demo** as Priya. In your workbook,
+a conversation you can try with the **starter roster** using an account with edit/CRM access to the matching project. In your workbook,
 use an employee ID and Giga Project Name from your own Directory instead.
 
 | You | What happens |
@@ -316,8 +311,7 @@ Your master file has no **Project / Subproject / Category** column — a
 spreadsheet row has nowhere to say which part of the business the person sits
 in. So the portal asks once, and files the rows there:
 
-1. Sign in as an importer (`admin`, or a supervisor with `import.data` — the
-   demo user is `hr.upload@resourceplanning.io` / `Hr@1234567`).
+1. Sign in with your assigned importer account (an administrator or a supervisor with `import.data`).
 2. **Data Hub → Import template** downloads `resource-planning-import-template.xlsx`:
    your own 65 headers, in your own order, with `Project, Subproject, Category`
    prepended. A **How to use** sheet and one example row are included — delete
@@ -445,6 +439,7 @@ Errors are JSON: `{ error, errors?, code?, current? }` with `401` unauthenticate
 
 `npm test` runs the following suites without modifying your application database:
 
+* `tests/private-setup.test.js` — isolated first-run and legacy database upgrades, including session invalidation, no default accounts and preservation of private accounts, grants and rosters.
 * `tests/api.test.js` — HTTP integration tests against a temporary database, covering all twelve required
   scenarios (shared project with six supervisors, multi-project supervisor,
   differing category columns, concurrent edits with conflict detection, CRM

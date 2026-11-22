@@ -79,15 +79,11 @@ Ask sends typed messages to the local app server. It does not request microphone
 Default: `HOST=127.0.0.1` → **only this computer can connect**. Your colleague
 on the same Wi-Fi cannot open the app, even if they know the port.
 
-To share it deliberately on a trusted network:
-
-```powershell
-$env:HOST="0.0.0.0"; npm start
-```
-
-or run `start-windows.bat --lan`. The launcher prints a visible warning when you
-do this. Only use it on a network you trust, because at that point the app's own
-login is the only thing protecting the data.
+For real team access, keep the app on loopback and have IT put a restricted
+**HTTPS** reverse proxy in front of it. Share that address, not a copy of the
+database or the admin password. `start-windows.bat --lan` binds directly to the
+network over **unencrypted HTTP**; that switch is not TLS or a safe way to
+send real credentials over a network.
 
 ### Content-Security-Policy
 
@@ -116,8 +112,9 @@ These are the controls actually implemented (each has a test):
 
 * **Passwords** are hashed with `scrypt` (64-byte digest, per-user random salt)
   and compared in constant time. Plaintext passwords are never stored.
+* **No login directory, click-to-fill accounts or public setup endpoint.** On a new host you choose the administrator in the launcher terminal. An upgrade refuses the previously published passwords and signs out pre-upgrade sessions. Private accounts and their grants are retained. Only signed-in administrators can list, create, reset or delete accounts.
 * **Sessions** are 32-byte random tokens with a 7-day expiry, stored
-  server-side; changing your password invalidates all sessions.
+  server-side; changing or resetting a password invalidates all sessions for that account.
 * **Authorization is server-side.** Every read and write re-checks the caller's
   project grant. Hiding a button in the browser is never the protection — the API
   returns `403` regardless. Tests assert this for each verb on a foreign project.
@@ -179,9 +176,7 @@ I would rather you know these than discover them later.
    That is acceptable on one machine (`127.0.0.1` never leaves the host). It is
    **not** acceptable if you expose the app on a LAN — add a reverse proxy with
    TLS (e.g. Caddy or nginx) before doing that.
-2. **Demo accounts ship with known passwords** and the login screen lists them.
-   Before real use: delete the seeded users, create your own accounts, and remove
-   the demo panel from `public/js/views/login.js`.
+2. **Existing credentials may already have been shared.** The three historical demo passwords no longer work. Review **Users & access**, remove unused accounts and reset any other shared passwords before granting team access. Use a new private admin email if your former ID was publicly documented. The app cannot remove credentials saved by someone’s browser or erase past copies of a database.
 3. **The SQLite file is not encrypted at rest.** Anyone with file access (or the
    laptop in the wrong hands) can read it. Use full-disk encryption — BitLocker
    on Windows — and keep the project folder out of OneDrive/Dropbox sync, which
@@ -198,8 +193,8 @@ I would rather you know these than discover them later.
 ## 7. Pre-flight checklist for real data
 
 - [ ] Server bound to `127.0.0.1` (the default)
-- [ ] Seeded demo users deleted; your own admin account created
-- [ ] Demo credentials panel removed from the login page
+- [ ] Own administrator email and unique private password verified
+- [ ] Unneeded users deleted; each teammate has an individual supervisor login with only the necessary scope
 - [ ] BitLocker (or equivalent) enabled on the laptop
 - [ ] Project folder **not** inside OneDrive / Dropbox / Google Drive
 - [ ] Antivirus exclusion in place only if scans are slowing the database

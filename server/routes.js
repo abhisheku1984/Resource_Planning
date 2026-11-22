@@ -41,7 +41,7 @@ const asInt = (v) => (v === undefined || v === null || v === '' ? null : Number(
 router.post('/auth/login', wrap((req, res) => {
   const { email, password } = req.body || {};
   const user = q.get('SELECT * FROM users WHERE lower(email) = lower(?) AND active = 1', String(email || '').trim());
-  if (!user || !auth.verifyPassword(String(password || ''), user.password_hash)) {
+  if (!auth.acceptsLogin(password, user?.password_hash)) {
     return res.status(401).json({ error: 'Incorrect email or password.' });
   }
   const token = auth.createSession(user.id);
@@ -64,9 +64,11 @@ router.post('/auth/password', requireAuth, wrap((req, res) => {
   if (!auth.verifyPassword(String(current || ''), row.password_hash)) {
     return res.status(422).json({ error: 'Current password is incorrect.' });
   }
-  if (String(nextPw || '').length < 8) return res.status(422).json({ error: 'Use at least 8 characters.' });
-  q.run('UPDATE users SET password_hash = ? WHERE id = ?', auth.hashPassword(String(nextPw)), req.user.id);
-  q.run('DELETE FROM sessions WHERE user_id = ?', req.user.id);
+  auth.checkNewPassword(nextPw);
+  tx(() => {
+    q.run('UPDATE users SET password_hash = ? WHERE id = ?', auth.hashPassword(nextPw), req.user.id);
+    q.run('DELETE FROM sessions WHERE user_id = ?', req.user.id);
+  });
   res.json({ ok: true });
 }));
 
@@ -823,7 +825,7 @@ router.post('/users', requireAuth, requireAdmin, wrap((req, res) => {
   const role = body.role === 'admin' ? 'admin' : 'supervisor';
   if (role === 'admin' && body.gigaProjectName !== undefined) throw access.invalid('Administrator accounts cannot be restricted to a Giga project.');
   if (!email) throw access.invalid('Email is required.');
-  if (typeof body.password !== 'string' || body.password.length < 8) return res.status(422).json({ error: 'Use a password of at least 8 characters.' });
+  auth.checkNewPassword(body.password);
   const user = tx(() => {
     if (q.get('SELECT id FROM users WHERE lower(email) = lower(?)', email)) {
       throw Object.assign(new Error('A user with that email already exists.'), { status: 422 });
@@ -875,9 +877,10 @@ router.patch('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
       if (body[k] === undefined) continue;
       sets.push(`${k} = ?`); args.push(body[k]);
     }
-    if (body.password) {
-      if (String(body.password).length < 8) throw access.invalid('Use a password of at least 8 characters.');
-      sets.push('password_hash = ?'); args.push(auth.hashPassword(String(body.password)));
+    if (Object.hasOwn(body, 'password')) {
+      auth.checkNewPassword(body.password);
+      sets.push('password_hash = ?'); args.push(auth.hashPassword(body.password));
+      q.run('DELETE FROM sessions WHERE user_id = ?', id);
     }
     if (sets.length) {
       q.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, ...args, id);

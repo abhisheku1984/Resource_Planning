@@ -7,9 +7,10 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "setup:admin": "node --disable-warning=ExperimentalWarning server/private-setup.js",
     "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
     "demo": "node --disable-warning=ExperimentalWarning server/gen-dummy.js",
-    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 tests/api.test.js tests/ui.smoke.mjs tests/guide.test.mjs tests/workbook.test.js tests/roster-cycle.test.js tests/pages.test.js",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 tests/private-setup.test.js tests/api.test.js tests/ui.smoke.mjs tests/guide.test.mjs tests/workbook.test.js tests/roster-cycle.test.js tests/pages.test.js",
     "seed": "node --disable-warning=ExperimentalWarning server/seed.js --reset",
     "check:filters": "node --disable-warning=ExperimentalWarning scripts/check-filters.js",
     "ask:check": "node --disable-warning=ExperimentalWarning tests/guide.browser.mjs",

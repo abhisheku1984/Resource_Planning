@@ -13,13 +13,16 @@
  *
  * Options (environment variables):
  *   BASE_URL  default http://localhost:4000
- *   EMAIL     default admin@resourceplanning.io
- *   PASSWORD  default Admin@12345
+ *   EMAIL     your assigned sign-in email (required)
+ *   PASSWORD  your own password (required; never commit it)
  */
 
 const BASE = (process.env.BASE_URL || 'http://localhost:4000').replace(/\/$/, '');
-const EMAIL = process.env.EMAIL || 'admin@resourceplanning.io';
-const PASSWORD = process.env.PASSWORD || 'Admin@12345';
+const { EMAIL, PASSWORD } = process.env;
+if (!EMAIL || !PASSWORD) {
+  console.error('Set EMAIL and PASSWORD for your own account before running the check.');
+  process.exit(1);
+}
 
 // The five dimensions the filter is allowed to expose.
 const FIVE = ['billing_status', 'bench_category', 'bl_status', 'offsite_onsite', 'giga_project_name'];
@@ -56,11 +59,11 @@ async function api(path, token, body) {
   try {
     token = (await api('/auth/login', null, { email: EMAIL, password: PASSWORD })).token;
   } catch (err) {
-    console.error(`\nCould not sign in as ${EMAIL}: ${err.message}`);
+    console.error(`\nCould not sign in: ${err.message}`);
     console.error('Check that the server is running and the account details are correct.');
     process.exit(1);
   }
-  console.log(`Signed   ${EMAIL}\n`);
+  console.log('Signed in.\n');
 
   const started = Date.now();
   const page = await api('/employees?pageSize=25', token);

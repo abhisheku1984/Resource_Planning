@@ -1,16 +1,9 @@
 import { h, mount, icon, api, setToken, state, spinner } from '../core.js';
 
-const DEMO = [
-  { email: 'admin@resourceplanning.io', password: 'Admin@12345', label: 'Administrator', detail: 'Full access · all projects' },
-  { email: 'priya.nair@resourceplanning.io', password: 'Super@12345', label: 'Supervisor · 1 project', detail: 'Nexus only' },
-  { email: 'sameer.khan@resourceplanning.io', password: 'Super@12345', label: 'Supervisor · 3 projects', detail: 'Nexus, Atlas, Orbit' },
-  { email: 'kavita.rao@resourceplanning.io', password: 'Super@12345', label: 'Read-only reviewer', detail: 'Cannot edit or use CRM' },
-];
-
 export function renderLogin(root, onSuccess, notice = '') {
   const emailInput = h('input', { class: 'input', type: 'email', name: 'email', autocomplete: 'username', placeholder: 'you@company.com', required: true });
   const pwInput = h('input', { class: 'input', type: 'password', name: 'password', autocomplete: 'current-password', placeholder: 'Enter your password', required: true });
-  const errBox = h('div', { class: 'hidden' });
+  const errBox = h('div', { class: 'hidden', role: 'alert' });
   const submitBtn = h('button', { class: 'btn btn-primary btn-block', type: 'submit', style: { height: '38px' } }, 'Sign in');
   const form = h('form', { onsubmit: submit, novalidate: true },
     h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'login-email' }, 'Work email'), emailInput),
@@ -38,6 +31,7 @@ export function renderLogin(root, onSuccess, notice = '') {
       state.user = data.user;
       onSuccess();
     } catch (err) {
+      if (err.status === 401) pwInput.value = '';
       showError(err.message || 'Sign-in failed.');
       submitBtn.disabled = false;
       submitBtn.replaceChildren('Sign in');
@@ -48,24 +42,6 @@ export function renderLogin(root, onSuccess, notice = '') {
     mount(errBox, h('div', { class: 'note warn', style: { marginTop: '14px' } }, icon('alert', 15), msg));
     errBox.classList.remove('hidden');
   }
-
-  const demoList = h('div', { class: 'auth-demo' },
-    h('div', { style: { marginBottom: '7px' } }, h('strong', null, 'Demo accounts'), ' — click to fill'),
-    ...DEMO.map((d) => h('div', { class: 'demo-row' },
-      h('div', { class: 'col' },
-        h('span', { style: { fontWeight: '600', color: 'var(--text)' } }, d.label),
-        h('span', { class: 'subtle', style: { fontSize: '11px' } }, d.detail),
-      ),
-      h('button', {
-        type: 'button',
-        onclick: () => {
-          emailInput.value = d.email;
-          pwInput.value = d.password;
-          emailInput.focus();
-        },
-      }, 'Use'),
-    )),
-  );
 
   mount(root,
     h('div', { class: 'auth-shell' },
@@ -93,10 +69,9 @@ export function renderLogin(root, onSuccess, notice = '') {
       h('main', { class: 'auth-main' },
         h('div', { class: 'auth-card' },
           h('div', { class: 'auth-title' }, 'Sign in'),
-          h('div', { class: 'auth-sub' }, 'Use your work account to access your authorized projects.'),
+          h('div', { class: 'auth-sub' }, 'Enter your own work email and password to access your projects.'),
           notice ? h('div', { class: 'note warn', style: { marginBottom: '14px' } }, icon('alert', 15), notice) : null,
           form,
-          demoList,
         ),
       ),
     ),

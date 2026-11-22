@@ -66,7 +66,15 @@ if not exist "node_modules\express" (
   )
 )
 
-REM ---- 3. start the server and open the browser ---------------------------
+REM ---- 3. Finish private setup before opening a browser. No reset on upgrade.
+call npm.cmd run setup:admin
+if errorlevel 1 (
+  echo  Could not finish private setup. See the message above.
+  pause
+  exit /b 1
+)
+
+REM ---- 4. start the server and open the browser ---------------------------
 REM  By default the server only listens on this computer (127.0.0.1).
 REM  Run  start-windows.bat --lan  to let other people on your network connect.
 set BIND=127.0.0.1
@@ -76,11 +84,12 @@ if "%BIND%"=="127.0.0.1" (
   echo  Privacy: the server will accept connections from THIS computer only.
 ) else (
   echo  WARNING: listening on all network interfaces - other machines on your
-  echo           network can reach this app. Use only on a trusted network.
+  echo           network can reach this app over plain HTTP. For real sign-ins,
+  echo           use an IT-managed HTTPS address, not a public or unprotected port.
 )
 echo.
 echo  Starting the server on http://localhost:4000
-echo  Sign in with  priya.nair@resourceplanning.io  /  Super@12345
+echo  Sign in with the private account assigned to you.
 echo.
 echo  Press Ctrl+C in this window to stop the server.
 echo.
@@ -88,7 +97,7 @@ echo.
 start "" /b cmd /c "timeout /t 4 >nul & start http://localhost:4000"
 
 set HOST=%BIND%
-call npm start
+call npm.cmd start
 echo.
 echo  Server stopped.
 pause
