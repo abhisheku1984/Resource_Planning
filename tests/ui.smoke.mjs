@@ -369,14 +369,30 @@ test('core helpers render without a browser', () => {
   assert.ok(core.fmtRelative('2026-11-19 10:00:00').length > 0);
 });
 
-test('login view renders the demo accounts', async () => {
+test('private sign-in requests no directory and only submits manually entered credentials', async (t) => {
   const { renderLogin } = await import('../public/js/views/login.js');
   const root = new El('div');
-  renderLogin(root, () => {}, '');
-  assert.equal(root.children.length, 1);
-  const html = JSON.stringify(flatten(root));
-  assert.ok(html.includes('Sign in'));
-  assert.ok(html.includes('Administrator'));
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', (url, opts) => {
+    requests.push({ url, opts });
+    return jsonResponse({ error: 'Incorrect email or password.' }, 401);
+  });
+  renderLogin(root, () => assert.fail('bad credentials must not start a session'));
+  assert.deepEqual(requests, []);
+  assert.deepEqual(root.querySelectorAll('input').map(i => [i.attrs.type, i.value]), [['email', ''], ['password', '']]);
+  assert.deepEqual(root.querySelectorAll('button').map(b => flatten(b).join('')), ['Sign in']);
+  assert.doesNotMatch(flatten(root).join(' '), /Demo accounts|click to fill|Full access|@resourceplanning/i);
+  const email = root.querySelector('#login-email'), pw = root.querySelector('#login-pw');
+  email.value = ' someone@example.test '; pw.value = 'not their password';
+  await root.querySelector('form').listeners.submit[0]({ preventDefault() {} });
+  assert.deepEqual(requests.map(({ url, opts }) => [url, opts.method, JSON.parse(opts.body)]),
+    [['/api/auth/login', 'POST', { email: email.value.trim(), password: 'not their password' }]]);
+  assert.match(flatten(root).join(' '), /Incorrect email or password/);
+  assert.doesNotMatch(flatten(root).join(' '), /session expired/);
+  assert.equal(pw.value, '');
+  core.setToken('expired-test-session');
+  await assert.rejects(core.api('/bootstrap'), /Your session expired/);
+  assert.equal(core.state.token, null);
 });
 
 function flatten(node, out = []) {
@@ -944,6 +960,24 @@ test('New user submits the form with its grants; Delete requires confirmation', 
   await settleClicks();
   assert.equal(deletes().length, 1);
   assert.equal(fetch.mock.calls.at(-1).arguments[1].method, 'GET', 'refresh the user list after deletion');
+});
+
+test('private Users & access resets only the selected account; the sample never asks for a password', async (t) => {
+  const { renderAdmin } = await import('../public/js/views/admin.js');
+  const content = new El('div'); body.replaceChildren(content);
+  core.state.user = { id: 1, isAdmin: true };
+  const fetch = t.mock.method(globalThis, 'fetch');
+  await renderAdmin(content, { tab: 'access' });
+  button(content, 'Reset password').click();
+  const modal = body.querySelector('.overlay'), input = modal.querySelector('input');
+  assert.deepEqual([input.attrs.type, input.attrs.autocomplete, input.value], ['password', 'new-password', '']);
+  input.value = 'test assigned password'; button(modal, 'Set password').click(); await settleClicks();
+  const patch = fetch.mock.calls.find(({ arguments: [url, opts] }) => url === '/api/users/7' && opts.method === 'PATCH');
+  assert.deepEqual(JSON.parse(patch.arguments[1].body), { password: 'test assigned password' });
+  assert.equal(input.value, ''); assert.ok(!body.querySelector('.overlay'));
+  core.state.user.browserDemo = true;
+  await renderAdmin(content, { tab: 'access' });
+  assert.doesNotMatch(flatten(content).join(' '), /Reset password|New user/);
 });
 
 test('Edit access can rename a supervisor and replace hierarchy grants in one save', async (t) => {

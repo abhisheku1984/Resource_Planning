@@ -12,7 +12,10 @@ async function handle({ path, method = 'GET', body }) {
   const url = new URL(path, 'https://sample.invalid');
   if (!url.pathname.startsWith('/api/')) return json(404, {error:'Not a sample action.'});
   const route = url.pathname.slice(4);
-  if (route.startsWith('/auth/') || (route === '/users' && method === 'POST')) return json(403, {error:'This is a sample workspace, not a sign-in service.'});
+  if (route.startsWith('/auth/') || (route === '/users' && method === 'POST')
+      || (route.startsWith('/users/') && method === 'PATCH' && Object.hasOwn(body || {}, 'password'))) {
+    return json(403, {error:'This is a sample workspace, not a sign-in service.'});
+  }
   if (route === '/demo/personas' && method === 'GET') return json(200, { personas: q.all('SELECT id,name,title FROM users WHERE active=1 ORDER BY id') });
   if (route === '/demo/persona' && method === 'POST') {
     if (!q.get('SELECT id FROM users WHERE id=? AND active=1', body.id)) return json(422, {error:'Choose a sample account.'});

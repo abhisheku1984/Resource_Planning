@@ -13,7 +13,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ExcelJS = require('exceljs');
 const { q, tx, DATA_DIR } = require('./db');
-const auth = require('./auth');
 const schema = require('./schema');
 const fielddefs = require('./fielddefs');
 const { record } = require('./audit');
@@ -158,19 +157,19 @@ async function run({ rows = 12000, reset = true, writeExcel = true, quiet = fals
   const counts = tx(() => {
     /* ---------------- users ---------------- */
     const USERS = [
-      { email: 'admin@resourceplanning.io', name: 'Ananya Deshmukh', role: 'admin', title: 'HR Systems Administrator', password: 'Admin@12345', projects: '*' },
-      { email: 'priya.nair@resourceplanning.io', name: 'Priya Nair', role: 'supervisor', title: 'Delivery Supervisor — Nexus', password: 'Super@12345', projects: ['NEXUS'] },
-      { email: 'rohit.verma@resourceplanning.io', name: 'Rohit Verma', role: 'supervisor', title: 'Delivery Supervisor — Atlas & Horizon', password: 'Super@12345', projects: ['ATLAS', 'HORIZON'] },
-      { email: 'meera.iyer@resourceplanning.io', name: 'Meera Iyer', role: 'supervisor', title: 'Delivery Supervisor — Orbit', password: 'Super@12345', projects: ['ORBIT'] },
-      { email: 'sameer.khan@resourceplanning.io', name: 'Sameer Khan', role: 'supervisor', title: 'Programme Supervisor — Multi', password: 'Super@12345', projects: ['NEXUS', 'ATLAS', 'ORBIT', 'VERTEX'] },
-      { email: 'arun.pillai@resourceplanning.io', name: 'Arun Pillai', role: 'supervisor', title: 'Delivery Supervisor — Vertex & Zenith', password: 'Super@12345', projects: ['VERTEX', 'ZENITH'] },
-      { email: 'kavita.rao@resourceplanning.io', name: 'Kavita Rao', role: 'supervisor', title: 'Read-only Reviewer', password: 'Super@12345', projects: ['NEXUS', 'ORBIT'], readonly: true },
-      { email: 'hr.upload@resourceplanning.io', name: 'HR Data Team', role: 'supervisor', title: 'HR Master Data Uploader', password: 'Hr@1234567', projects: [], uploader: true },
+      { email: 'admin@resourceplanning.io', name: 'Ananya Deshmukh', role: 'admin', title: 'HR Systems Administrator', projects: '*' },
+      { email: 'priya.nair@resourceplanning.io', name: 'Priya Nair', role: 'supervisor', title: 'Delivery Supervisor — Nexus', projects: ['NEXUS'] },
+      { email: 'rohit.verma@resourceplanning.io', name: 'Rohit Verma', role: 'supervisor', title: 'Delivery Supervisor — Atlas & Horizon', projects: ['ATLAS', 'HORIZON'] },
+      { email: 'meera.iyer@resourceplanning.io', name: 'Meera Iyer', role: 'supervisor', title: 'Delivery Supervisor — Orbit', projects: ['ORBIT'] },
+      { email: 'sameer.khan@resourceplanning.io', name: 'Sameer Khan', role: 'supervisor', title: 'Programme Supervisor — Multi', projects: ['NEXUS', 'ATLAS', 'ORBIT', 'VERTEX'] },
+      { email: 'arun.pillai@resourceplanning.io', name: 'Arun Pillai', role: 'supervisor', title: 'Delivery Supervisor — Vertex & Zenith', projects: ['VERTEX', 'ZENITH'] },
+      { email: 'kavita.rao@resourceplanning.io', name: 'Kavita Rao', role: 'supervisor', title: 'Read-only Reviewer', projects: ['NEXUS', 'ORBIT'], readonly: true },
+      { email: 'hr.upload@resourceplanning.io', name: 'HR Data Team', role: 'supervisor', title: 'HR Master Data Uploader', projects: [], uploader: true },
     ];
     const userIds = new Map();
     for (const u of USERS) {
       const r = q.run('INSERT INTO users (email, name, role, title, password_hash) VALUES (?, ?, ?, ?, ?)',
-        u.email, u.name, u.role || 'supervisor', u.title, auth.hashPassword(u.password));
+        u.email, u.name, u.role || 'supervisor', u.title, '');
       userIds.set(u.email, Number(r.lastInsertRowid));
     }
     const admin = { id: userIds.get('admin@resourceplanning.io'), name: 'Ananya Deshmukh', isAdmin: true, role: 'admin' };

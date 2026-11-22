@@ -39,7 +39,7 @@ test('published demo has only the pinned TEST fixture, not workbooks, sessions o
   assert.equal(columns.bench_category.filter(v => v === 'Bench').length,200);
   assert.ok(personas.length && personas.every(p => Object.keys(p).sort().join(',') === 'id,name,role,title'));
   assert.deepEqual(Object.keys(reference).sort(),['categories','category_fields','employee_groups','fields','projects','subprojects','suppliers','user_capabilities','user_projects']);
-  for (const name of ['workspace.js','engine.js']) assert.doesNotMatch(fs.readFileSync(path.join(docs,name),'utf8'), /Admin@12345|Super@12345|@resourceplanning\.io|rp\.token|localhost:\d/);
+  for (const name of ['workspace.js','engine.js']) assert.doesNotMatch(fs.readFileSync(path.join(docs,name),'utf8'), /Admin@12345|Super@12345|Hr@1234567|@resourceplanning\.io|rp\.token|localhost:\d/);
 });
 
 test('shipped static build matches source and never opens an operator DB', t => {

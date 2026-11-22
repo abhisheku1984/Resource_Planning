@@ -20,6 +20,24 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(a, b);
 }
 
+// Historical credentials are public test fixtures, not private credentials.
+// Keep this policy in the Node auth module; it is not shipped in browser JS.
+const demoPasswords = ['Admin@12345', 'Super@12345', 'Hr@1234567'];
+const hasDemoHash = hash => demoPasswords.some(password => verifyPassword(password, hash));
+// A missing/inactive account should not skip the expensive comparison and
+// advertise whether that email exists. No fallback hash can grant a session.
+const missingHash = `${'00'.repeat(16)}:${'00'.repeat(64)}`;
+function acceptsLogin(password, stored) {
+  if (typeof password !== 'string' || demoPasswords.includes(password)) return false;
+  return verifyPassword(password, stored || missingHash) && !!stored;
+}
+
+function checkNewPassword(password) {
+  if (typeof password !== 'string' || password.length < 8 || demoPasswords.includes(password)) {
+    throw Object.assign(new Error('Choose a private password of at least 8 characters, not a published demo password.'), { status: 422 });
+  }
+}
+
 const SESSION_DAYS = 7;
 
 function createSession(userId) {
@@ -37,11 +55,11 @@ function userFromToken(token) {
   if (!token) return null;
   const row = q.get(
     `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-      WHERE s.token = ? AND s.expires_at > datetime('now') AND u.active = 1`,
+      WHERE s.token = ? AND julianday(s.expires_at) > julianday('now') AND u.active = 1`,
     token
   );
   if (!row) return null;
   return hydrateUser(row);
 }
 
-module.exports = { ...permissions, hashPassword, verifyPassword, createSession, destroySession, userFromToken };
+module.exports = { ...permissions, hashPassword, verifyPassword, acceptsLogin, hasDemoHash, checkNewPassword, createSession, destroySession, userFromToken };

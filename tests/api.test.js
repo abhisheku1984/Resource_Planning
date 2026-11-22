@@ -18,15 +18,15 @@ process.env.NODE_ENV = 'test';
 
 const { app } = require('../server/index');
 const { db, q } = require('../server/db');
-const seed = require('../server/seed');
+const { seedTestUsers } = require('./fixture-users');
 const fielddefs = require('../server/fielddefs');
 
-let server;
+let passwords, server;
 let base;
 
 test.before(async () => {
   // create the schema + demo dataset in the temp database
-  seed.run({ reset: false, quiet: true });
+  passwords = seedTestUsers();
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', () => {
       base = `http://127.0.0.1:${server.address().port}`;
@@ -42,7 +42,7 @@ test.after(async () => {
 });
 
 /* ------------------------------------------------------------------ helpers */
-async function login(email, password = 'Super@12345') {
+async function login(email, password = passwords.get(email)) {
   const res = await fetch(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -99,7 +99,7 @@ test('authentication: rejects bad credentials and protects the API', async () =>
 
 test('scenario 1: one project shared by six supervisors', async () => {
   // Grant six supervisors access to the same project and verify isolation works.
-  const admin = await login('admin@resourceplanning.io', 'Admin@12345');
+  const admin = await login('admin@resourceplanning.io');
   const adm = client(admin);
   const nexus = q.get('SELECT * FROM projects WHERE code = ?', 'NEXUS');
 
@@ -309,7 +309,7 @@ test('scenario 8: adding a new employee with validation', async () => {
 });
 
 test('duplicate prevention: uncertain matches go to the review queue instead of being merged', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const nexus = q.get("SELECT * FROM projects WHERE code = 'NEXUS'");
   const sub = q.get('SELECT * FROM subprojects WHERE project_id = ? LIMIT 1', nexus.id);
   const cat = q.get('SELECT * FROM categories WHERE subproject_id = ? LIMIT 1', sub.id);
@@ -478,7 +478,7 @@ test('admin-only configuration endpoints are protected', async () => {
 });
 
 test('per-category column configuration round-trips and validates required fields', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const cat = q.get("SELECT * FROM categories WHERE name = 'Delivery Status' LIMIT 1");
   const detail = await admin('GET', `/categories/${cat.id}/columns`);
   assert.equal(detail.status, 200);
@@ -517,7 +517,7 @@ test('per-category column configuration round-trips and validates required field
 });
 
 test('server-side sort, search, filter and pagination', async () => {
-  const api = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const api = client(await login('admin@resourceplanning.io'));
 
   const p1 = await api('GET', '/employees?page=1&pageSize=5&sort=emp_code&dir=asc');
   const p2 = await api('GET', '/employees?page=2&pageSize=5&sort=emp_code&dir=asc');
@@ -541,7 +541,7 @@ test('server-side sort, search, filter and pagination', async () => {
 });
 
 test('concurrent updates never corrupt the database (transactional writes)', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const rows = (await admin('GET', '/employees?pageSize=40')).data.rows;
 
   const results = await Promise.all(rows.map((r, i) =>
@@ -620,7 +620,7 @@ test('supervisor submit writes every changed field in one transaction', async ()
 
 test('access control on submit: read-only grants and other projects are refused', async () => {
   const viewer = client(await login('kavita.rao@resourceplanning.io'));
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const row = (await admin('GET', '/employees?pageSize=1')).data.rows[0];
 
   const readOnly = await viewer('POST', `/employees/${row.assignmentId}/submit`, { changes: { opp_id: 'X' } });
@@ -653,13 +653,13 @@ test('assistant answers for a workbook name across placements, intersected with 
     const who = agent.understand(actor, 'Who is on bench?', name);
     assert.equal(who.data.count, expected); assert.ok(who.table.rows.every((row) => row[2] === name));
   }
-  const api = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const api = client(await login('admin@resourceplanning.io'));
   assert.equal((await api('POST', '/agent/ask', { message: 'How many are on bench?' })).data.kind, 'choose_project');
   assert.ok((await api('GET', '/agent/projects')).data.projectNames.includes(name));
 });
 
 test('Hindi Ask resolves full workbook names, scopes metrics like English, and declines unknown names and filters', async () => {
-  const api = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const api = client(await login('admin@resourceplanning.io'));
   const ask = async (message, projectName) => (await api('POST', '/agent/ask', { message, projectName, language: 'hi' })).data;
   const name = 'Giga One';
   assert.equal((await ask('बेंच पर कितने लोग हैं?')).kind, 'choose_project');
@@ -697,7 +697,7 @@ test('assistant does not substitute a hierarchy, unknown name, or stale selectio
 });
 
 test('assistant never writes: it only raises a proposal an admin must approve', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const sup = client(await login('priya.nair@resourceplanning.io'));
   const field = q.get("SELECT id FROM fields WHERE key='block_status'");
   // pick someone who is not already hard blocked, so the request is a real change
@@ -772,7 +772,7 @@ test('filter dropdowns list real values with counts, and the count follows the s
 test('filter dropdowns work on the Directory page, where there is no project scope', async () => {
   // Regression: facetsFor returned [] whenever scope.projectId was empty, so on
   // the all-projects Directory every dropdown was permanently disabled with (0).
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const all = await admin('GET', '/employees?pageSize=1');
   assert.ok(all.data.total > 1);
   assert.ok(all.data.facets.length >= 5, 'an all-projects view must still offer filter values');
@@ -812,7 +812,7 @@ test('a supervisor with no project selected only counts rows they may see', asyn
 
 /* ------------------------------------------------ CRM panel column set */
 test('the CRM panel offers the workbook supervisor columns and nothing else', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const res = await admin('GET', '/settings/crm-fields');
   assert.equal(res.status, 200);
 
@@ -834,7 +834,7 @@ test('the CRM panel offers the workbook supervisor columns and nothing else', as
 });
 
 test('an administrator can change the CRM columns without a code change', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const before = (await admin('GET', '/settings/crm-fields')).data.keys;
 
   const saved = await admin('PUT', '/settings/crm-fields', {
@@ -874,7 +874,7 @@ test('a supervisor submit reaches the export with the value, the author and the 
   // the workbook the administrator fetches shows the new values, who set them,
   // and when - the round trip the brief asks for
   const out = path.join(TMP, 'crm-export.xlsx');
-  const token = await login('admin@resourceplanning.io', 'Admin@12345');
+  const token = await login('admin@resourceplanning.io');
   const raw = await fetch(`${base}/api/export?projectId=${row.projectId}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -909,7 +909,7 @@ test('a supervisor submit reaches the export with the value, the author and the 
 });
 
 test('re-importing our own export does not create fields from the change stamps', async () => {
-  const adminToken = await login('admin@resourceplanning.io', 'Admin@12345');
+  const adminToken = await login('admin@resourceplanning.io');
   const admin = client(adminToken);
   const before = (await admin('GET', '/bootstrap')).data.fields.length;
   assert.ok(before > 50, 'the field catalogue loaded');
@@ -1038,8 +1038,47 @@ test('the import template downloads with your 65 headers and round-trips', async
   assert.ok(wb.getWorksheet('How to use'), 'the template explains itself');
 });
 
+test('account IDs are admin-only; old published passwords cannot sign in or be reassigned', async (t) => {
+  const anon = client(), admin = client(await login('admin@resourceplanning.io'));
+  const sup = client(await login('priya.nair@resourceplanning.io'));
+  for (const [actor, status] of [[anon, 401], [sup, 403]]) {
+    for (const [verb, path] of [['GET', '/users'], ['POST', '/users'], ['PATCH', '/users/1'], ['DELETE', '/users/1']]) {
+      const r = await actor(verb, path); assert.equal(r.status, status); assert.deepEqual(Object.keys(r.data), ['error']);
+    }
+  }
+  const js = await (await fetch(base + '/js/views/login.js')).text();
+  assert.doesNotMatch(js, /@resourceplanning\.io|Admin@12345|Super@12345|Hr@1234567|demo-row|click to fill/);
+  const email = 'legacy@example.test';
+  const id = Number(q.run("INSERT INTO users(email, name, password_hash) VALUES (?, 'Legacy user', '')", email).lastInsertRowid);
+  t.after(() => admin('DELETE', `/users/${id}`));
+  for (const password of ['Admin@12345', 'Super@12345', 'Hr@1234567']) {
+    q.run('UPDATE users SET password_hash=? WHERE id=?', require('../server/auth').hashPassword(password), id);
+    for (const attempt of [{ email, password }, { email: 'missing@example.test', password }]) {
+      const login = await anon('POST', '/auth/login', attempt);
+      assert.equal(login.status, 401); assert.deepEqual(login.data, { error: 'Incorrect email or password.' });
+    }
+    assert.equal((await admin('PATCH', `/users/${id}`, { password })).status, 422);
+    assert.equal((await admin('POST', '/users', { name: 'Unsafe', email: 'unsafe@example.test', password })).status, 422);
+    assert.equal((await sup('POST', '/auth/password', { current: passwords.get('priya.nair@resourceplanning.io'), next: password })).status, 422);
+  }
+  const initial = 'An assigned password', next = 'A different password';
+  assert.equal((await admin('PATCH', `/users/${id}`, { password: initial })).status, 200);
+  const staff = client(await login(email, initial));
+  assert.equal((await staff('GET', '/auth/me')).data.user.id, id);
+  assert.equal((await staff('GET', '/users')).status, 403);
+  assert.equal((await admin('PATCH', `/users/${id}`, { password: next })).status, 200);
+  assert.equal((await staff('GET', '/auth/me')).status, 401, 'reset revokes earlier sessions');
+  assert.equal((await anon('POST', '/auth/login', { email, password: initial })).status, 401);
+  const reset = client(await login(email, next));
+  assert.equal((await reset('POST', '/auth/password', { current: next, next: initial })).status, 200);
+  assert.equal((await reset('GET', '/auth/me')).status, 401);
+  const me = (await client(await login(email, initial))('GET', '/auth/me')).data.user;
+  assert.equal(me.email, email); assert.equal(me.isAdmin, false); assert.ok(!Object.hasOwn(me, 'password_hash'));
+  assert.ok(!(await admin('GET', '/users')).data.users.some(u => Object.hasOwn(u, 'password_hash') || Object.hasOwn(u, 'password')));
+});
+
 test('a new user is created with their project access and capabilities in the same step', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const project = q.get('SELECT * FROM projects LIMIT 1');
 
   const created = await admin('POST', '/users', {
@@ -1078,7 +1117,7 @@ test('a new user is created with their project access and capabilities in the sa
 });
 
 test('Edit access: administrators can rename themselves and other administrators without changing access', async (t) => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const email = 'rename.admin@example.test', password = 'Example123';
   const made = await admin('POST', '/users', { name: 'Original Admin', email, password, role: 'admin' });
   assert.equal(made.status, 200);
@@ -1109,7 +1148,7 @@ test('Edit access: administrators can rename themselves and other administrators
 });
 
 test('Edit access: supervisor renames are admin-only; name and grant edits succeed or fail together', async (t) => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const email = 'rename.lead@example.test', password = 'Example123';
   const project = q.get('SELECT id FROM projects LIMIT 1').id;
   const made = await admin('POST', '/users', { name: 'Original Lead', email, password,
@@ -1143,7 +1182,7 @@ test('Edit access: supervisor renames are admin-only; name and grant edits succe
 });
 
 test('an administrator cannot delete their own account, but can delete another admin', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const list = await admin('GET', '/users');
   const self = list.data.users.find((u) => u.email === 'admin@resourceplanning.io');
   assert.ok(self);
@@ -1154,7 +1193,7 @@ test('an administrator cannot delete their own account, but can delete another a
 
   // a second admin can be created and deleted by the first
   const second = await admin('POST', '/users', {
-    name: 'Second Admin', email: 'second.admin@resourceplanning.io', role: 'admin', password: 'Admin@12345',
+    name: 'Second Admin', email: 'second.admin@resourceplanning.io', role: 'admin', password: 'Test second admin only',
   });
   assert.equal(second.status, 200);
   const secondId = second.data.user.id;
@@ -1166,7 +1205,7 @@ test('an administrator cannot delete their own account, but can delete another a
 });
 
 test('deleting a user with work history revokes their session, not their records or export attribution', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const place = q.get('SELECT project_id, subproject_id, category_id FROM assignments LIMIT 1');
   const email = 'importer@resourceplanning.io';
   const created = await admin('POST', '/users', {
@@ -1206,7 +1245,7 @@ test('deleting a user with work history revokes their session, not their records
 });
 
 test('a failed project grant leaves no partial account; creation can be retried with the same email', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const account = { name: ' New leader ', email: ' retry@example.test ', password: 'Example123', role: 'supervisor' };
   const grant = { project_id: q.get('SELECT id FROM projects LIMIT 1').id, can_export: 0 };
   const failed = await admin('POST', '/users', { ...account, projects: [grant, { project_id: -1 }] });
@@ -1221,7 +1260,7 @@ test('a failed project grant leaves no partial account; creation can be retried 
 });
 
 test('Giga Project Name is an assignment-level grant, not a removable Directory filter', async (t) => {
-  const adminToken = await login('admin@resourceplanning.io', 'Admin@12345');
+  const adminToken = await login('admin@resourceplanning.io');
   const admin = client(adminToken);
   const A = "Orion's Giga %_|Alpha", B = `${A} East`;
   const email = 'xyz@example.test', password = 'ExampleGiga123';
@@ -1564,7 +1603,7 @@ test('Giga Project Name is an assignment-level grant, not a removable Directory 
 
 
 test('Directory totals follow the full filtered result, not bootstrap or the current page', async () => {
-  const admin = client(await login('admin@resourceplanning.io', 'Admin@12345'));
+  const admin = client(await login('admin@resourceplanning.io'));
   const places = q.all(`SELECT c.id category_id, c.subproject_id, s.project_id FROM categories c
                         JOIN subprojects s ON s.id = c.subproject_id ORDER BY c.id`);
   const east = places[0], west = places.find((p) => p.project_id !== east.project_id);

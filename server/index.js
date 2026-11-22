@@ -1,9 +1,8 @@
 'use strict';
 const path = require('node:path');
 const express = require('express');
-const { q, tx } = require('./db');
 const auth = require('./auth');
-const schema = require('./schema');
+const { initializePrivateApp } = require('./private-setup');
 const { router } = require('./routes');
 
 const app = express();
@@ -91,19 +90,9 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
-// bootstrap seed on very first run so the app is never empty
-function ensureSeeded() {
-  const users = q.get('SELECT COUNT(*) c FROM users').c;
-  if (users === 0) {
-    console.log('[startup] empty database — creating demo dataset');
-    require('./seed').run({ reset: false, quiet: true });
-  } else {
-    schema.seedFields();
-  }
-}
-
-if (require.main === module) {
-  ensureSeeded();
+async function start() {
+  // The first administrator is configured on the host, before opening a port.
+  await initializePrivateApp();
   app.listen(PORT, HOST, () => {
     const local = HOST === '127.0.0.1' || HOST === 'localhost';
     console.log('');
@@ -116,10 +105,14 @@ if (require.main === module) {
       console.log('           network can open this app. Unset HOST to restrict it.');
     }
     console.log('');
-    console.log('  Sign in: priya.nair@resourceplanning.io / Super@12345');
     console.log('  Stop:    Ctrl+C');
     console.log('');
   });
 }
+
+if (require.main === module) start().catch(err => {
+  console.error('[startup]', err.message);
+  process.exitCode = 1;
+});
 
 module.exports = { app };

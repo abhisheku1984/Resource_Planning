@@ -12,7 +12,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { q, tx, DB_FILE } = require('./db');
-const auth = require('./auth');
 const schema = require('./schema');
 const fielddefs = require('./fielddefs');
 const { record } = require('./audit');
@@ -143,13 +142,13 @@ const ACCOUNTS = ['Northwind Bank', 'Helios Retail', 'Vertex Insurance', 'Cobalt
 const SKILLS = ['Java', 'Salesforce', 'SAP', 'Data Engineering', 'Testing', 'DevOps', 'Oracle Fusion', 'UI/UX'];
 
 const USERS = [
-  { email: 'admin@resourceplanning.io', name: 'Ananya Deshmukh', role: 'admin', title: 'Platform Administrator', password: 'Admin@12345', projects: '*' },
-  { email: 'priya.nair@resourceplanning.io', name: 'Priya Nair', role: 'supervisor', title: 'Delivery Supervisor — Nexus', password: 'Super@12345', projects: ['NEXUS'] },
-  { email: 'rohit.verma@resourceplanning.io', name: 'Rohit Verma', role: 'supervisor', title: 'Delivery Supervisor — Atlas', password: 'Super@12345', projects: ['ATLAS'] },
-  { email: 'meera.iyer@resourceplanning.io', name: 'Meera Iyer', role: 'supervisor', title: 'Delivery Supervisor — Orbit + Vertex', password: 'Super@12345', projects: ['ORBIT', 'VERTEX'] },
-  { email: 'sameer.khan@resourceplanning.io', name: 'Sameer Khan', role: 'supervisor', title: 'Programme Supervisor — Multi', password: 'Super@12345', projects: ['NEXUS', 'ATLAS', 'ORBIT'] },
-  { email: 'kavita.rao@resourceplanning.io', name: 'Kavita Rao', role: 'supervisor', title: 'Read-only Reviewer', password: 'Super@12345', projects: ['NEXUS', 'ORBIT'], readonly: true },
-  { email: 'arun.pillai@resourceplanning.io', name: 'Arun Pillai', role: 'supervisor', title: 'Delivery Supervisor — Vertex', password: 'Super@12345', projects: ['VERTEX'] },
+  { email: 'admin@resourceplanning.io', name: 'Ananya Deshmukh', role: 'admin', title: 'Platform Administrator', projects: '*' },
+  { email: 'priya.nair@resourceplanning.io', name: 'Priya Nair', role: 'supervisor', title: 'Delivery Supervisor — Nexus', projects: ['NEXUS'] },
+  { email: 'rohit.verma@resourceplanning.io', name: 'Rohit Verma', role: 'supervisor', title: 'Delivery Supervisor — Atlas', projects: ['ATLAS'] },
+  { email: 'meera.iyer@resourceplanning.io', name: 'Meera Iyer', role: 'supervisor', title: 'Delivery Supervisor — Orbit + Vertex', projects: ['ORBIT', 'VERTEX'] },
+  { email: 'sameer.khan@resourceplanning.io', name: 'Sameer Khan', role: 'supervisor', title: 'Programme Supervisor — Multi', projects: ['NEXUS', 'ATLAS', 'ORBIT'] },
+  { email: 'kavita.rao@resourceplanning.io', name: 'Kavita Rao', role: 'supervisor', title: 'Read-only Reviewer', projects: ['NEXUS', 'ORBIT'], readonly: true },
+  { email: 'arun.pillai@resourceplanning.io', name: 'Arun Pillai', role: 'supervisor', title: 'Delivery Supervisor — Vertex', projects: ['VERTEX'] },
 ];
 
 const DESIGNATIONS = ['Software Engineer', 'Senior Software Engineer', 'Technical Lead', 'Data Engineer',
@@ -181,7 +180,10 @@ function layoutFor(name) {
   };
 }
 
-function run({ reset = false, quiet = false } = {}) {
+function run({ reset = false, quiet = false, sampleAccounts = true } = {}) {
+  // Only explicit fixtures use the fictional user rows, and none has a usable
+  // password. A new private installation keeps the starter roster, not its logins.
+  const users = sampleAccounts ? USERS : [];
   if (reset) {
     for (const t of ['field_overrides', 'assignment_values', 'assignments', 'group_members', 'employee_groups',
       'category_fields', 'employees', 'categories', 'subprojects', 'projects', 'suppliers', 'fields',
@@ -199,14 +201,14 @@ function run({ reset = false, quiet = false } = {}) {
   return tx(() => {
     // ---------- users ----------
     const userIds = new Map();
-    for (const u of USERS) {
+    for (const u of users) {
       const r = q.run(
         'INSERT INTO users (email, name, role, title, password_hash) VALUES (?, ?, ?, ?, ?)',
-        u.email, u.name, u.role, u.title, auth.hashPassword(u.password)
+        u.email, u.name, u.role, u.title, ''
       );
       userIds.set(u.email, Number(r.lastInsertRowid));
     }
-    const admin = { id: userIds.get('admin@resourceplanning.io'), name: 'Ananya Deshmukh', isAdmin: true, role: 'admin' };
+    const admin = { id: userIds.get('admin@resourceplanning.io') ?? null, name: 'Ananya Deshmukh', isAdmin: true, role: 'admin' };
 
     // ---------- suppliers ----------
     const supplierIds = [];
@@ -275,7 +277,7 @@ function run({ reset = false, quiet = false } = {}) {
     }
 
     // ---------- access grants ----------
-    for (const u of USERS) {
+    for (const u of users) {
       const uid = userIds.get(u.email);
       if (u.role === 'admin') continue;
       for (const code of u.projects) {
@@ -311,8 +313,6 @@ function run({ reset = false, quiet = false } = {}) {
     const employees = [];
     let empSeq = 1001;
     const totalTarget = Number(process.env.RP_SEED_ROWS || 170);
-
-    const supervisors = USERS.filter((u) => u.role === 'supervisor');
 
     for (let i = 0; i < totalTarget; i++) {
       let first; let last; let full;
@@ -450,7 +450,7 @@ function run({ reset = false, quiet = false } = {}) {
         `INSERT INTO assignment_values (assignment_id, field_id, value, source, updated_at, updated_by)
          VALUES (?, ?, 'Soft Block', 'manual', datetime('now'), ?)
          ON CONFLICT(assignment_id, field_id) DO UPDATE SET value = 'Soft Block', source = 'manual', updated_at = datetime('now')`,
-        sample.id, f.id, userIds.get('priya.nair@resourceplanning.io')
+        sample.id, f.id, userIds.get('priya.nair@resourceplanning.io') ?? null
       );
       q.run(
         `INSERT INTO field_overrides (assignment_id, field_id, locked, reason, updated_at)
@@ -461,7 +461,7 @@ function run({ reset = false, quiet = false } = {}) {
       record({
         entity: 'assignment', entityId: sample.id, ref: sample.emp_code, action: 'update',
         fieldKey: 'block_status', oldValue: existing?.value ?? null, newValue: 'Soft Block',
-        actor: { id: userIds.get('priya.nair@resourceplanning.io'), name: 'Priya Nair' },
+        actor: { id: userIds.get('priya.nair@resourceplanning.io') ?? null, name: 'Priya Nair' },
         meta: { reason: 'CRM edit' },
       });
     }
@@ -497,10 +497,10 @@ function run({ reset = false, quiet = false } = {}) {
 
     // ---------- historic audit entries for the activity feed ----------
     const actors = [
-      { id: userIds.get('priya.nair@resourceplanning.io'), name: 'Priya Nair' },
-      { id: userIds.get('rohit.verma@resourceplanning.io'), name: 'Rohit Verma' },
-      { id: userIds.get('meera.iyer@resourceplanning.io'), name: 'Meera Iyer' },
-      { id: userIds.get('sameer.khan@resourceplanning.io'), name: 'Sameer Khan' },
+      { id: userIds.get('priya.nair@resourceplanning.io') ?? null, name: 'Priya Nair' },
+      { id: userIds.get('rohit.verma@resourceplanning.io') ?? null, name: 'Rohit Verma' },
+      { id: userIds.get('meera.iyer@resourceplanning.io') ?? null, name: 'Meera Iyer' },
+      { id: userIds.get('sameer.khan@resourceplanning.io') ?? null, name: 'Sameer Khan' },
     ];
     const rows = q.all('SELECT a.id, e.emp_code FROM assignments a JOIN employees e ON e.id = a.employee_id ORDER BY a.id LIMIT 60');
     for (let i = 0; i < rows.length; i++) {

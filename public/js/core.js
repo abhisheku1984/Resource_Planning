@@ -186,7 +186,9 @@ export async function api(path, { method = 'GET', body, signal } = {}) {
     if (err.name === 'AbortError') throw err;
     throw new ApiError('Network unavailable. Your changes were not saved.', 0, { offline: true });
   }
-  if (res.status === 401) {
+  // A failed sign-in is not an expired session. Show the server's generic
+  // credential error without saying whether the email belongs to an account.
+  if (res.status === 401 && path !== '/auth/login') {
     setToken(null);
     throw new ApiError('Your session expired. Please sign in again.', 401, {});
   }
