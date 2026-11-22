@@ -37,6 +37,12 @@ updates the schema on startup; **do not run `npm run demo` or `npm run seed`
 as part of an update**. Those commands replace data. The large demo is optional
 and intended only for disposable installations.
 
+### One website link for the team
+
+GitHub stores the code. **GitHub Pages serves static files only**: publishing `public/` there will not run sign-in, workbook imports or supervisor edits. For a working team link, deploy the Node app **and** its API together on one approved, always-on server behind HTTPS. Use one private, persistent disk for SQLite (`DATA_DIR`), outside `public/` and outside the code checkout. A redeploy should update code, not replace the roster.
+
+Start privately. Before admitting users or importing real data, provision individual accounts, disable the known demo logins, remove the demo sign-in shortcuts, and set up access controls and encrypted backups. Verify with synthetic data that a supervisor can edit an authorized record and that the edit survives a restart. See the [data safety checklist](SECURITY.md#6-known-limitations--read-before-using-real-data). Share the resulting HTTPS address with staff; if approved for public listing, it can also go in the repository’s **About → Website** field. Never commit a live database, daily workbook, export or backup to create a website link.
+
 ### Try guided Ask on Windows without using your workforce database
 
 Run **`START-PREVIEW.cmd`** and open **<http://localhost:4110>** when the server is running. By default the preview binds to loopback and uses `data/guided-preview.db`, not the normal `data/resource_planning.db`. If you have activated the workbook preview below, the launcher prints and uses that copy instead. The first start creates synthetic records; no import or reset is needed. Sign in as the demo NEXUS supervisor below and [try a guided update](#try-a-guided-update). Press **Ctrl+C** to stop the preview.

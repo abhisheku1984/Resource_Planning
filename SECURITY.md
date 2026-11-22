@@ -11,7 +11,7 @@ Everything below was verified against the code in this repository, not assumed.
 
 | Question | Answer |
 | --- | --- |
-| Does my data leave my computer? | **No.** Not at runtime, not ever, once installed. |
+| Does my data leave my computer? | With the default localhost setup, no. If staff use a shared host, uploads and edits go to that host and authorized results return to their browsers. GitHub is not the roster database. |
 | Is there a cloud database? | No. A single SQLite file on your disk. |
 | Any analytics, telemetry, crash reporting? | None. |
 | Any scripts or fonts loaded from a third-party site? | No. The application code and fonts are served locally. |
